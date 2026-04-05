@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ContractIQ — Bids & Contracts Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #1a1f2e;
+    --ink-mid:   #2e3548;
+    --gold:      #c8a96e;
+    --gold-dim:  #9e8257;
+    --parchment: #f4f1eb;
+    --parchment2:#ede9e0;
+    --mist:      #6b7280;
+    --border:    #d4cfc6;
+    --white:     #ffffff;
+    --red:       #c0392b;
+    --amber:     #c07b2b;
+    --green:     #2a7a4b;
+    --blue:      #1d4ed8;
+    --shadow:    0 2px 16px rgba(26,31,46,0.10);
+    --shadow-lg: 0 8px 40px rgba(26,31,46,0.16);
+    --radius:    6px;
+    --font-serif: 'Playfair Display', Georgia, serif;
+    --font-sans:  'DM Sans', system-ui, sans-serif;
+    --font-mono:  'DM Mono', monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 15px; }
+  body {
+    font-family: var(--font-sans);
+    background: var(--parchment);
+    color: var(--ink);
+    min-height: 100vh;
+  }
+
+  /* ── Sidebar ───────────────────────────────────────────────────── */
+  .sidebar {
+    position: fixed; top: 0; left: 0;
+    width: 260px; height: 100vh;
+    background: var(--ink);
+    display: flex; flex-direction: column;
+    padding: 0;
+    z-index: 100;
+  }
+  .sidebar-brand {
+    padding: 28px 24px 22px;
+    border-bottom: 1px solid rgba(200,169,110,0.2);
+  }
+  .brand-logo {
+    font-family: var(--font-serif);
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--white);
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .brand-logo span { color: var(--gold); }
+  .brand-tagline {
+    font-size: 0.7rem;
+    color: rgba(200,169,110,0.7);
+    margin-top: 5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .sidebar-nav {
+    flex: 1;
+    padding: 20px 0;
+    overflow-y: auto;
+  }
+  .nav-section-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.3);
+    padding: 8px 24px 4px;
+    margin-top: 8px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 24px;
+    color: rgba(255,255,255,0.65);
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 400;
+    transition: all 0.18s;
+    cursor: pointer;
+    border: none; background: none; width: 100%; text-align: left;
+  }
+  .nav-item:hover, .nav-item.active {
+    color: var(--white);
+    background: rgba(200,169,110,0.12);
+  }
+  .nav-item.active { border-left: 3px solid var(--gold); }
+  .nav-icon { width: 18px; opacity: 0.8; flex-shrink: 0; }
+  .sidebar-footer {
+    padding: 16px 24px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  .llm-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.4);
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--mist);
+    transition: background 0.3s;
+  }
+  .status-dot.online { background: #4ade80; box-shadow: 0 0 6px #4ade80aa; }
+  .status-dot.offline { background: var(--red); }
+
+  /* ── Main ──────────────────────────────────────────────────────── */
+  .main {
+    margin-left: 260px;
+    min-height: 100vh;
+    display: flex; flex-direction: column;
+  }
+  .topbar {
+    background: var(--white);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 36px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .page-title {
+    font-family: var(--font-serif);
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .topbar-actions { display: flex; gap: 10px; }
+  .content { padding: 32px 36px; flex: 1; }
+
+  /* ── Buttons ───────────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 18px;
+    border-radius: var(--radius);
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: all 0.18s;
+    text-decoration: none;
+  }
+  .btn-primary {
+    background: var(--ink);
+    color: var(--white);
+  }
+  .btn-primary:hover { background: var(--ink-mid); transform: translateY(-1px); }
+  .btn-gold {
+    background: var(--gold);
+    color: var(--ink);
+  }
+  .btn-gold:hover { background: #d4b87a; transform: translateY(-1px); }
+  .btn-outline {
+    background: transparent;
+    color: var(--ink);
+    border: 1.5px solid var(--border);
+  }
+  .btn-outline:hover { border-color: var(--ink); background: var(--parchment2); }
+  .btn-danger {
+    background: transparent;
+    color: var(--red);
+    border: 1.5px solid #fca5a5;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+  .btn-danger:hover { background: #fee2e2; }
+
+  /* ── Stats Cards ───────────────────────────────────────────────── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--gold);
+  }
+  .stat-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mist);
+    margin-bottom: 6px;
+  }
+  .stat-value {
+    font-family: var(--font-serif);
+    font-size: 2rem;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .stat-sub {
+    font-size: 0.75rem;
+    color: var(--mist);
+    margin-top: 4px;
+  }
+
+  /* ── Upload Zone ───────────────────────────────────────────────── */
+  .upload-zone {
+    border: 2px dashed var(--gold-dim);
+    border-radius: var(--radius);
+    padding: 40px;
+    text-align: center;
+    background: rgba(200,169,110,0.04);
+    transition: all 0.2s;
+    cursor: pointer;
+    margin-bottom: 28px;
+  }
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: var(--gold);
+    background: rgba(200,169,110,0.09);
+  }
+  .upload-icon { font-size: 2.4rem; margin-bottom: 10px; }
+  .upload-title {
+    font-family: var(--font-serif);
+    font-size: 1.1rem;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+  .upload-sub { font-size: 0.82rem; color: var(--mist); }
+  .upload-types {
+    margin-top: 10px;
+    display: flex; gap: 8px; justify-content: center;
+  }
+  .upload-badge {
+    background: var(--parchment2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    color: var(--mist);
+    letter-spacing: 0.05em;
+  }
+  #file-input { display: none; }
+
+  /* ── Processing Banner ─────────────────────────────────────────── */
+  .processing-banner {
+    display: none;
+    background: var(--ink);
+    color: var(--white);
+    border-radius: var(--radius);
+    padding: 16px 24px;
+    margin-bottom: 28px;
+    align-items: center;
+    gap: 16px;
+  }
+  .processing-banner.show { display: flex; }
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2.5px solid rgba(255,255,255,0.2);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .processing-text { flex: 1; }
+  .processing-title { font-weight: 600; font-size: 0.9rem; }
+  .processing-sub { font-size: 0.8rem; color: rgba(255,255,255,0.6); }
+  .progress-bar-wrap {
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    height: 3px;
+    width: 200px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--gold);
+    border-radius: 2px;
+    animation: progress-pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes progress-pulse {
+    0%, 100% { width: 20%; }
+    50% { width: 80%; }
+  }
+
+  /* ── Contracts Table ───────────────────────────────────────────── */
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .section-title {
+    font-family: var(--font-serif);
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .table-wrap {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  thead th {
+    background: var(--ink);
+    color: rgba(255,255,255,0.75);
+    font-weight: 500;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 12px 16px;
+    text-align: left;
+  }
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+  }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--parchment2); cursor: pointer; }
+  td { padding: 13px 16px; vertical-align: middle; }
+  .doc-name {
+    font-weight: 500;
+    color: var(--ink);
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+  }
+  .doc-meta { font-size: 0.75rem; color: var(--mist); margin-top: 2px; }
+
+  /* ── Badges ────────────────────────────────────────────────────── */
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px;
+    border-radius: 100px;
+    font-size: 0.73rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+  }
+  .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .badge-complete   { background: #dcfce7; color: var(--green); }
+  .badge-complete .badge-dot { background: var(--green); }
+  .badge-processing { background: #fef3c7; color: #92400e; }
+  .badge-processing .badge-dot { background: #d97706; }
+  .badge-error      { background: #fee2e2; color: var(--red); }
+  .badge-error .badge-dot { background: var(--red); }
+  .badge-uploaded   { background: var(--parchment2); color: var(--mist); }
+  .badge-uploaded .badge-dot { background: var(--mist); }
+
+  /* ── Risk Pill ─────────────────────────────────────────────────── */
+  .risk-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 11px;
+    border-radius: 100px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .risk-score-num {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    opacity: 0.75;
+  }
+  .risk-Low      { background: #dcfce7; color: #15803d; }
+  .risk-Medium   { background: #fef3c7; color: #92400e; }
+  .risk-High     { background: #fee2e2; color: #b91c1c; }
+  .risk-Critical { background: #7f1d1d; color: #fca5a5; }
+  .risk-Unknown  { background: var(--parchment2); color: var(--mist); }
+
+  /* ── Toast ─────────────────────────────────────────────────────── */
+  #toast-container {
+    position: fixed; bottom: 24px; right: 24px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 9999;
+  }
+  .toast {
+    background: var(--ink);
+    color: var(--white);
+    padding: 12px 18px;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    box-shadow: var(--shadow-lg);
+    animation: slide-up 0.25s ease;
+    max-width: 360px;
+    border-left: 3px solid var(--gold);
+  }
+  .toast.toast-error { border-left-color: var(--red); }
+  .toast.toast-success { border-left-color: var(--green); }
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Empty State ───────────────────────────────────────────────── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 40px;
+    color: var(--mist);
+  }
+  .empty-icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.4; }
+  .empty-text { font-size: 0.9rem; }
+
+  /* ── Modal ─────────────────────────────────────────────────────── */
+  .modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(26,31,46,0.6);
+    z-index: 200;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 32px;
+    width: 440px;
+    box-shadow: var(--shadow-lg);
+    animation: modal-in 0.2s ease;
+  }
+  @keyframes modal-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .modal-title {
+    font-family: var(--font-serif);
+    font-size: 1.2rem;
+    margin-bottom: 10px;
+  }
+  .modal-body { color: var(--mist); font-size: 0.88rem; line-height: 1.6; margin-bottom: 20px; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+  /* ── Action Icons ──────────────────────────────────────────────── */
+  .action-cell { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-logo">Contract<span>IQ</span></div>
+    <div class="brand-tagline">Bids & Contracts Manager</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Workspace</div>
+    <a class="nav-item active" href="/">
+      <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Dashboard
+    </a>
+    <div class="nav-section-label">Analysis</div>
+    <button class="nav-item" onclick="triggerUpload()">
+      <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+      Upload Contract
+    </button>
+    <div class="nav-section-label">Reports</div>
+    <button class="nav-item" onclick="showReports()">
+      <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      Generated Reports
+    </button>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="llm-status">
+      <span class="status-dot" id="llm-dot"></span>
+      <span id="llm-label">LM Studio — checking...</span>
+    </div>
+  </div>
+</aside>
+
+<!-- ── Main Content ─────────────────────────────────────────────────────── -->
+<main class="main">
+  <div class="topbar">
+    <h1 class="page-title">Dashboard</h1>
+    <div class="topbar-actions">
+      <button class="btn btn-gold" onclick="triggerUpload()">
+        <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+        New Analysis
+      </button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- Stats Row -->
+    <div class="stats-row" id="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Total Contracts</div>
+        <div class="stat-value" id="stat-total">—</div>
+        <div class="stat-sub">in your library</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Analysed</div>
+        <div class="stat-value" id="stat-complete">—</div>
+        <div class="stat-sub">with full reports</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">High Risk</div>
+        <div class="stat-value" id="stat-highrisk" style="color: var(--red)">—</div>
+        <div class="stat-sub">requiring attention</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Model</div>
+        <div class="stat-value" style="font-size:1rem; padding-top:4px;" id="stat-model">—</div>
+        <div class="stat-sub">LM Studio active model</div>
+      </div>
+    </div>
+
+    <!-- Upload Zone -->
+    <div class="upload-zone" id="upload-zone" onclick="triggerUpload()"
+         ondragover="handleDragOver(event)" ondrop="handleDrop(event)"
+         ondragleave="handleDragLeave(event)">
+      <div class="upload-icon">📄</div>
+      <div class="upload-title">Drop a contract or bid document here</div>
+      <div class="upload-sub">or click to browse your files</div>
+      <div class="upload-types">
+        <span class="upload-badge">.pdf</span>
+        <span class="upload-badge">.docx</span>
+        <span class="upload-badge">.txt</span>
+      </div>
+    </div>
+    <input type="file" id="file-input" accept=".pdf,.docx,.doc,.txt"
+           onchange="handleFileSelect(event)">
+
+    <!-- Processing Banner -->
+    <div class="processing-banner" id="processing-banner">
+      <div class="spinner"></div>
+      <div class="processing-text">
+        <div class="processing-title" id="proc-title">Analysing document...</div>
+        <div class="processing-sub" id="proc-sub">Running LLM analysis pipeline — this may take 1–2 minutes</div>
+      </div>
+      <div class="progress-bar-wrap"><div class="progress-bar-fill"></div></div>
+    </div>
+
+    <!-- Contracts Table -->
+    <div class="section-header">
+      <h2 class="section-title">Contract Library</h2>
+      <span id="contract-count" style="font-size:0.8rem;color:var(--mist)"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Document</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Risk</th>
+            <th>Uploaded</th>
+            <th style="width:130px">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="contracts-tbody">
+          <tr><td colspan="6">
+            <div class="empty-state">
+              <div class="empty-icon">📂</div>
+              <div class="empty-text">No contracts yet — upload one above to begin</div>
+            </div>
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</main>
+
+<!-- Delete Modal -->
+<div class="modal-overlay" id="delete-modal">
+  <div class="modal">
+    <div class="modal-title">Delete Contract?</div>
+    <div class="modal-body">This will permanently delete the contract document and its analysis report. This cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn btn-danger" style="background:var(--red);color:white;border:none;" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+  let deleteTarget = null;
+  let processingId = null;
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', () => {
+    checkLLMStatus();
+    loadContracts();
+    setInterval(checkLLMStatus, 30000);
+  });
+
+  // ── LLM Status ───────────────────────────────────────────────────────────
+  async function checkLLMStatus() {
+    try {
+      const r = await fetch('/api/llm-status');
+      const d = await r.json();
+      const dot = document.getElementById('llm-dot');
+      const label = document.getElementById('llm-label');
+      const modelEl = document.getElementById('stat-model');
+      if (d.reachable) {
+        dot.className = 'status-dot online';
+        const m = d.models[0] || 'Connected';
+        label.textContent = 'LM Studio — online';
+        modelEl.textContent = m.length > 22 ? m.slice(0, 22) + '…' : m;
+      } else {
+        dot.className = 'status-dot offline';
+        label.textContent = 'LM Studio — offline';
+        modelEl.textContent = 'Not connected';
+      }
+    } catch(e) {
+      document.getElementById('llm-dot').className = 'status-dot offline';
+    }
+  }
+
+  // ── Load Contracts ────────────────────────────────────────────────────────
+  async function loadContracts() {
+    const r = await fetch('/api/contracts');
+    const contracts = await r.json();
+    renderContracts(contracts);
+    updateStats(contracts);
+  }
+
+  function updateStats(contracts) {
+    document.getElementById('stat-total').textContent = contracts.length;
+    document.getElementById('stat-complete').textContent =
+      contracts.filter(c => c.status === 'complete').length;
+    document.getElementById('stat-highrisk').textContent =
+      contracts.filter(c => ['High','Critical'].includes(c.risk_level)).length;
+    document.getElementById('contract-count').textContent =
+      contracts.length > 0 ? `${contracts.length} document${contracts.length !== 1 ? 's' : ''}` : '';
+  }
+
+  function renderContracts(contracts) {
+    const tbody = document.getElementById('contracts-tbody');
+    if (!contracts.length) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+        <div class="empty-icon">📂</div>
+        <div class="empty-text">No contracts yet — upload one above to begin</div>
+      </div></td></tr>`;
+      return;
+    }
+    tbody.innerHTML = contracts.map(c => `
+      <tr onclick="openContract('${c.id}')" style="cursor:pointer">
+        <td>
+          <span class="doc-name">${escHtml(c.filename)}</span>
+          <span class="doc-meta">${c.word_count ? c.word_count.toLocaleString() + ' words' : ''} ${c.page_count ? '· ' + c.page_count + ' pages' : ''}</span>
+        </td>
+        <td style="font-size:0.8rem;color:var(--mist)">${escHtml(c.doc_type || '—')}</td>
+        <td>${statusBadge(c.status)}</td>
+        <td>${riskPill(c.risk_level, c.risk_score)}</td>
+        <td style="font-size:0.8rem;color:var(--mist);white-space:nowrap">${formatDate(c.upload_date)}</td>
+        <td>
+          <div class="action-cell" onclick="event.stopPropagation()">
+            ${c.status === 'uploaded' || c.status === 'error' ? `
+              <button class="btn btn-primary" style="padding:6px 12px;font-size:0.78rem"
+                      onclick="startAnalysis('${c.id}','${escHtml(c.filename)}')">
+                Analyse
+              </button>` : ''}
+            ${c.status === 'complete' && c.report_path ? `
+              <a class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem"
+                 href="/reports/${c.report_path}" target="_blank">
+                Report
+              </a>` : ''}
+            <button class="btn btn-danger" onclick="openDeleteModal('${c.id}')">✕</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  function statusBadge(status) {
+    const map = {
+      complete:   ['badge-complete',   '✓ Complete'],
+      processing: ['badge-processing', '⟳ Processing'],
+      error:      ['badge-error',      '✗ Error'],
+      uploaded:   ['badge-uploaded',   '↑ Uploaded'],
+    };
+    const [cls, label] = map[status] || ['badge-uploaded', status];
+    return `<span class="badge ${cls}"><span class="badge-dot"></span>${label}</span>`;
+  }
+
+  function riskPill(level, score) {
+    if (!level || level === 'Unknown') return `<span class="risk-pill risk-Unknown">—</span>`;
+    const num = score ? `<span class="risk-score-num">${score}</span>` : '';
+    return `<span class="risk-pill risk-${level}">${level} ${num}</span>`;
+  }
+
+  function formatDate(dateStr) {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('en-CA', {day:'numeric', month:'short', year:'numeric'});
+  }
+
+  // ── Upload ────────────────────────────────────────────────────────────────
+  function triggerUpload() {
+    document.getElementById('file-input').click();
+  }
+
+  async function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) await uploadFile(file);
+    e.target.value = '';
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    document.getElementById('upload-zone').classList.add('drag-over');
+  }
+
+  function handleDragLeave(e) {
+    document.getElementById('upload-zone').classList.remove('drag-over');
+  }
+
+  async function handleDrop(e) {
+    e.preventDefault();
+    document.getElementById('upload-zone').classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) await uploadFile(file);
+  }
+
+  async function uploadFile(file) {
+    showBanner(`Uploading "${file.name}"...`, 'Extracting document text');
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const r = await fetch('/api/upload', { method: 'POST', body: form });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Upload failed');
+      toast(`Uploaded — ${d.word_count.toLocaleString()} words extracted`, 'success');
+      hideBanner();
+      loadContracts();
+      // Auto-start analysis
+      setTimeout(() => startAnalysis(d.contract_id, file.name), 400);
+    } catch (e) {
+      hideBanner();
+      toast('Upload failed: ' + e.message, 'error');
+    }
+  }
+
+  // ── Analysis ──────────────────────────────────────────────────────────────
+  async function startAnalysis(id, filename) {
+    showBanner(`Analysing "${filename}"...`, 'Running full LLM pipeline — may take 1–3 minutes');
+    processingId = id;
+    try {
+      const r = await fetch(`/api/analyse/${id}`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Analysis failed');
+      hideBanner();
+      const level = d.risk_score?.level || 'complete';
+      toast(`Analysis complete — Risk level: ${level}`, 'success');
+      loadContracts();
+    } catch (e) {
+      hideBanner();
+      toast('Analysis failed: ' + e.message, 'error');
+      loadContracts();
+    }
+    processingId = null;
+  }
+
+  function showBanner(title, sub) {
+    document.getElementById('proc-title').textContent = title;
+    document.getElementById('proc-sub').textContent = sub;
+    document.getElementById('processing-banner').classList.add('show');
+  }
+  function hideBanner() {
+    document.getElementById('processing-banner').classList.remove('show');
+  }
+
+  // ── Navigation ────────────────────────────────────────────────────────────
+  function openContract(id) {
+    window.location.href = `/contract/${id}`;
+  }
+
+  function showReports() {
+    toast('Reports are opened by clicking the "Report" button on any completed contract.', '');
+  }
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+  function openDeleteModal(id) {
+    deleteTarget = id;
+    document.getElementById('delete-modal').classList.add('show');
+  }
+  function closeDeleteModal() {
+    deleteTarget = null;
+    document.getElementById('delete-modal').classList.remove('show');
+  }
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    closeDeleteModal();
+    const r = await fetch(`/api/contract/${deleteTarget}`, { method: 'DELETE' });
+    if (r.ok) {
+      toast('Contract deleted', '');
+      loadContracts();
+    } else {
+      toast('Delete failed', 'error');
+    }
+  }
+
+  // ── Toasts ────────────────────────────────────────────────────────────────
+  function toast(msg, type = '') {
+    const c = document.getElementById('toast-container');
+    const t = document.createElement('div');
+    t.className = `toast ${type ? 'toast-'+type : ''}`;
+    t.textContent = msg;
+    c.appendChild(t);
+    setTimeout(() => t.remove(), 5000);
+  }
+
+  // ── Utils ─────────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s||'')
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>

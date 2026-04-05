@@ -1,0 +1,18 @@
+# ContractIQ — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Web framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+jinja2>=3.1.4
+
+# Document processing
+pymupdf>=1.24.0          # PDF extraction (fitz)
+python-docx>=1.1.0       # DOCX extraction
+
+# Report generation
+reportlab>=4.2.0          # PDF report generation
+
+# HTTP (for LM Studio API calls)
+requests>=2.32.0

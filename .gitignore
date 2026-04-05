@@ -1,0 +1,23 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ContractIQ runtime data (not source code)
+data/
+uploads/
+reports/
+
+# Environment / secrets
+.env
+*.env
+
+# VS Code
+.vscode/settings.json
+
+# Windows
+Thumbs.db
+Desktop.ini
