@@ -5,7 +5,7 @@ Handles PDF and DOCX extraction, preserving structure.
 
 import re
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 class DocumentProcessor:
@@ -60,7 +60,6 @@ class DocumentProcessor:
                         paragraphs.append(row_text)
             full_text = "\n\n".join(paragraphs)
             full_text = self._clean_text(full_text)
-            # Estimate pages (roughly 500 words/page)
             word_count = len(full_text.split())
             return {
                 "text": full_text,
@@ -84,30 +83,85 @@ class DocumentProcessor:
 
     def _clean_text(self, text: str) -> str:
         """Clean extracted text: normalize whitespace, remove junk."""
-        # Normalize line endings
         text = text.replace("\r\n", "\n").replace("\r", "\n")
-        # Remove excessive blank lines (keep max 2)
         text = re.sub(r"\n{3,}", "\n\n", text)
-        # Remove non-printable characters except newlines and tabs
         text = re.sub(r"[^\x09\x0A\x20-\x7E\u00A0-\uFFFF]", "", text)
-        # Collapse excessive spaces within lines
         lines = []
         for line in text.split("\n"):
             line = re.sub(r" {3,}", "  ", line)
             lines.append(line)
         return "\n".join(lines).strip()
 
+    def split_by_sections(self, text: str) -> List[Dict[str, str]]:
+        """
+        Split a legal document into sections by detecting heading patterns.
+
+        Recognises:
+          Article 1 / ARTICLE 1
+          Section 1 / SECTION 1
+          1.  Heading  /  1.1  Heading
+          Schedule A / SCHEDULE A
+          Appendix A / APPENDIX A  /  Exhibit A / EXHIBIT A
+
+        Returns [{"heading": str, "content": str}].
+        Falls back to chunk_text(max_chars=12000, overlap=800) when fewer
+        than 3 headings are found.
+        """
+        heading_re = re.compile(
+            r"^(?:"
+            r"(?:ARTICLE|Article)\s+\d+"
+            r"|(?:SECTION|Section)\s+\d+"
+            r"|\d+\.\d+\s+[A-Z][A-Za-z]"   # 1.1 Definitions
+            r"|\d+\.\s+[A-Z][A-Za-z]"       # 1. Payment Terms
+            r"|(?:SCHEDULE|Schedule)\s+[A-Z0-9]"
+            r"|(?:APPENDIX|Appendix)\s+[A-Z0-9]"
+            r"|(?:EXHIBIT|Exhibit)\s+[A-Z0-9]"
+            r")",
+        )
+
+        lines = text.split("\n")
+        heading_positions: List[tuple] = []
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and len(stripped) < 120 and heading_re.match(stripped):
+                heading_positions.append((i, stripped))
+
+        if len(heading_positions) < 3:
+            # Not enough structure — fall back to character chunking
+            chunks = self.chunk_text(text, max_chars=12000, overlap=800)
+            return [{"heading": f"Chunk {i + 1}", "content": c}
+                    for i, c in enumerate(chunks)]
+
+        sections: List[Dict[str, str]] = []
+
+        # Preamble: everything before the first heading
+        if heading_positions[0][0] > 0:
+            preamble = "\n".join(lines[: heading_positions[0][0]]).strip()
+            if preamble:
+                sections.append({"heading": "Preamble", "content": preamble})
+
+        for idx, (line_num, heading) in enumerate(heading_positions):
+            next_line = (
+                heading_positions[idx + 1][0]
+                if idx + 1 < len(heading_positions)
+                else len(lines)
+            )
+            content = "\n".join(lines[line_num:next_line]).strip()
+            if content:
+                sections.append({"heading": heading, "content": content})
+
+        return sections
+
     def chunk_text(self, text: str, max_chars: int = 6000, overlap: int = 500):
         """Split text into overlapping chunks for LLM processing."""
         if len(text) <= max_chars:
             return [text]
-        
+
         chunks = []
         start = 0
         while start < len(text):
             end = start + max_chars
             if end < len(text):
-                # Try to break at a sentence boundary
                 boundary = text.rfind(". ", start, end)
                 if boundary > start + max_chars // 2:
                     end = boundary + 1

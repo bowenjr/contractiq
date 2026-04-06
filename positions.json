@@ -1,0 +1,32 @@
+{
+  "company_name": "Your Company Name",
+  "standard_positions": {
+    "liability_cap": "Limit liability to contract value",
+    "payment_terms": "30 days from invoice date",
+    "retention": "Maximum 5% released at practical completion",
+    "governing_law": "Ontario",
+    "dispute_resolution": "Arbitration under ADR Institute of Canada rules",
+    "notice_method": "Written notice by email with read receipt",
+    "eot_notice_period": "14 days from becoming aware of delay event",
+    "subcontracting": "Permitted with written consent not unreasonably withheld",
+    "warranty_period": "12 months from practical completion",
+    "insurance_gl": "Minimum $5,000,000 per occurrence"
+  },
+  "escalation_rules": {
+    "legal_review_required_above_value": 500000,
+    "management_approval_above_value": 1000000,
+    "automatic_legal_triggers": [
+      "fitness for purpose",
+      "unlimited liability",
+      "no liability cap",
+      "parent company guarantee",
+      "personal guarantee"
+    ]
+  },
+  "standard_exclusions": [
+    "Consequential or indirect loss",
+    "Loss of profit",
+    "Loss of opportunity",
+    "Punitive damages"
+  ]
+}

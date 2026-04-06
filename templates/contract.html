@@ -197,6 +197,58 @@
 
   .section-gap { margin-bottom:24px; }
   .no-data { color:var(--mist); font-size:0.85rem; font-style:italic; }
+
+  /* ── Pillar Styles ─────────────────────────────────────────────── */
+  .pillar-grid {
+    display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:20px;
+  }
+  .pillar-cell {
+    border-radius:var(--radius); border:2px solid var(--border);
+    padding:14px 16px; background:var(--white);
+  }
+  .pillar-cell-Good            { border-color:#16a34a; }
+  .pillar-cell-IssuesFound     { border-color:#d97706; }
+  .pillar-cell-CriticalIssues  { border-color:#dc2626; }
+  .pillar-cell-NotApplicable   { border-color:var(--mist); }
+  .pillar-name { font-weight:700; font-size:0.9rem; }
+  .pillar-status-Good           { color:#15803d; }
+  .pillar-status-IssuesFound    { color:#92400e; }
+  .pillar-status-CriticalIssues { color:#b91c1c; }
+  .pillar-status-NotApplicable  { color:var(--mist); }
+  .pillar-score { font-family:var(--font-mono); font-size:0.8rem; color:var(--mist); }
+  .pillar-summary { font-size:0.82rem; color:var(--ink); margin-top:6px; line-height:1.5; }
+
+  /* Accordion (details/summary) */
+  details.pillar-accordion { border-radius:var(--radius); margin-bottom:10px; }
+  details.pillar-accordion > summary {
+    cursor:pointer; padding:12px 16px; font-weight:600; font-size:0.88rem;
+    border-radius:var(--radius); list-style:none; display:flex;
+    align-items:center; justify-content:space-between;
+    background:var(--parchment2); border:1px solid var(--border);
+    user-select:none;
+  }
+  details.pillar-accordion > summary::-webkit-details-marker { display:none; }
+  details.pillar-accordion[open] > summary {
+    border-bottom-left-radius:0; border-bottom-right-radius:0;
+    border-bottom-color:var(--gold);
+  }
+  details.pillar-accordion > summary::after { content:'▶'; font-size:0.7rem; opacity:0.5; }
+  details.pillar-accordion[open] > summary::after { content:'▼'; }
+  .pillar-detail-body {
+    border:1px solid var(--border); border-top:none;
+    border-bottom-left-radius:var(--radius); border-bottom-right-radius:var(--radius);
+    padding:14px 16px; background:var(--white);
+  }
+  .neg-point {
+    padding:10px 0; border-bottom:1px solid var(--border); font-size:0.85rem;
+  }
+  .neg-point:last-child { border-bottom:none; }
+  .neg-issue { font-weight:600; }
+  .neg-ask   { margin-top:4px; font-size:0.82rem; }
+  .neg-ask span { color:var(--mist); }
+  .pri-High   { color:#b91c1c; }
+  .pri-Medium { color:#92400e; }
+  .pri-Low    { color:#15803d; }
   .missing-list { list-style:none; padding:0; }
   .missing-list li { padding:4px 0; font-size:0.82rem; color:var(--red); display:flex; gap:6px; }
   .missing-list li::before { content:'⚠'; }
@@ -226,10 +278,16 @@
       <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
       Dashboard
     </a>
-    {% if contract.report_path %}
-    <a class="nav-item" href="/reports/{{ contract.report_path }}" target="_blank">
+    {% if contract.pdf_report_path or contract.report_path %}
+    <a class="nav-item" href="/reports/{{ contract.pdf_report_path or contract.report_path }}" target="_blank">
       <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
       Download PDF Report
+    </a>
+    {% endif %}
+    {% if contract.excel_report_path %}
+    <a class="nav-item" href="/reports/{{ contract.excel_report_path }}" target="_blank">
+      <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+      Download Excel Workbook
     </a>
     {% endif %}
   </nav>
@@ -250,10 +308,17 @@
         {% if contract.analysis_date %} · Analysed {{ contract.analysis_date[:10] }}{% endif %}
       </div>
     </div>
-    {% if contract.report_path %}
-    <a class="btn btn-gold" href="/reports/{{ contract.report_path }}" target="_blank">
+    {% if contract.pdf_report_path or contract.report_path %}
+    <a class="btn btn-gold" href="/reports/{{ contract.pdf_report_path or contract.report_path }}" target="_blank">
       <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
       PDF Report
+    </a>
+    {% endif %}
+    {% if contract.excel_report_path %}
+    <a class="btn btn-outline" href="/reports/{{ contract.excel_report_path }}" target="_blank"
+       style="color:var(--green);border-color:#bbf7d0">
+      <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+      Excel
     </a>
     {% endif %}
   </div>
@@ -278,6 +343,147 @@
         <div class="risk-score-label">/ 100</div>
       </div>
     </div>
+
+    <!-- 7-Pillar Analysis (new format) -->
+    {% set pillars = a.get('pillars', []) %}
+    {% if pillars %}
+    <div class="card section-gap">
+      <div class="card-header">
+        <svg width="16" height="16" fill="none" stroke="var(--gold)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+        <span class="card-title">7-Pillar Analysis</span>
+      </div>
+      <div class="card-body">
+
+        <!-- Pillar Summary Grid -->
+        <div class="pillar-grid">
+          {% for pr in pillars %}
+          {% set pid = pr.get('pillar_id','') %}
+          {% set pstatus = pr.get('status','Issues Found') %}
+          {% set pstatus_css = pstatus.replace(' ','') %}
+          <div class="pillar-cell pillar-cell-{{ pstatus_css }}">
+            <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+              <div class="pillar-name">{{ pr.get('pillar_name','') }}</div>
+              <div class="pillar-status-{{ pstatus_css }}" style="font-size:0.8rem;font-weight:600">{{ pstatus }}</div>
+              <div class="pillar-score">{{ pr.get('score','') }}/100</div>
+            </div>
+            <div class="pillar-summary">{{ pr.get('summary','') }}</div>
+            {% if pr.get('red_flags') %}
+            <div style="margin-top:6px;font-size:0.76rem;color:var(--red)">
+              ⚠ {{ pr.red_flags|length }} red flag{{ 's' if pr.red_flags|length != 1 else '' }}
+            </div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+
+        <!-- Detailed Pillar Accordion -->
+        {% for pr in pillars %}
+        {% set pid = pr.get('pillar_id','') %}
+        {% set pstatus = pr.get('status','Issues Found') %}
+        {% set pstatus_css = pstatus.replace(' ','') %}
+        <details class="pillar-accordion">
+          <summary>
+            <span>
+              {{ pr.get('pillar_name','') }}
+              &nbsp;<span class="pillar-status-{{ pstatus_css }}">{{ pstatus }}</span>
+              &nbsp;<span class="pillar-score">{{ pr.get('score','') }}/100</span>
+            </span>
+          </summary>
+          <div class="pillar-detail-body">
+
+            <!-- Findings -->
+            {% set findings = pr.get('findings', []) %}
+            {% if findings %}
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin-bottom:8px">Findings</div>
+            <table class="data-table" style="margin-bottom:14px">
+              <thead><tr><th>Finding</th><th>Severity</th><th>Clause</th><th>Action</th></tr></thead>
+              <tbody>
+              {% for f in findings %}
+              <tr>
+                <td>
+                  <strong>{{ f.get('finding','') }}</strong>
+                  {% if f.get('detail') %}<div style="font-size:0.78rem;color:var(--mist);margin-top:2px">{{ f.detail }}</div>{% endif %}
+                  {% if f.get('source_excerpt') %}<div style="font-size:0.76rem;font-style:italic;color:var(--mist);margin-top:2px;border-left:2px solid var(--gold-dim);padding-left:6px">"{{ f.source_excerpt }}"</div>{% endif %}
+                </td>
+                <td>
+                  {% set sev = f.get('severity','') %}
+                  <span class="chip chip-{{ 'red' if sev in ('Critical','High') else 'amber' if sev=='Medium' else 'green' if sev=='Low' else 'grey' }}">{{ sev }}</span>
+                </td>
+                <td style="font-size:0.8rem;color:var(--mist)">{{ f.get('clause_reference','') }}</td>
+                <td style="font-size:0.8rem">{{ f.get('recommended_action','') }}</td>
+              </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+            {% endif %}
+
+            <!-- Red Flags -->
+            {% set flags = pr.get('red_flags', []) %}
+            {% if flags %}
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin-bottom:8px">Red Flags</div>
+            {% for f in flags %}
+            <div class="flag-item">
+              <span class="flag-sev sev-{{ f.get('severity','Low') }}">{{ f.get('severity','?') }}</span>
+              <div>
+                <div class="flag-text">{{ f.get('flag','') }}</div>
+                <div class="flag-desc">{{ f.get('description','') }}</div>
+                {% if f.get('source_excerpt') %}<div style="font-size:0.76rem;font-style:italic;margin-top:3px;border-left:2px solid var(--gold-dim);padding-left:6px">"{{ f.source_excerpt }}"</div>{% endif %}
+              </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            <!-- Questions Answered -->
+            {% set qa = pr.get('questions_answered', {}) %}
+            {% if qa %}
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin:14px 0 8px">Key Questions</div>
+            <table class="data-table" style="margin-bottom:14px">
+              <thead><tr><th style="width:45%">Question</th><th>Answer</th></tr></thead>
+              <tbody>
+              {% for q, ans in qa.items() %}
+              <tr>
+                <td style="font-size:0.8rem">{{ q }}</td>
+                <td style="font-size:0.8rem;{% if ans in ('Not Found','Not Applicable','N/A') %}color:var(--mist);font-style:italic{% endif %}">{{ ans }}</td>
+              </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+            {% endif %}
+
+            <!-- Missing Protections -->
+            {% set missing = pr.get('missing_protections', []) %}
+            {% if missing %}
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin-bottom:6px">Missing Protections</div>
+            <ul class="missing-list">
+              {% for m in missing %}<li>{{ m }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+
+            <!-- Negotiation Points -->
+            {% set neg_pts = pr.get('negotiation_points', []) %}
+            {% if neg_pts %}
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin:14px 0 8px">Negotiation Points</div>
+            {% for np in neg_pts %}
+            <div class="neg-point">
+              <div class="neg-issue">
+                {{ np.get('issue','') }}
+                <span class="pri-{{ np.get('priority','Medium') }}" style="font-size:0.75rem;font-weight:400;margin-left:8px">{{ np.get('priority','') }} Priority</span>
+                {% if np.get('requires_legal') %}<span style="font-size:0.72rem;background:#fee2e2;color:#b91c1c;border-radius:3px;padding:1px 6px;margin-left:6px">⚖ Legal</span>{% endif %}
+              </div>
+              <div class="neg-ask"><span>Ask:</span> {{ np.get('primary_ask','') }}</div>
+              {% if np.get('fallback') %}<div class="neg-ask"><span>Fallback:</span> {{ np.fallback }}</div>{% endif %}
+              {% if np.get('current_position') %}<div class="neg-ask"><span>Currently:</span> {{ np.current_position }}</div>{% endif %}
+            </div>
+            {% endfor %}
+            {% endif %}
+
+          </div>
+        </details>
+        {% endfor %}
+
+      </div>
+    </div>
+    {% endif %}
 
     <!-- Row 1: Summary + Risk Metrics -->
     <div class="analysis-grid section-gap">
@@ -308,6 +514,31 @@
           <span class="card-title">Risk Breakdown</span>
         </div>
         <div class="card-body">
+          {% set pillars_check = a.get('pillars', []) %}
+          {% if pillars_check %}
+          <!-- New format: pillar scores -->
+          {% set pb = rs.get('pillar_breakdown', []) %}
+          {% if pb %}
+          <table class="data-table">
+            <thead><tr><th>Pillar</th><th>Score</th><th>Status</th></tr></thead>
+            <tbody>
+            {% for p in pb %}
+            {% set pstatus = p.get('status','Issues Found') %}
+            <tr>
+              <td>{{ p.get('pillar_name', p.get('pillar_id','')) }}</td>
+              <td><span class="chip chip-{{ 'green' if p.get('score',0) >= 70 else 'amber' if p.get('score',0) >= 40 else 'red' }}">{{ p.get('score','') }}/100</span></td>
+              <td style="font-size:0.82rem">{{ pstatus }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          {% endif %}
+          <div style="margin-top:10px;font-size:0.82rem;color:var(--mist)">
+            Critical flags: <strong style="color:var(--red)">{{ rs.get('critical_flags', 0) }}</strong>
+            &nbsp; High flags: <strong style="color:var(--amber)">{{ rs.get('high_flags', 0) }}</strong>
+          </div>
+          {% else %}
+          <!-- Legacy format -->
           <table class="data-table">
             <tr>
               <th>Financial Risk</th>
@@ -328,7 +559,6 @@
               </td>
             </tr>
           </table>
-
           {% set flags = rs.get('red_flags', []) %}
           {% if flags %}
           <div style="margin-top:14px">
@@ -343,6 +573,7 @@
             </div>
             {% endfor %}
           </div>
+          {% endif %}
           {% endif %}
         </div>
       </div>
@@ -505,6 +736,36 @@
     </div>
     {% endif %}
 
+    <!-- Obligations (new format) -->
+    {% set obligations = a.get('obligations', []) %}
+    {% if obligations %}
+    <div class="card section-gap">
+      <div class="card-header">
+        <svg width="16" height="16" fill="none" stroke="var(--gold)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+        <span class="card-title">Obligations Register</span>
+      </div>
+      <div class="card-body" style="padding:0">
+        <table class="data-table">
+          <thead><tr><th>Party</th><th>Type</th><th>Description</th><th>Deadline</th></tr></thead>
+          <tbody>
+          {% for ob in obligations[:20] %}
+          <tr>
+            <td style="font-weight:600;font-size:0.82rem;white-space:nowrap">{{ ob.get('party','') }}</td>
+            <td><span class="chip chip-grey" style="font-size:0.72rem">{{ ob.get('obligation_type','') }}</span></td>
+            <td style="font-size:0.82rem">
+              {{ ob.get('description','') }}
+              {% if ob.get('trigger') %}<div style="font-size:0.76rem;color:var(--mist);margin-top:2px">Trigger: {{ ob.trigger }}</div>{% endif %}
+              {% if ob.get('notice_required') %}<div style="font-size:0.76rem;color:var(--mist)">Notice: {{ ob.notice_required }}</div>{% endif %}
+            </td>
+            <td style="font-size:0.82rem;white-space:nowrap;color:{% if ob.get('deadline') %}var(--red){% else %}var(--mist){% endif %}">{{ ob.get('deadline','—') }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
     <!-- Recommendations -->
     {% set recs = a.get('recommendations', {}) %}
     {% if recs and not recs.get('error') %}
@@ -523,6 +784,10 @@
           </div>
         </div>
 
+        {% if recs.get('key_risks_summary') %}
+        <div style="font-size:0.85rem;line-height:1.6;color:var(--ink);margin-bottom:16px;padding:10px 14px;background:var(--parchment2);border-radius:4px">{{ recs.key_risks_summary }}</div>
+        {% endif %}
+
         <div class="analysis-grid">
           <div>
             {% set actions = recs.get('immediate_actions', []) %}
@@ -532,6 +797,7 @@
             <div class="action-item">
               <span class="action-priority">{{ act.get('priority','?') }}</span>
               <span class="action-text">{{ act.get('action','') }}</span>
+              {% if act.get('owner') %}<span style="font-size:0.72rem;background:var(--parchment2);border-radius:3px;padding:1px 6px;margin-left:6px;color:var(--mist)">{{ act.owner }}</span>{% endif %}
               {% if act.get('reason') %}<div class="action-reason">{{ act.reason }}</div>{% endif %}
             </div>
             {% endfor %}
@@ -547,6 +813,16 @@
               {% endfor %}
             </ul>
             {% endif %}
+
+            {% set legal_items = recs.get('legal_escalation_items', []) %}
+            {% if legal_items %}
+            <div style="font-size:0.8rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin:14px 0 8px">Legal Escalation</div>
+            {% for item in legal_items %}
+            <div style="font-size:0.82rem;padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:6px">
+              <span style="color:var(--red)">⚖</span>{{ item }}
+            </div>
+            {% endfor %}
+            {% endif %}
           </div>
         </div>
 
@@ -554,10 +830,17 @@
         {% if neg %}
         <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
           <div style="font-size:0.8rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin-bottom:8px">Negotiation Points</div>
-          {% for n in neg[:6] %}
-          <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:0.85rem">
-            <strong>{{ n.get('clause','') }}:</strong> {{ n.get('recommended_change','') }}
-            {% if n.get('current_position') %}<div style="font-size:0.78rem;color:var(--mist);margin-top:2px">Current: {{ n.current_position }}</div>{% endif %}
+          {% for n in neg[:8] %}
+          <div class="neg-point">
+            <div class="neg-issue">
+              {{ n.get('issue', n.get('clause','')) }}
+              {% if n.get('priority') %}<span class="pri-{{ n.priority }}" style="font-size:0.75rem;font-weight:400;margin-left:8px">{{ n.priority }} Priority</span>{% endif %}
+              {% if n.get('requires_legal') %}<span style="font-size:0.72rem;background:#fee2e2;color:#b91c1c;border-radius:3px;padding:1px 6px;margin-left:6px">⚖ Legal</span>{% endif %}
+            </div>
+            {% set ask = n.get('primary_ask', n.get('recommended_change','')) %}
+            {% if ask %}<div class="neg-ask"><span>Ask:</span> {{ ask }}</div>{% endif %}
+            {% if n.get('fallback') %}<div class="neg-ask"><span>Fallback:</span> {{ n.fallback }}</div>{% endif %}
+            {% if n.get('current_position') %}<div class="neg-ask"><span>Currently:</span> {{ n.current_position }}</div>{% endif %}
           </div>
           {% endfor %}
         </div>

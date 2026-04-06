@@ -1,22 +1,36 @@
 """
 LM Studio client for ContractIQ.
-Connects to LM Studio's OpenAI-compatible local API at localhost:1234.
+Connects to LM Studio's OpenAI-compatible local API.
+Base URL and timeout are read from config.json at the project root.
 """
 
 import json
 import requests
+from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+_CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+
+
+def _load_config() -> dict:
+    try:
+        return json.loads(_CONFIG_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
 
 class LMStudioClient:
     """
     Thin wrapper around LM Studio's local OpenAI-compatible API.
-    LM Studio runs at http://localhost:1234 by default.
+    Defaults are read from config.json; constructor args override them.
     """
 
-    def __init__(self, base_url: str = "http://localhost:1234", timeout: int = 300):
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+    def __init__(self, base_url: Optional[str] = None, timeout: Optional[int] = None):
+        cfg = _load_config()
+        self.base_url = (
+            base_url or cfg.get("lm_studio_base_url", "http://localhost:1234")
+        ).rstrip("/")
+        self.timeout = timeout if timeout is not None else cfg.get("lm_studio_timeout", 180)
         self.api_url = f"{self.base_url}/v1/chat/completions"
         self.models_url = f"{self.base_url}/v1/models"
 
@@ -42,10 +56,7 @@ class LMStudioClient:
         max_tokens: int = 4096,
         system_prompt: Optional[str] = None,
     ) -> str:
-        """
-        Send a chat request to LM Studio.
-        Returns the assistant's text response.
-        """
+        """Send a chat request to LM Studio. Returns the assistant's text response."""
         if system_prompt:
             messages = [{"role": "system", "content": system_prompt}] + messages
 
@@ -66,13 +77,14 @@ class LMStudioClient:
             return data["choices"][0]["message"]["content"]
         except requests.exceptions.ConnectionError:
             raise ConnectionError(
-                "Cannot connect to LM Studio at localhost:1234. "
+                f"Cannot connect to LM Studio at {self.base_url}. "
                 "Please ensure LM Studio is running and a model is loaded."
             )
         except requests.exceptions.Timeout:
             raise TimeoutError(
-                "LM Studio request timed out. The document may be too long or the model too slow. "
-                "Try a faster model or reduce document length."
+                f"LM Studio request timed out after {self.timeout}s. "
+                "The document may be too long or the model too slow. "
+                "Try a faster model or increase lm_studio_timeout in config.json."
             )
         except Exception as e:
             raise RuntimeError(f"LM Studio API error: {str(e)}")
@@ -126,5 +138,4 @@ class LMStudioClient:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Last resort: return as structured error with raw text
             return {"error": "JSON parse failed", "raw_response": raw[:2000]}

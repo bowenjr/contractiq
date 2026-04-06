@@ -13,6 +13,7 @@ python-docx>=1.1.0       # DOCX extraction
 
 # Report generation
 reportlab>=4.2.0          # PDF report generation
+openpyxl>=3.1.0           # Excel workbook generation
 
 # HTTP (for LM Studio API calls)
 requests>=2.32.0

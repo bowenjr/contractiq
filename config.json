@@ -1,0 +1,5 @@
+{
+  "lm_studio_base_url": "http://10.0.0.10:1234",
+  "lm_studio_timeout": 180,
+  "max_document_chars": 80000
+}

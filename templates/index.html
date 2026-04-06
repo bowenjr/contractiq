@@ -149,28 +149,19 @@
     transition: all 0.18s;
     text-decoration: none;
   }
-  .btn-primary {
-    background: var(--ink);
-    color: var(--white);
-  }
+  .btn-primary { background: var(--ink); color: var(--white); }
   .btn-primary:hover { background: var(--ink-mid); transform: translateY(-1px); }
-  .btn-gold {
-    background: var(--gold);
-    color: var(--ink);
-  }
+  .btn-gold { background: var(--gold); color: var(--ink); }
   .btn-gold:hover { background: #d4b87a; transform: translateY(-1px); }
   .btn-outline {
-    background: transparent;
-    color: var(--ink);
+    background: transparent; color: var(--ink);
     border: 1.5px solid var(--border);
   }
   .btn-outline:hover { border-color: var(--ink); background: var(--parchment2); }
   .btn-danger {
-    background: transparent;
-    color: var(--red);
+    background: transparent; color: var(--red);
     border: 1.5px solid #fca5a5;
-    padding: 6px 12px;
-    font-size: 0.8rem;
+    padding: 6px 12px; font-size: 0.8rem;
   }
   .btn-danger:hover { background: #fee2e2; }
 
@@ -192,82 +183,52 @@
   .stat-card::before {
     content: '';
     position: absolute; top: 0; left: 0; right: 0;
-    height: 3px;
-    background: var(--gold);
+    height: 3px; background: var(--gold);
   }
   .stat-label {
-    font-size: 0.72rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--mist);
-    margin-bottom: 6px;
+    font-size: 0.72rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--mist); margin-bottom: 6px;
   }
   .stat-value {
-    font-family: var(--font-serif);
-    font-size: 2rem;
-    font-weight: 600;
-    color: var(--ink);
-    line-height: 1;
+    font-family: var(--font-serif); font-size: 2rem;
+    font-weight: 600; color: var(--ink); line-height: 1;
   }
-  .stat-sub {
-    font-size: 0.75rem;
-    color: var(--mist);
-    margin-top: 4px;
-  }
+  .stat-sub { font-size: 0.75rem; color: var(--mist); margin-top: 4px; }
 
   /* ── Upload Zone ───────────────────────────────────────────────── */
   .upload-zone {
     border: 2px dashed var(--gold-dim);
     border-radius: var(--radius);
-    padding: 40px;
-    text-align: center;
+    padding: 40px; text-align: center;
     background: rgba(200,169,110,0.04);
-    transition: all 0.2s;
-    cursor: pointer;
-    margin-bottom: 28px;
+    transition: all 0.2s; cursor: pointer; margin-bottom: 28px;
   }
   .upload-zone:hover, .upload-zone.drag-over {
-    border-color: var(--gold);
-    background: rgba(200,169,110,0.09);
+    border-color: var(--gold); background: rgba(200,169,110,0.09);
   }
   .upload-icon { font-size: 2.4rem; margin-bottom: 10px; }
-  .upload-title {
-    font-family: var(--font-serif);
-    font-size: 1.1rem;
-    color: var(--ink);
-    margin-bottom: 6px;
-  }
+  .upload-title { font-family: var(--font-serif); font-size: 1.1rem; color: var(--ink); margin-bottom: 6px; }
   .upload-sub { font-size: 0.82rem; color: var(--mist); }
-  .upload-types {
-    margin-top: 10px;
-    display: flex; gap: 8px; justify-content: center;
-  }
+  .upload-types { margin-top: 10px; display: flex; gap: 8px; justify-content: center; }
   .upload-badge {
-    background: var(--parchment2);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 3px 10px;
-    font-size: 0.72rem;
-    font-family: var(--font-mono);
-    color: var(--mist);
-    letter-spacing: 0.05em;
+    background: var(--parchment2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 10px;
+    font-size: 0.72rem; font-family: var(--font-mono);
+    color: var(--mist); letter-spacing: 0.05em;
   }
   #file-input { display: none; }
 
-  /* ── Processing Banner ─────────────────────────────────────────── */
-  .processing-banner {
+  /* ── Upload spinner banner (used only during file upload phase) ── */
+  .upload-banner {
     display: none;
-    background: var(--ink);
-    color: var(--white);
+    background: var(--ink); color: var(--white);
     border-radius: var(--radius);
-    padding: 16px 24px;
-    margin-bottom: 28px;
-    align-items: center;
-    gap: 16px;
+    padding: 14px 20px; margin-bottom: 28px;
+    align-items: center; gap: 14px;
   }
-  .processing-banner.show { display: flex; }
+  .upload-banner.show { display: flex; }
   .spinner {
-    width: 20px; height: 20px;
+    width: 18px; height: 18px;
     border: 2.5px solid rgba(255,255,255,0.2);
     border-top-color: var(--gold);
     border-radius: 50%;
@@ -275,27 +236,98 @@
     flex-shrink: 0;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .processing-text { flex: 1; }
-  .processing-title { font-weight: 600; font-size: 0.9rem; }
-  .processing-sub { font-size: 0.8rem; color: rgba(255,255,255,0.6); }
-  .progress-bar-wrap {
-    background: rgba(255,255,255,0.15);
-    border-radius: 2px;
-    height: 3px;
-    width: 200px;
-    overflow: hidden;
+  .upload-banner-text { font-size: 0.88rem; }
+
+  /* ── Progress Card (analysis phase) ───────────────────────────── */
+  .progress-card {
+    display: none;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 26px;
+    margin-bottom: 28px;
+    box-shadow: var(--shadow);
+  }
+  .progress-card.show { display: block; }
+  .pc-header {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .pc-header-left { display: flex; align-items: center; gap: 12px; }
+  .spinner-dark {
+    width: 18px; height: 18px;
+    border: 2.5px solid var(--border);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
     flex-shrink: 0;
   }
-  .progress-bar-fill {
-    height: 100%;
-    background: var(--gold);
-    border-radius: 2px;
-    animation: progress-pulse 1.5s ease-in-out infinite;
+  .pc-check {
+    width: 18px; height: 18px; flex-shrink: 0;
+    color: var(--green); font-size: 1.1rem; line-height: 18px;
   }
-  @keyframes progress-pulse {
-    0%, 100% { width: 20%; }
-    50% { width: 80%; }
+  .pc-title {
+    font-weight: 600; font-size: 0.92rem; color: var(--ink);
   }
+  .pc-elapsed {
+    font-size: 0.76rem; color: var(--mist); margin-top: 2px;
+    font-family: var(--font-mono);
+  }
+  .pc-pct {
+    font-family: var(--font-mono); font-size: 1rem;
+    font-weight: 600; color: var(--ink);
+  }
+  .pc-bar-track {
+    background: var(--parchment2); border-radius: 3px;
+    height: 6px; overflow: hidden; margin-bottom: 10px;
+  }
+  .pc-bar-fill {
+    height: 100%; background: var(--gold); border-radius: 3px;
+    transition: width 0.7s ease;
+  }
+  .pc-message {
+    font-size: 0.79rem; color: var(--mist);
+    font-family: var(--font-mono); margin-bottom: 18px;
+    min-height: 1.1em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pc-steps {
+    display: flex; flex-direction: column; gap: 7px;
+  }
+  .pc-step {
+    display: flex; align-items: flex-start; gap: 10px;
+    font-size: 0.86rem; padding: 2px 0;
+  }
+  .pc-step-icon {
+    width: 20px; text-align: center; flex-shrink: 0;
+    font-size: 0.85rem; line-height: 1.4;
+    font-family: var(--font-mono);
+  }
+  .pc-step-body { display: flex; flex-direction: column; }
+  .pc-step-label { line-height: 1.4; }
+  .pc-step-sub {
+    font-size: 0.74rem; color: var(--mist);
+    font-family: var(--font-mono); margin-top: 1px;
+  }
+  /* Step states */
+  .pc-step-done .pc-step-icon  { color: var(--green); }
+  .pc-step-done .pc-step-label { color: var(--ink); }
+  .pc-step-active .pc-step-icon  { color: var(--gold); }
+  .pc-step-active .pc-step-label { color: var(--ink); font-weight: 600; }
+  .pc-step-pending .pc-step-icon  { color: var(--border); }
+  .pc-step-pending .pc-step-label { color: var(--mist); }
+  /* Spinning rotation for active step icon */
+  @keyframes spin-icon { to { transform: rotate(360deg); } }
+  .icon-spin { display: inline-block; animation: spin-icon 1s linear infinite; }
+  /* Error state */
+  .pc-error {
+    margin-top: 12px; padding: 10px 14px;
+    background: #fee2e2; border-radius: 4px;
+    color: var(--red); font-size: 0.84rem; line-height: 1.5;
+    display: none;
+  }
+  .pc-error.show { display: block; }
 
   /* ── Contracts Table ───────────────────────────────────────────── */
   .section-header {
@@ -303,46 +335,27 @@
     margin-bottom: 14px;
   }
   .section-title {
-    font-family: var(--font-serif);
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--ink);
+    font-family: var(--font-serif); font-size: 1.1rem;
+    font-weight: 600; color: var(--ink);
   }
   .table-wrap {
-    background: var(--white);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
   }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.85rem;
-  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   thead th {
-    background: var(--ink);
-    color: rgba(255,255,255,0.75);
-    font-weight: 500;
-    font-size: 0.72rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 12px 16px;
-    text-align: left;
+    background: var(--ink); color: rgba(255,255,255,0.75);
+    font-weight: 500; font-size: 0.72rem;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 12px 16px; text-align: left;
   }
-  tbody tr {
-    border-bottom: 1px solid var(--border);
-    transition: background 0.15s;
-  }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
   tbody tr:last-child { border-bottom: none; }
   tbody tr:hover { background: var(--parchment2); cursor: pointer; }
   td { padding: 13px 16px; vertical-align: middle; }
   .doc-name {
-    font-weight: 500;
-    color: var(--ink);
-    display: block;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-weight: 500; color: var(--ink); display: block;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     max-width: 260px;
   }
   .doc-meta { font-size: 0.75rem; color: var(--mist); margin-top: 2px; }
@@ -350,11 +363,8 @@
   /* ── Badges ────────────────────────────────────────────────────── */
   .badge {
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 10px;
-    border-radius: 100px;
-    font-size: 0.73rem;
-    font-weight: 500;
-    letter-spacing: 0.03em;
+    padding: 3px 10px; border-radius: 100px;
+    font-size: 0.73rem; font-weight: 500; letter-spacing: 0.03em;
   }
   .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
   .badge-complete   { background: #dcfce7; color: var(--green); }
@@ -369,16 +379,10 @@
   /* ── Risk Pill ─────────────────────────────────────────────────── */
   .risk-pill {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 4px 11px;
-    border-radius: 100px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    padding: 4px 11px; border-radius: 100px;
+    font-size: 0.75rem; font-weight: 600;
   }
-  .risk-score-num {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    opacity: 0.75;
-  }
+  .risk-score-num { font-family: var(--font-mono); font-size: 0.7rem; opacity: 0.75; }
   .risk-Low      { background: #dcfce7; color: #15803d; }
   .risk-Medium   { background: #fef3c7; color: #92400e; }
   .risk-High     { background: #fee2e2; color: #b91c1c; }
@@ -388,21 +392,16 @@
   /* ── Toast ─────────────────────────────────────────────────────── */
   #toast-container {
     position: fixed; bottom: 24px; right: 24px;
-    display: flex; flex-direction: column; gap: 8px;
-    z-index: 9999;
+    display: flex; flex-direction: column; gap: 8px; z-index: 9999;
   }
   .toast {
-    background: var(--ink);
-    color: var(--white);
-    padding: 12px 18px;
-    border-radius: var(--radius);
-    font-size: 0.85rem;
-    box-shadow: var(--shadow-lg);
-    animation: slide-up 0.25s ease;
-    max-width: 360px;
+    background: var(--ink); color: var(--white);
+    padding: 12px 18px; border-radius: var(--radius);
+    font-size: 0.85rem; box-shadow: var(--shadow-lg);
+    animation: slide-up 0.25s ease; max-width: 360px;
     border-left: 3px solid var(--gold);
   }
-  .toast.toast-error { border-left-color: var(--red); }
+  .toast.toast-error   { border-left-color: var(--red); }
   .toast.toast-success { border-left-color: var(--green); }
   @keyframes slide-up {
     from { opacity: 0; transform: translateY(12px); }
@@ -410,44 +409,29 @@
   }
 
   /* ── Empty State ───────────────────────────────────────────────── */
-  .empty-state {
-    text-align: center;
-    padding: 60px 40px;
-    color: var(--mist);
-  }
+  .empty-state { text-align: center; padding: 60px 40px; color: var(--mist); }
   .empty-icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.4; }
   .empty-text { font-size: 0.9rem; }
 
   /* ── Modal ─────────────────────────────────────────────────────── */
   .modal-overlay {
-    display: none;
-    position: fixed; inset: 0;
-    background: rgba(26,31,46,0.6);
-    z-index: 200;
+    display: none; position: fixed; inset: 0;
+    background: rgba(26,31,46,0.6); z-index: 200;
     align-items: center; justify-content: center;
   }
   .modal-overlay.show { display: flex; }
   .modal {
-    background: var(--white);
-    border-radius: var(--radius);
-    padding: 32px;
-    width: 440px;
-    box-shadow: var(--shadow-lg);
+    background: var(--white); border-radius: var(--radius);
+    padding: 32px; width: 440px; box-shadow: var(--shadow-lg);
     animation: modal-in 0.2s ease;
   }
   @keyframes modal-in {
     from { opacity: 0; transform: scale(0.96); }
     to   { opacity: 1; transform: scale(1); }
   }
-  .modal-title {
-    font-family: var(--font-serif);
-    font-size: 1.2rem;
-    margin-bottom: 10px;
-  }
-  .modal-body { color: var(--mist); font-size: 0.88rem; line-height: 1.6; margin-bottom: 20px; }
+  .modal-title { font-family: var(--font-serif); font-size: 1.2rem; margin-bottom: 10px; }
+  .modal-body  { color: var(--mist); font-size: 0.88rem; line-height: 1.6; margin-bottom: 20px; }
   .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
-
-  /* ── Action Icons ──────────────────────────────────────────────── */
   .action-cell { display: flex; gap: 6px; }
 </style>
 </head>
@@ -499,7 +483,7 @@
   <div class="content">
 
     <!-- Stats Row -->
-    <div class="stats-row" id="stats-row">
+    <div class="stats-row">
       <div class="stat-card">
         <div class="stat-label">Total Contracts</div>
         <div class="stat-value" id="stat-total">—</div>
@@ -538,14 +522,31 @@
     <input type="file" id="file-input" accept=".pdf,.docx,.doc,.txt"
            onchange="handleFileSelect(event)">
 
-    <!-- Processing Banner -->
-    <div class="processing-banner" id="processing-banner">
+    <!-- Upload Banner (file extraction phase only) -->
+    <div class="upload-banner" id="upload-banner">
       <div class="spinner"></div>
-      <div class="processing-text">
-        <div class="processing-title" id="proc-title">Analysing document...</div>
-        <div class="processing-sub" id="proc-sub">Running LLM analysis pipeline — this may take 1–2 minutes</div>
+      <div class="upload-banner-text" id="upload-banner-text">Uploading...</div>
+    </div>
+
+    <!-- Progress Card (analysis phase) -->
+    <div class="progress-card" id="progress-card">
+      <div class="pc-header">
+        <div class="pc-header-left">
+          <div class="spinner-dark" id="pc-spinner"></div>
+          <div class="pc-check" id="pc-check" style="display:none">✓</div>
+          <div>
+            <div class="pc-title" id="pc-title">Analysing document...</div>
+            <div class="pc-elapsed" id="pc-elapsed">0s elapsed</div>
+          </div>
+        </div>
+        <div class="pc-pct" id="pc-pct">0%</div>
       </div>
-      <div class="progress-bar-wrap"><div class="progress-bar-fill"></div></div>
+      <div class="pc-bar-track">
+        <div class="pc-bar-fill" id="pc-bar-fill" style="width:0%"></div>
+      </div>
+      <div class="pc-message" id="pc-message">Initializing...</div>
+      <div class="pc-steps" id="pc-steps"></div>
+      <div class="pc-error" id="pc-error"></div>
     </div>
 
     <!-- Contracts Table -->
@@ -594,40 +595,66 @@
 <div id="toast-container"></div>
 
 <script>
-  let deleteTarget = null;
-  let processingId = null;
+  // ── Constants ─────────────────────────────────────────────────────────────
+  // Default step labels used when server has not yet sent completed_steps
+  const DEFAULT_STEPS = [
+    { step_num: 1, step_name: 'Classification' },
+    { step_num: 2, step_name: 'Parties' },
+    { step_num: 3, step_name: 'Pillar Analysis' },
+    { step_num: 4, step_name: 'Dates' },
+    { step_num: 5, step_name: 'Obligations' },
+    { step_num: 6, step_name: 'Risk Score' },
+    { step_num: 7, step_name: 'Recommendations' },
+  ];
 
-  // ── Init ─────────────────────────────────────────────────────────────────
+  const PILLAR_COLOURS = {
+    money:          '#16a34a',
+    time:           '#d97706',
+    scope:          '#1d4ed8',
+    risk_liability: '#dc2626',
+    relationships:  '#7c3aed',
+    administration: '#0891b2',
+    exit:           '#6b7280',
+  };
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let deleteTarget     = null;
+  let activeContractId = null;   // contract being analysed right now
+  let pollTimer        = null;   // setInterval for /api/progress polling
+  let elapsedTimer     = null;   // setInterval for elapsed time counter
+  let elapsedSec       = 0;
+
+  // ── Init ──────────────────────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', () => {
     checkLLMStatus();
     loadContracts();
     setInterval(checkLLMStatus, 30000);
   });
 
-  // ── LLM Status ───────────────────────────────────────────────────────────
+  // ── LLM Status ────────────────────────────────────────────────────────────
   async function checkLLMStatus() {
     try {
       const r = await fetch('/api/llm-status');
       const d = await r.json();
-      const dot = document.getElementById('llm-dot');
+      const dot   = document.getElementById('llm-dot');
       const label = document.getElementById('llm-label');
-      const modelEl = document.getElementById('stat-model');
+      const model = document.getElementById('stat-model');
       if (d.reachable) {
         dot.className = 'status-dot online';
         const m = d.models[0] || 'Connected';
         label.textContent = 'LM Studio — online';
-        modelEl.textContent = m.length > 22 ? m.slice(0, 22) + '…' : m;
+        model.textContent = m.length > 22 ? m.slice(0, 22) + '…' : m;
       } else {
         dot.className = 'status-dot offline';
         label.textContent = 'LM Studio — offline';
-        modelEl.textContent = 'Not connected';
+        model.textContent = 'Not connected';
       }
     } catch(e) {
       document.getElementById('llm-dot').className = 'status-dot offline';
     }
   }
 
-  // ── Load Contracts ────────────────────────────────────────────────────────
+  // ── Contracts ─────────────────────────────────────────────────────────────
   async function loadContracts() {
     const r = await fetch('/api/contracts');
     const contracts = await r.json();
@@ -671,11 +698,12 @@
                       onclick="startAnalysis('${c.id}','${escHtml(c.filename)}')">
                 Analyse
               </button>` : ''}
-            ${c.status === 'complete' && c.report_path ? `
+            ${c.status === 'complete' && c.pdf_report_path ? `
               <a class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem"
-                 href="/reports/${c.report_path}" target="_blank">
-                Report
-              </a>` : ''}
+                 href="/reports/${c.pdf_report_path}" target="_blank" title="PDF Report">PDF</a>` : ''}
+            ${c.status === 'complete' && c.excel_report_path ? `
+              <a class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem;color:var(--green);border-color:#bbf7d0"
+                 href="/reports/${c.excel_report_path}" target="_blank" title="Excel Workbook">XLS</a>` : ''}
             <button class="btn btn-danger" onclick="openDeleteModal('${c.id}')">✕</button>
           </div>
         </td>
@@ -702,14 +730,11 @@
 
   function formatDate(dateStr) {
     if (!dateStr) return '—';
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('en-CA', {day:'numeric', month:'short', year:'numeric'});
+    return new Date(dateStr).toLocaleDateString('en-CA', {day:'numeric', month:'short', year:'numeric'});
   }
 
   // ── Upload ────────────────────────────────────────────────────────────────
-  function triggerUpload() {
-    document.getElementById('file-input').click();
-  }
+  function triggerUpload() { document.getElementById('file-input').click(); }
 
   async function handleFileSelect(e) {
     const file = e.target.files[0];
@@ -721,11 +746,9 @@
     e.preventDefault();
     document.getElementById('upload-zone').classList.add('drag-over');
   }
-
   function handleDragLeave(e) {
     document.getElementById('upload-zone').classList.remove('drag-over');
   }
-
   async function handleDrop(e) {
     e.preventDefault();
     document.getElementById('upload-zone').classList.remove('drag-over');
@@ -734,7 +757,7 @@
   }
 
   async function uploadFile(file) {
-    showBanner(`Uploading "${file.name}"...`, 'Extracting document text');
+    showUploadBanner(`Uploading "${file.name}"…`);
     const form = new FormData();
     form.append('file', file);
     try {
@@ -742,50 +765,176 @@
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || 'Upload failed');
       toast(`Uploaded — ${d.word_count.toLocaleString()} words extracted`, 'success');
-      hideBanner();
+      hideUploadBanner();
       loadContracts();
-      // Auto-start analysis
-      setTimeout(() => startAnalysis(d.contract_id, file.name), 400);
-    } catch (e) {
-      hideBanner();
+      setTimeout(() => startAnalysis(d.doc_id || d.contract_id, file.name), 400);
+    } catch(e) {
+      hideUploadBanner();
       toast('Upload failed: ' + e.message, 'error');
     }
   }
 
-  // ── Analysis ──────────────────────────────────────────────────────────────
+  function showUploadBanner(msg) {
+    document.getElementById('upload-banner-text').textContent = msg;
+    document.getElementById('upload-banner').classList.add('show');
+  }
+  function hideUploadBanner() {
+    document.getElementById('upload-banner').classList.remove('show');
+  }
+
+  // ── Analysis — kick off & poll ─────────────────────────────────────────────
   async function startAnalysis(id, filename) {
-    showBanner(`Analysing "${filename}"...`, 'Running full LLM pipeline — may take 1–3 minutes');
-    processingId = id;
     try {
       const r = await fetch(`/api/analyse/${id}`, { method: 'POST' });
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || 'Analysis failed');
-      hideBanner();
-      const level = d.risk_score?.level || 'complete';
-      toast(`Analysis complete — Risk level: ${level}`, 'success');
+      // Server accepted — start the progress card
+      beginProgressTracking(id, filename);
       loadContracts();
-    } catch (e) {
-      hideBanner();
-      toast('Analysis failed: ' + e.message, 'error');
-      loadContracts();
+    } catch(e) {
+      toast('Could not start analysis: ' + e.message, 'error');
     }
-    processingId = null;
   }
 
-  function showBanner(title, sub) {
-    document.getElementById('proc-title').textContent = title;
-    document.getElementById('proc-sub').textContent = sub;
-    document.getElementById('processing-banner').classList.add('show');
+  function beginProgressTracking(contractId, filename) {
+    activeContractId = contractId;
+    elapsedSec = 0;
+
+    // Show card
+    const card = document.getElementById('progress-card');
+    card.classList.add('show');
+    document.getElementById('pc-title').textContent = `Analysing "${filename}"`;
+    document.getElementById('pc-spinner').style.display = '';
+    document.getElementById('pc-check').style.display = 'none';
+    document.getElementById('pc-error').classList.remove('show');
+    renderSteps({ step_num: 0, message: '' });
+    updateBar(0);
+
+    // Elapsed ticker — every second
+    elapsedTimer = setInterval(() => {
+      elapsedSec++;
+      document.getElementById('pc-elapsed').textContent = fmtElapsed(elapsedSec);
+    }, 1000);
+
+    // Progress poller — every 3 seconds, also immediately
+    pollProgress(contractId);
+    pollTimer = setInterval(() => pollProgress(contractId), 3000);
   }
-  function hideBanner() {
-    document.getElementById('processing-banner').classList.remove('show');
+
+  async function pollProgress(contractId) {
+    try {
+      const r = await fetch(`/api/progress/${contractId}`);
+      if (!r.ok) return;
+      const p = await r.json();
+      applyProgress(p);
+    } catch(e) {
+      // Network blip — keep polling
+    }
+  }
+
+  function applyProgress(p) {
+    if (p.error) {
+      stopTracking();
+      document.getElementById('pc-spinner').style.display = 'none';
+      const errEl = document.getElementById('pc-error');
+      errEl.textContent = '✗ ' + p.error;
+      errEl.classList.add('show');
+      document.getElementById('pc-message').textContent = 'Analysis failed';
+      loadContracts();
+      return;
+    }
+
+    updateBar(p.percent || 0);
+    document.getElementById('pc-message').textContent = p.message || '';
+    renderSteps(p);
+
+    if (p.percent >= 100) {
+      // Done
+      stopTracking();
+      document.getElementById('pc-spinner').style.display = 'none';
+      document.getElementById('pc-check').style.display = '';
+      document.getElementById('pc-message').textContent = 'Analysis complete';
+      renderSteps({ percent: 100, completed_steps: DEFAULT_STEPS });
+      setTimeout(() => {
+        document.getElementById('progress-card').classList.remove('show');
+        loadContracts();
+        toast(`Analysis complete — Risk: ${p.risk_level || 'see report'}`, 'success');
+      }, 2000);
+    }
+  }
+
+  function updateBar(pct) {
+    document.getElementById('pc-pct').textContent = pct + '%';
+    document.getElementById('pc-bar-fill').style.width = pct + '%';
+  }
+
+  function renderSteps(p) {
+    const stepNum    = p.step_num || 0;
+    const stepName   = p.step_name || '';
+    const activeMsg  = p.message || '';
+    const done       = p.percent >= 100;
+
+    // Use completed_steps array from server if available, otherwise DEFAULT_STEPS
+    const completedNums = new Set(
+      (p.completed_steps || []).map(s => s.step_num)
+    );
+
+    // Build merged list: server completed + default remaining
+    const allSteps = DEFAULT_STEPS.map(s => {
+      const serverDone = p.completed_steps
+        ? p.completed_steps.find(cs => cs.step_num === s.step_num)
+        : null;
+      return serverDone ? serverDone : s;
+    });
+
+    document.getElementById('pc-steps').innerHTML = allSteps.map(step => {
+      const n     = step.step_num;
+      const label = step.step_name;
+      let cls, icon, sub = '';
+
+      if (done || completedNums.has(n) && n < stepNum) {
+        cls  = 'pc-step-done';
+        icon = '✓';
+      } else if (!done && n === stepNum) {
+        cls  = 'pc-step-active';
+        icon = '<span class="icon-spin">⟳</span>';
+        // Sub-message (e.g. "Analysing Money pillar (1/7)...")
+        if (activeMsg && activeMsg !== label) {
+          sub = `<span class="pc-step-sub">${escHtml(activeMsg)}</span>`;
+        }
+      } else if (completedNums.has(n)) {
+        cls  = 'pc-step-done';
+        icon = '✓';
+      } else {
+        cls  = 'pc-step-pending';
+        icon = '○';
+      }
+
+      return `<div class="pc-step ${cls}">
+        <span class="pc-step-icon">${icon}</span>
+        <span class="pc-step-body">
+          <span class="pc-step-label">${escHtml(label)}</span>
+          ${sub}
+        </span>
+      </div>`;
+    }).join('');
+  }
+
+  function stopTracking() {
+    clearInterval(pollTimer);
+    clearInterval(elapsedTimer);
+    pollTimer = null;
+    elapsedTimer = null;
+    activeContractId = null;
+  }
+
+  function fmtElapsed(s) {
+    if (s < 60) return `${s}s elapsed`;
+    return `${Math.floor(s / 60)}m ${s % 60}s elapsed`;
   }
 
   // ── Navigation ────────────────────────────────────────────────────────────
-  function openContract(id) {
-    window.location.href = `/contract/${id}`;
-  }
-
+  function openContract(id) { window.location.href = `/contract/${id}`; }
   function showReports() {
     toast('Reports are opened by clicking the "Report" button on any completed contract.', '');
   }
@@ -803,19 +952,15 @@
     if (!deleteTarget) return;
     closeDeleteModal();
     const r = await fetch(`/api/contract/${deleteTarget}`, { method: 'DELETE' });
-    if (r.ok) {
-      toast('Contract deleted', '');
-      loadContracts();
-    } else {
-      toast('Delete failed', 'error');
-    }
+    if (r.ok) { toast('Contract deleted', ''); loadContracts(); }
+    else        { toast('Delete failed', 'error'); }
   }
 
   // ── Toasts ────────────────────────────────────────────────────────────────
   function toast(msg, type = '') {
     const c = document.getElementById('toast-container');
     const t = document.createElement('div');
-    t.className = `toast ${type ? 'toast-'+type : ''}`;
+    t.className = `toast ${type ? 'toast-' + type : ''}`;
     t.textContent = msg;
     c.appendChild(t);
     setTimeout(() => t.remove(), 5000);
@@ -823,11 +968,9 @@
 
   // ── Utils ─────────────────────────────────────────────────────────────────
   function escHtml(s) {
-    return String(s||'')
-      .replace(/&/g,'&amp;')
-      .replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;');
+    return String(s || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 </script>
 </body>
