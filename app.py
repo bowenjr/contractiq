@@ -53,6 +53,28 @@ preprocessor = DocumentPreprocessor(llm_client)
 report_generator = ReportGenerator(REPORTS_DIR)
 excel_generator = ExcelGenerator(REPORTS_DIR)
 
+# ── Startup recovery ─────────────────────────────────────────────────────────
+
+def recover_stuck_documents() -> None:
+    """Reset any documents left in 'processing' state from a previous server session."""
+    stuck = db.get_documents_by_status("processing")
+    for doc in stuck:
+        db.update_document(doc["id"], {
+            "status": "interrupted",
+            "error_message": (
+                "Analysis was interrupted — server restarted or connection lost. "
+                "Click Analyse to retry."
+            ),
+        })
+        print(f"  Recovered stuck document: {doc['filename']}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    recover_stuck_documents()
+    print("  Recovery check complete")
+
+
 # ── Progress store ────────────────────────────────────────────────────────────
 # Keyed by document_id. Structure per entry:
 #   { "step_num": int, "total_steps": int,
@@ -326,6 +348,10 @@ async def analyse_document(doc_id: str, background_tasks: BackgroundTasks):
             ),
         )
 
+    print(
+        f"  ⚠ Analysis running — prevent computer sleep to avoid interruption. "
+        f"Windows: Settings → Power & sleep → Sleep → Never"
+    )
     db.update_document(doc_id, {"status": "processing"})
     progress_store[doc_id] = {
         "step_num": 0, "total_steps": 7, "step_name": "Starting",
@@ -354,13 +380,12 @@ async def get_progress(doc_id: str):
             "completed_steps": [], "error": None,
             "risk_level": document.get("risk_level"),
         })
-    if status == "processing":
+    if status in ("processing", "interrupted"):
+        msg = document.get("error_message") or "Server was restarted during analysis — please re-analyse"
         return JSONResponse({
             "step_num": 0, "total_steps": 7, "step_name": "Interrupted",
-            "message": "Server was restarted during analysis — please re-analyse",
-            "percent": 0, "completed_steps": [],
-            "error": "Server was restarted during analysis — please re-analyse",
-            "risk_level": None,
+            "message": msg, "percent": 0, "completed_steps": [],
+            "error": msg, "risk_level": None,
         })
     if status == "error":
         return JSONResponse({

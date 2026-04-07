@@ -425,6 +425,8 @@
   .badge-uploaded .badge-dot { background: var(--mist); }
   .badge-cancelled  { background: #f3f4f6; color: #6b7280; }
   .badge-cancelled .badge-dot { background: #9ca3af; }
+  .badge-interrupted { background: #fff7ed; color: #c2410c; }
+  .badge-interrupted .badge-dot { background: #f97316; }
 
   /* ── Risk Pill ─────────────────────────────────────────────────── */
   .risk-pill {
@@ -608,6 +610,9 @@
       <div class="pc-message" id="pc-message">Initializing...</div>
       <div class="pc-steps" id="pc-steps"></div>
       <div class="pc-error" id="pc-error"></div>
+      <div style="margin-top:10px;padding:7px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;font-size:0.75rem;color:#92400e">
+        ⚠ Keep this computer awake during analysis — sleep or network interruption will halt the process.
+      </div>
     </div>
 
     <!-- Contracts Table -->
@@ -807,10 +812,10 @@
         <td style="font-size:0.8rem;color:var(--mist);white-space:nowrap">${formatDate(c.upload_date)}</td>
         <td>
           <div class="action-cell" onclick="event.stopPropagation()">
-            ${c.status === 'uploaded' || c.status === 'error' || c.status === 'cancelled' ? `
+            ${c.status === 'uploaded' || c.status === 'error' || c.status === 'cancelled' || c.status === 'interrupted' ? `
               <button class="btn btn-primary" style="padding:6px 12px;font-size:0.78rem"
                       onclick="startAnalysis('${c.id}','${escHtml(c.filename)}')">
-                ${c.status === 'cancelled' ? 'Re-analyse' : 'Analyse'}
+                ${c.status === 'uploaded' ? 'Analyse' : 'Re-analyse'}
               </button>` : ''}
             ${c.status === 'processing' ? `
               <button class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem"
@@ -843,7 +848,8 @@
       processing: ['badge-processing', '⟳ Processing'],
       error:      ['badge-error',      '✗ Error'],
       uploaded:   ['badge-uploaded',   '↑ Uploaded'],
-      cancelled:  ['badge-cancelled',  '✕ Cancelled'],
+      cancelled:   ['badge-cancelled',   '✕ Cancelled'],
+      interrupted: ['badge-interrupted', '⚡ Interrupted — Click Analyse'],
     };
     const [cls, label] = map[status] || ['badge-uploaded', status];
     return `<span class="badge ${cls}"><span class="badge-dot"></span>${label}</span>`;

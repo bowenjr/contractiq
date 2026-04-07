@@ -292,6 +292,15 @@ class Database:
     def delete_contract(self, contract_id: str):
         self.delete_document(contract_id)
 
+    def get_documents_by_status(self, status: str) -> List[Dict]:
+        """Return all documents with the given status (id, filename, status only)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, filename, status FROM documents WHERE status = ?",
+                (status,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Clause Findings ───────────────────────────────────────────────────────
 
     def save_clause_findings(self, doc_id: str, pillar_results: List[Dict]):

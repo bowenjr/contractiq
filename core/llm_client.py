@@ -6,8 +6,16 @@ Base URL and timeout are read from config.json at the project root.
 
 import json
 import requests
+from requests.adapters import HTTPAdapter
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+# Tuple timeout for all LLM calls: (connect_timeout, read_timeout).
+# read_timeout is the max seconds of *silence* between data chunks.
+# A dead connection (e.g. after sleep or network drop) is detected
+# when no data arrives for this long — even if the overall budget is larger.
+_CONNECT_TIMEOUT = 30   # seconds to establish the TCP connection
+_READ_TIMEOUT    = 600  # seconds of inactivity before treating connection as dead
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 
@@ -33,6 +41,7 @@ class LMStudioClient:
         self.timeout = timeout if timeout is not None else cfg.get("lm_studio_timeout", 3600)
         self.api_url = f"{self.base_url}/v1/chat/completions"
         self.models_url = f"{self.base_url}/v1/models"
+        self._session = requests.Session()
 
     def health_check(self) -> bool:
         try:
@@ -68,30 +77,33 @@ class LMStudioClient:
             "max_tokens": max_tokens,
         }
 
-        effective_timeout = timeout if timeout is not None else self.timeout
         chars = sum(len(m.get("content", "")) for m in messages)
 
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 self.api_url,
                 json=payload,
-                timeout=effective_timeout,
+                # Tuple timeout: (connect_timeout, read_timeout).
+                # read_timeout catches dead connections after sleep/network drop —
+                # if no data arrives for _READ_TIMEOUT seconds the request fails.
+                timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
             )
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         except requests.exceptions.ConnectionError:
             raise ConnectionError(
-                f"Cannot connect to LM Studio at {self.base_url}. "
-                "Please ensure LM Studio is running and a model is loaded."
+                f"Lost connection to LM Studio at {self.base_url}. "
+                "This may be caused by the computer sleeping or a network interruption. "
+                "Please ensure LM Studio is running and re-analyse the document."
             )
         except requests.exceptions.Timeout:
             label = context_label or "request"
             raise TimeoutError(
-                f"LM Studio timed out on {label} after {effective_timeout}s. "
-                f"The prompt was {chars:,} chars. "
-                "Consider increasing lm_studio_timeout in config.json "
-                "or reducing max_document_chars."
+                f"Lost connection to LM Studio on {label} — no data received for "
+                f"{_READ_TIMEOUT}s. The prompt was {chars:,} chars. "
+                "This is usually caused by the computer sleeping or a network interruption. "
+                "Please ensure LM Studio is running and re-analyse the document."
             )
         except Exception as e:
             raise RuntimeError(f"LM Studio API error: {str(e)}")
