@@ -10,13 +10,6 @@ from requests.adapters import HTTPAdapter
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-# Tuple timeout for all LLM calls: (connect_timeout, read_timeout).
-# read_timeout is the max seconds of *silence* between data chunks.
-# A dead connection (e.g. after sleep or network drop) is detected
-# when no data arrives for this long — even if the overall budget is larger.
-_CONNECT_TIMEOUT = 30   # seconds to establish the TCP connection
-_READ_TIMEOUT    = 600  # seconds of inactivity before treating connection as dead
-
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 
 
@@ -39,6 +32,11 @@ class LMStudioClient:
             base_url or cfg.get("lm_studio_base_url", "http://localhost:1234")
         ).rstrip("/")
         self.timeout = timeout if timeout is not None else cfg.get("lm_studio_timeout", 3600)
+        # Tuple timeout: (connect_timeout, read_timeout).
+        # read_timeout is the max seconds of silence between data chunks — catches
+        # dead connections after sleep/network drop without killing slow reasoning models.
+        self.connect_timeout = int(cfg.get("lm_studio_connect_timeout", 30))
+        self.read_timeout    = int(cfg.get("lm_studio_read_timeout",    3600))
         self.api_url = f"{self.base_url}/v1/chat/completions"
         self.models_url = f"{self.base_url}/v1/models"
         self._session = requests.Session()
@@ -83,10 +81,7 @@ class LMStudioClient:
             resp = self._session.post(
                 self.api_url,
                 json=payload,
-                # Tuple timeout: (connect_timeout, read_timeout).
-                # read_timeout catches dead connections after sleep/network drop —
-                # if no data arrives for _READ_TIMEOUT seconds the request fails.
-                timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+                timeout=(self.connect_timeout, self.read_timeout),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -101,7 +96,7 @@ class LMStudioClient:
             label = context_label or "request"
             raise TimeoutError(
                 f"Lost connection to LM Studio on {label} — no data received for "
-                f"{_READ_TIMEOUT}s. The prompt was {chars:,} chars. "
+                f"{self.read_timeout}s. The prompt was {chars:,} chars. "
                 "This is usually caused by the computer sleeping or a network interruption. "
                 "Please ensure LM Studio is running and re-analyse the document."
             )

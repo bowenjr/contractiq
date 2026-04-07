@@ -305,7 +305,7 @@ class AnalysisEngine:
         self.llm = llm
         self.doc_processor = DocumentProcessor()
         cfg = _load_config()
-        self.MAX_CHARS_PER_PILLAR      = int(cfg.get("max_chars_per_pillar",      15_000))
+        self.MAX_CHARS_PER_PILLAR      = int(cfg.get("max_chars_per_pillar",      12_000))
         self.MAX_CHARS_CLASSIFICATION  = int(cfg.get("max_chars_classification",   2_000))
         self.MAX_CHARS_PARTIES         = int(cfg.get("max_chars_parties",          5_000))
         self.MAX_CHARS_DATES           = int(cfg.get("max_chars_dates",           60_000))
@@ -491,6 +491,11 @@ class AnalysisEngine:
             matched_text = preamble + "\n\n" + matched_text
             if len(matched_text) > max_chars:
                 matched_text = matched_text[:max_chars]
+
+        # Hard cap — safety net regardless of all routing logic above
+        if len(matched_text) > max_chars:
+            print(f"  WARNING: {pillar.name} text hard-capped at {max_chars:,} chars")
+            matched_text = matched_text[:max_chars]
 
         return matched_text
 

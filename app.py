@@ -563,10 +563,12 @@ if __name__ == "__main__":
     _cfg = json.loads((BASE_DIR / "config.json").read_text()) if (BASE_DIR / "config.json").exists() else {}
     _timeout = _cfg.get("lm_studio_timeout", 600)
     _max_chars = _cfg.get("max_document_chars", 80000)
+    _connect_timeout = _cfg.get("lm_studio_connect_timeout", 30)
+    _read_timeout    = _cfg.get("lm_studio_read_timeout", 3600)
     print(
         f"\n  ContractIQ starting on http://localhost:8000\n"
         f"  LM Studio: {llm_client.base_url} | "
-        f"Timeout: {_timeout}s ({_timeout // 60} minutes) per LLM call | "
+        f"Read timeout: {_read_timeout}s | Connect timeout: {_connect_timeout}s | "
         f"Max doc chars: {_max_chars:,}\n"
     )
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
