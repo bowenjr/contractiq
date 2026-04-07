@@ -704,6 +704,9 @@
             ${c.status === 'complete' && c.excel_report_path ? `
               <a class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem;color:var(--green);border-color:#bbf7d0"
                  href="/reports/${c.excel_report_path}" target="_blank" title="Excel Workbook">XLS</a>` : ''}
+            ${c.status === 'complete' && c.tracker_path ? `
+              <a class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem;color:#7c3aed;border-color:#ddd6fe"
+                 href="/api/document/${c.id}/tracker" target="_blank" title="Contract Tracker">Tracker</a>` : ''}
             <button class="btn btn-danger" onclick="openDeleteModal('${c.id}')">✕</button>
           </div>
         </td>
@@ -824,7 +827,16 @@
   async function pollProgress(contractId) {
     try {
       const r = await fetch(`/api/progress/${contractId}`);
-      if (!r.ok) return;
+      if (r.status === 404) {
+        stopTracking();
+        document.getElementById('pc-spinner').style.display = 'none';
+        const errEl = document.getElementById('pc-error');
+        errEl.textContent = 'Analysis session was interrupted — please re-upload or re-analyse the document';
+        errEl.classList.add('show');
+        document.getElementById('pc-message').textContent = 'Session lost';
+        return;
+      }
+      if (!r.ok) return;  // other transient error — keep polling
       const p = await r.json();
       applyProgress(p);
     } catch(e) {

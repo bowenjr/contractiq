@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 import uvicorn
 
 from core.document_processor import DocumentProcessor
+from core.document_preprocessor import DocumentPreprocessor
 from core.llm_client import LMStudioClient
 from core.analysis_engine import AnalysisEngine
 from core.report_generator import ReportGenerator
@@ -48,6 +49,7 @@ db = Database(BASE_DIR / "data" / "contractiq.db")
 doc_processor = DocumentProcessor()
 llm_client = LMStudioClient()
 analysis_engine = AnalysisEngine(llm_client)
+preprocessor = DocumentPreprocessor(llm_client)
 report_generator = ReportGenerator(REPORTS_DIR)
 excel_generator = ExcelGenerator(REPORTS_DIR)
 
@@ -95,8 +97,43 @@ def _run_analysis_background(doc_id: str) -> None:
         }
 
     try:
+        raw_text      = document["raw_text"]
+        doc_type_hint = document.get("doc_type", "General Contract")
+
+        # ── Stage 1: Pure-Python pre-processing (no LLM, instant) ────────────
+        pre = preprocessor.preprocess(
+            raw_text,
+            document["filename"],
+            doc_type=doc_type_hint,
+        )
+        structured_md     = pre["structured_markdown"]
+        contractual_items = pre["contractual_items"]   # always []
+        section_count     = pre["section_count"]
+        noise_pct         = pre["noise_removed_pct"]
+        word_count        = pre["word_count"]
+
+        # Persist markdown immediately so /api/document/{id}/markdown works
+        db.update_document(doc_id, {
+            "structured_markdown":   structured_md,
+            "contractual_items_json": json.dumps(contractual_items),
+        })
+
+        print(
+            f"  Pre-processing complete: {section_count} sections | "
+            f"{word_count:,} words | {noise_pct}% noise removed"
+        )
+        _progress_cb(
+            1, 7, "Pre-processing",
+            f"Pre-processing complete — {section_count} sections detected, "
+            f"{noise_pct}% noise removed, {word_count:,} words",
+            5,
+        )
+
+        # ── Stage 2: 7-Pillar LLM analysis (section-routed) ──────────────────
         results = analysis_engine.run_full_analysis(
-            document["raw_text"], document["filename"],
+            raw_text,
+            document["filename"],
+            preprocessed=pre,
             progress_callback=_progress_cb,
         )
 
@@ -109,6 +146,14 @@ def _run_analysis_background(doc_id: str) -> None:
         xlsx_filename = f"report_{doc_id}.xlsx"
         xlsx_path = REPORTS_DIR / xlsx_filename
         excel_generator.generate(document, results, xlsx_path)
+
+        # Generate tracker sheet (contract-item-level working document)
+        print("  Pre-processing: Generating tracker sheet...")
+        tracker_filename = f"tracker_{doc_id}.xlsx"
+        tracker_path = REPORTS_DIR / tracker_filename
+        preprocessor.generate_tracker_sheet(
+            document, contractual_items, results, tracker_path
+        )
 
         # Save structured findings to relational tables
         pillar_results = results.get("pillars", [])
@@ -141,6 +186,7 @@ def _run_analysis_background(doc_id: str) -> None:
             "contract_duration": results.get("contract_duration", ""),
             "governing_law": results.get("governing_law", ""),
             "counterparty": results.get("counterparty", ""),
+            "tracker_path": tracker_filename,
         })
 
         # Build completed_steps from all 7 steps
@@ -267,12 +313,40 @@ async def analyse_document(doc_id: str, background_tasks: BackgroundTasks):
 
 @app.get("/api/progress/{doc_id}")
 async def get_progress(doc_id: str):
-    if doc_id not in progress_store:
-        raise HTTPException(
-            status_code=404,
-            detail="No progress data for this document"
-        )
-    return JSONResponse(progress_store[doc_id])
+    if doc_id in progress_store:
+        return JSONResponse(progress_store[doc_id])
+
+    # progress_store was lost (server restart) — fall back to DB
+    document = db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    status = document.get("status", "")
+    if status == "complete":
+        return JSONResponse({
+            "step_num": 8, "total_steps": 7, "step_name": "Complete",
+            "message": "Analysis complete", "percent": 100,
+            "completed_steps": [], "error": None,
+            "risk_level": document.get("risk_level"),
+        })
+    if status == "processing":
+        return JSONResponse({
+            "step_num": 0, "total_steps": 7, "step_name": "Interrupted",
+            "message": "Server was restarted during analysis — please re-analyse",
+            "percent": 0, "completed_steps": [],
+            "error": "Server was restarted during analysis — please re-analyse",
+            "risk_level": None,
+        })
+    if status == "error":
+        return JSONResponse({
+            "step_num": 0, "total_steps": 7, "step_name": "Error",
+            "message": document.get("error_message", "Analysis failed"),
+            "percent": 0, "completed_steps": [],
+            "error": document.get("error_message", "Analysis failed"),
+            "risk_level": None,
+        })
+    # uploaded / unknown — no progress to report yet
+    raise HTTPException(status_code=404, detail="No progress data for this document")
 
 
 @app.get("/api/contracts")
@@ -326,6 +400,37 @@ async def get_negotiation_issues(doc_id: str):
     return JSONResponse(issues)
 
 
+@app.get("/api/document/{doc_id}/markdown")
+async def get_markdown(doc_id: str):
+    document = db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Not found")
+    md = document.get("structured_markdown")
+    if not md:
+        raise HTTPException(status_code=404, detail="Structured markdown not yet generated")
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
+
+
+@app.get("/api/document/{doc_id}/tracker")
+async def get_tracker(doc_id: str):
+    document = db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Not found")
+    tracker = document.get("tracker_path")
+    if not tracker:
+        raise HTTPException(status_code=404, detail="Tracker sheet not yet generated")
+    from fastapi.responses import FileResponse
+    path = REPORTS_DIR / tracker
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Tracker file not found on disk")
+    return FileResponse(
+        str(path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"tracker_{document.get('filename','document')}.xlsx",
+    )
+
+
 @app.get("/api/llm-status")
 async def llm_status():
     reachable = llm_client.health_check()
@@ -333,6 +438,47 @@ async def llm_status():
     return JSONResponse({"reachable": reachable, "models": models})
 
 
+@app.get("/api/llm-test")
+async def llm_test():
+    import time
+    if not llm_client.health_check():
+        raise HTTPException(
+            status_code=503,
+            detail=f"LM Studio is not reachable at {llm_client.base_url}.",
+        )
+    start = time.time()
+    status = "ok"
+    response_text = ""
+    try:
+        response_text = llm_client.chat(
+            messages=[{"role": "user", "content": "Reply with the single word: OK"}],
+            max_tokens=10,
+            temperature=0,
+            context_label="llm-test",
+        ).strip()
+    except TimeoutError as e:
+        status = "timeout"
+        response_text = str(e)
+    except Exception as e:
+        status = "error"
+        response_text = str(e)
+    elapsed = round(time.time() - start, 2)
+    return JSONResponse({
+        "response":         response_text,
+        "elapsed_seconds":  elapsed,
+        "model_url":        llm_client.base_url,
+        "status":           status,
+    })
+
+
 if __name__ == "__main__":
-    print("\n  ContractIQ starting on http://localhost:8000\n")
+    _cfg = json.loads((BASE_DIR / "config.json").read_text()) if (BASE_DIR / "config.json").exists() else {}
+    _timeout = _cfg.get("lm_studio_timeout", 600)
+    _max_chars = _cfg.get("max_document_chars", 80000)
+    print(
+        f"\n  ContractIQ starting on http://localhost:8000\n"
+        f"  LM Studio: {llm_client.base_url} | "
+        f"Timeout: {_timeout}s ({_timeout // 60} minutes) per LLM call | "
+        f"Max doc chars: {_max_chars:,}\n"
+    )
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

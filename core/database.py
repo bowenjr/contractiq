@@ -19,6 +19,7 @@ class Database:
         self.db_path = str(db_path)
         self._init_schema()
         self._migrate_legacy()
+        self._evolve_schema()
 
     # ── Connection ────────────────────────────────────────────────────────────
 
@@ -137,6 +138,25 @@ class Database:
             """)
             conn.commit()
 
+    # ── Schema evolution (ALTER TABLE for new columns) ───────────────────────
+
+    def _evolve_schema(self):
+        """Add columns introduced after the initial release. Silent on duplicates."""
+        new_cols = [
+            ("structured_markdown",    "TEXT"),
+            ("contractual_items_json", "TEXT"),
+            ("tracker_path",           "TEXT"),
+        ]
+        with self._conn() as conn:
+            for col, col_type in new_cols:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE documents ADD COLUMN {col} {col_type}"
+                    )
+                except Exception:
+                    pass  # column already exists
+            conn.commit()
+
     # ── Legacy migration ──────────────────────────────────────────────────────
 
     def _migrate_legacy(self):
@@ -230,8 +250,8 @@ class Database:
                 "SELECT id, filename, status, upload_date, analysis_date, "
                 "word_count, page_count, doc_type, doc_type_confidence, "
                 "risk_score, risk_level, executive_summary, "
-                "pdf_report_path, excel_report_path, counterparty, "
-                "contract_value, project_id "
+                "pdf_report_path, excel_report_path, tracker_path, "
+                "counterparty, contract_value, project_id "
                 "FROM documents ORDER BY upload_date DESC"
             ).fetchall()
         return [dict(r) for r in rows]

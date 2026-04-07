@@ -1,5 +1,10 @@
 {
   "lm_studio_base_url": "http://10.0.0.10:1234",
-  "lm_studio_timeout": 180,
-  "max_document_chars": 80000
+  "lm_studio_url": "http://10.0.0.10:1234",
+  "lm_studio_timeout": 3600,
+  "max_document_chars": 60000,
+  "max_chars_per_pillar": 15000,
+  "max_chars_classification": 2000,
+  "max_chars_parties": 5000,
+  "max_chars_dates": 60000
 }

@@ -30,7 +30,7 @@ class LMStudioClient:
         self.base_url = (
             base_url or cfg.get("lm_studio_base_url", "http://localhost:1234")
         ).rstrip("/")
-        self.timeout = timeout if timeout is not None else cfg.get("lm_studio_timeout", 180)
+        self.timeout = timeout if timeout is not None else cfg.get("lm_studio_timeout", 3600)
         self.api_url = f"{self.base_url}/v1/chat/completions"
         self.models_url = f"{self.base_url}/v1/models"
 
@@ -55,6 +55,8 @@ class LMStudioClient:
         temperature: float = 0.1,
         max_tokens: int = 4096,
         system_prompt: Optional[str] = None,
+        context_label: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """Send a chat request to LM Studio. Returns the assistant's text response."""
         if system_prompt:
@@ -66,11 +68,14 @@ class LMStudioClient:
             "max_tokens": max_tokens,
         }
 
+        effective_timeout = timeout if timeout is not None else self.timeout
+        chars = sum(len(m.get("content", "")) for m in messages)
+
         try:
             resp = requests.post(
                 self.api_url,
                 json=payload,
-                timeout=self.timeout,
+                timeout=effective_timeout,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -81,10 +86,12 @@ class LMStudioClient:
                 "Please ensure LM Studio is running and a model is loaded."
             )
         except requests.exceptions.Timeout:
+            label = context_label or "request"
             raise TimeoutError(
-                f"LM Studio request timed out after {self.timeout}s. "
-                "The document may be too long or the model too slow. "
-                "Try a faster model or increase lm_studio_timeout in config.json."
+                f"LM Studio timed out on {label} after {effective_timeout}s. "
+                f"The prompt was {chars:,} chars. "
+                "Consider increasing lm_studio_timeout in config.json "
+                "or reducing max_document_chars."
             )
         except Exception as e:
             raise RuntimeError(f"LM Studio API error: {str(e)}")
@@ -95,10 +102,13 @@ class LMStudioClient:
         system_prompt: str = "",
         temperature: float = 0.1,
         max_tokens: int = 4096,
+        context_label: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """Convenience wrapper: single prompt → response string."""
         messages = [{"role": "user", "content": prompt}]
-        return self.chat(messages, temperature, max_tokens, system_prompt or None)
+        return self.chat(messages, temperature, max_tokens, system_prompt or None,
+                         context_label=context_label, timeout=timeout)
 
     def complete_json(
         self,
@@ -106,6 +116,8 @@ class LMStudioClient:
         system_prompt: str = "",
         temperature: float = 0.05,
         max_tokens: int = 4096,
+        context_label: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Send a prompt and parse the JSON response.
@@ -116,7 +128,8 @@ class LMStudioClient:
             "CRITICAL: Respond ONLY with valid JSON. No explanation, no markdown, no code fences. "
             "Start your response with { and end with }."
         )
-        raw = self.complete(prompt, full_system, temperature, max_tokens)
+        raw = self.complete(prompt, full_system, temperature, max_tokens,
+                            context_label=context_label, timeout=timeout)
         return self._parse_json_response(raw)
 
     def _parse_json_response(self, raw: str) -> Dict[str, Any]:
