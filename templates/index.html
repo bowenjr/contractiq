@@ -656,8 +656,8 @@
 <div id="toast-container"></div>
 
 <script>
+  'use strict';
   // ── Constants ─────────────────────────────────────────────────────────────
-  // Default step labels used when server has not yet sent completed_steps
   const DEFAULT_STEPS = [
     { step_num: 1, step_name: 'Classification' },
     { step_num: 2, step_name: 'Parties' },
@@ -668,28 +668,54 @@
     { step_num: 7, step_name: 'Recommendations' },
   ];
 
-  const PILLAR_COLOURS = {
-    money:          '#16a34a',
-    time:           '#d97706',
-    scope:          '#1d4ed8',
-    risk_liability: '#dc2626',
-    relationships:  '#7c3aed',
-    administration: '#0891b2',
-    exit:           '#6b7280',
+  // ── Polling manager — single source of truth for all intervals ───────────
+  // Prevents duplicate polling loops for the same contract.
+  const pollingManager = {
+    intervals: {},
+    start(contractId, fn) {
+      if (this.intervals[contractId]) return; // already running
+      // Poll immediately then every 3 s
+      fn();
+      this.intervals[contractId] = setInterval(fn, 3000);
+    },
+    stop(contractId) {
+      if (this.intervals[contractId]) {
+        clearInterval(this.intervals[contractId]);
+        delete this.intervals[contractId];
+      }
+    },
+    stopAll() {
+      Object.keys(this.intervals).forEach(id => this.stop(id));
+    },
+    isPolling(contractId) {
+      return !!this.intervals[contractId];
+    },
   };
 
   // ── State ─────────────────────────────────────────────────────────────────
   let deleteTarget     = null;
-  let activeContractId = null;   // contract being analysed right now
-  let pollTimer        = null;   // setInterval for /api/progress polling
-  let elapsedTimer     = null;   // setInterval for elapsed time counter
+  let activeContractId = null;  // contract whose progress card is open
+  let elapsedTimer     = null;  // setInterval for elapsed-time ticker
   let elapsedSec       = 0;
+  let contractsCache   = [];    // last fetched contract list
 
   // ── Init ──────────────────────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', () => {
     checkLLMStatus();
     loadContracts();
     setInterval(checkLLMStatus, 30000);
+    // Passive background refresh — only when no analysis is actively shown
+    setInterval(() => { if (!activeContractId) fetchAndRender(); }, 30000);
+  });
+
+  // Pause/resume polling when tab is hidden/visible
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      pollingManager.stopAll();
+      clearInterval(elapsedTimer);
+    } else {
+      resumeActivePolling();
+    }
   });
 
   // ── LLM Status ────────────────────────────────────────────────────────────
@@ -716,18 +742,38 @@
   }
 
   // ── Contracts ─────────────────────────────────────────────────────────────
+
+  // fetchAndRender: fetch contract list, update cache, render table and stats.
+  // Does NOT start or stop any polling — safe to call at any time.
+  async function fetchAndRender() {
+    try {
+      const r = await fetch('/api/contracts');
+      contractsCache = await r.json();
+    } catch(e) { return; }
+    renderContracts(contractsCache);
+    updateStats(contractsCache);
+  }
+
+  // loadContracts: fetch + render + reconnect polling for in-flight analyses.
+  // Call only on page load or after a polling cycle ends.
   async function loadContracts() {
-    const r = await fetch('/api/contracts');
-    const contracts = await r.json();
-    renderContracts(contracts);
-    updateStats(contracts);
-    // Auto-reconnect progress polling for any in-flight analysis
+    await fetchAndRender();
     if (!activeContractId) {
-      const processing = contracts.filter(c => c.status === 'processing');
+      const processing = contractsCache.filter(c => c.status === 'processing');
       if (processing.length > 0) {
         resumeProgressPolling(processing[0].id, processing[0].filename);
       }
     }
+  }
+
+  // updateContractStatus: update only the status/risk cells of a single row.
+  // Avoids destroying and re-creating unchanged rows during live polling.
+  function updateContractStatus(contractId, status, riskLevel, riskScore) {
+    const row = document.getElementById(`row-${contractId}`);
+    if (!row) return;
+    const cells = row.cells;
+    if (cells[2]) cells[2].innerHTML = statusBadge(status);
+    if (cells[3]) cells[3].innerHTML = riskPill(riskLevel, riskScore);
   }
 
   function updateStats(contracts) {
@@ -750,7 +796,7 @@
       return;
     }
     tbody.innerHTML = contracts.map(c => `
-      <tr onclick="openContract('${c.id}')" style="cursor:pointer">
+      <tr id="row-${c.id}" onclick="openContract('${c.id}')" style="cursor:pointer">
         <td>
           <span class="doc-name">${escHtml(c.filename)}</span>
           <span class="doc-meta">${c.word_count ? c.word_count.toLocaleString() + ' words' : ''} ${c.page_count ? '· ' + c.page_count + ' pages' : ''}</span>
@@ -772,7 +818,7 @@
                 <span style="display:inline-block;animation:spin-icon 1s linear infinite">⟳</span> View Progress
               </button>
               <button class="btn-cancel-analysis" style="padding:5px 10px"
-                      onclick="fetch('/api/cancel/${c.id}',{method:'POST'}).then(()=>{ toast('Cancelling analysis…',''); setTimeout(loadContracts,2000); })">
+                      onclick="fetch('/api/cancel/${c.id}',{method:'POST'}).then(()=>{ toast('Cancelling analysis…',''); setTimeout(fetchAndRender,2000); })">
                 ✕ Cancel
               </button>` : ''}
             ${c.status === 'complete' && c.pdf_report_path ? `
@@ -847,7 +893,7 @@
       if (!r.ok) throw new Error(d.detail || 'Upload failed');
       toast(`Uploaded — ${d.word_count.toLocaleString()} words extracted`, 'success');
       hideUploadBanner();
-      loadContracts();
+      fetchAndRender();
       setTimeout(() => startAnalysis(d.doc_id || d.contract_id, file.name), 400);
     } catch(e) {
       hideUploadBanner();
@@ -871,7 +917,7 @@
       if (!r.ok) throw new Error(d.detail || 'Analysis failed');
       // Server accepted — start the progress card
       beginProgressTracking(id, filename);
-      loadContracts();
+      fetchAndRender();
     } catch(e) {
       toast('Could not start analysis: ' + e.message, 'error');
     }
@@ -901,19 +947,19 @@
       document.getElementById('pc-elapsed').textContent = fmtElapsed(elapsedSec);
     }, 1000);
 
-    // Progress poller — every 3 seconds, also immediately
-    pollProgress(contractId);
-    pollTimer = setInterval(() => pollProgress(contractId), 3000);
+    // Progress poller — pollingManager prevents duplicate intervals
+    pollingManager.start(contractId, () => pollProgress(contractId));
   }
 
   function resumeProgressPolling(contractId, filename) {
-    // If already tracking this contract, just expand the card
+    // Already tracking this contract — just expand the card
     if (activeContractId === contractId) {
       expandProgress();
       return;
     }
-    // Stop any existing poll
-    if (pollTimer) { clearInterval(pollTimer); clearInterval(elapsedTimer); }
+    // Stop polling for the previous contract (if any)
+    if (activeContractId) pollingManager.stop(activeContractId);
+    clearInterval(elapsedTimer);
     activeContractId = contractId;
     elapsedSec = 0;
 
@@ -933,8 +979,8 @@
       document.getElementById('pc-elapsed').textContent = fmtElapsed(elapsedSec);
     }, 1000);
 
-    pollProgress(contractId);
-    pollTimer = setInterval(() => pollProgress(contractId), 3000);
+    // pollingManager.start is a no-op if already polling this contract
+    pollingManager.start(contractId, () => pollProgress(contractId));
   }
 
   function minimiseProgress() {
@@ -965,7 +1011,8 @@
     try {
       const r = await fetch(`/api/progress/${contractId}`);
       if (r.status === 404) {
-        stopTracking();
+        pollingManager.stop(contractId);
+        fetchAndRender();
         document.getElementById('pc-spinner').style.display = 'none';
         const errEl = document.getElementById('pc-error');
         errEl.textContent = 'Analysis session was interrupted — please re-upload or re-analyse the document';
@@ -975,18 +1022,18 @@
       }
       if (!r.ok) return;  // other transient error — keep polling
       const p = await r.json();
-      applyProgress(p);
+      applyProgress(p, contractId);
     } catch(e) {
       // Network blip — keep polling
     }
   }
 
-  function applyProgress(p) {
+  function applyProgress(p, contractId) {
     const isCancelled = p.step_name === 'Cancelled' ||
                         (p.error && p.error.toLowerCase().includes('cancel'));
 
     if (isCancelled) {
-      stopTracking();
+      stopTracking(contractId);
       document.getElementById('pc-spinner').style.display = 'none';
       document.getElementById('btn-cancel').style.display = 'none';
       const errEl = document.getElementById('pc-error');
@@ -996,35 +1043,34 @@
       setTimeout(() => {
         document.getElementById('progress-card').classList.remove('show');
         document.getElementById('progress-minimised').classList.remove('show');
-        loadContracts();
+        fetchAndRender();
         toast('Analysis cancelled', '');
       }, 1500);
       return;
     }
 
     if (p.error) {
-      stopTracking();
+      stopTracking(contractId);
       document.getElementById('pc-spinner').style.display = 'none';
       document.getElementById('btn-cancel').style.display = 'none';
       const errEl = document.getElementById('pc-error');
       errEl.textContent = '✗ ' + p.error;
       errEl.classList.add('show');
       document.getElementById('pc-message').textContent = 'Analysis failed';
-      loadContracts();
+      fetchAndRender();
       return;
     }
 
+    // Normal in-progress update — update only the progress card, not the table
     updateBar(p.percent || 0);
     document.getElementById('pc-message').textContent = p.message || '';
-    // Keep minimised bar in sync
     const pct = p.percent || 0;
     const title = document.getElementById('pc-title').textContent;
-    document.getElementById('min-text').textContent =
-      `⟳ ${title} — ${pct}%`;
+    document.getElementById('min-text').textContent = `⟳ ${title} — ${pct}%`;
     renderSteps(p);
 
     if (p.percent >= 100) {
-      stopTracking();
+      stopTracking(contractId);
       document.getElementById('pc-spinner').style.display = 'none';
       document.getElementById('pc-check').style.display = '';
       document.getElementById('btn-cancel').style.display = 'none';
@@ -1034,7 +1080,7 @@
       setTimeout(() => {
         document.getElementById('progress-card').classList.remove('show');
         document.getElementById('progress-minimised').classList.remove('show');
-        loadContracts();
+        fetchAndRender();
         toast(`Analysis complete — Risk: ${p.risk_level || 'see report'}`, 'success');
       }, 2000);
     }
@@ -1097,15 +1143,30 @@
     }).join('');
   }
 
-  function stopTracking() {
-    clearInterval(pollTimer);
+  function stopTracking(contractId) {
+    if (contractId) pollingManager.stop(contractId);
     clearInterval(elapsedTimer);
-    pollTimer = null;
     elapsedTimer = null;
     activeContractId = null;
     // Reset cancel button state
     const btn = document.getElementById('btn-cancel');
     if (btn) { btn.disabled = false; btn.textContent = '✕ Cancel'; }
+  }
+
+  // resumeActivePolling: restart polling after tab becomes visible again.
+  // Called from visibilitychange listener when document.hidden becomes false.
+  function resumeActivePolling() {
+    if (activeContractId) {
+      if (!pollingManager.isPolling(activeContractId)) {
+        pollingManager.start(activeContractId, () => pollProgress(activeContractId));
+      }
+      if (!elapsedTimer) {
+        elapsedTimer = setInterval(() => {
+          elapsedSec++;
+          document.getElementById('pc-elapsed').textContent = fmtElapsed(elapsedSec);
+        }, 1000);
+      }
+    }
   }
 
   function fmtElapsed(s) {
@@ -1137,7 +1198,7 @@
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         toast('Contract deleted', 'success');
-        loadContracts();
+        fetchAndRender();
       } else {
         const msg = d.detail || d.message || `Delete failed (${r.status})`;
         toast(msg, 'error');
