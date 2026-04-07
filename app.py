@@ -61,6 +61,10 @@ excel_generator = ExcelGenerator(REPORTS_DIR)
 #     "error": str|null, "risk_level": str|null }
 progress_store: dict = {}
 
+# ── Cancellation store ────────────────────────────────────────────────────────
+# Set of document IDs for which cancellation has been requested
+cancel_requests: set = set()
+
 
 def _run_analysis_background(doc_id: str) -> None:
     """Synchronous worker — FastAPI runs this in a thread-pool via BackgroundTasks."""
@@ -95,6 +99,9 @@ def _run_analysis_background(doc_id: str) -> None:
             "error": None,
             "risk_level": None,
         }
+
+    def _check_cancel() -> bool:
+        return doc_id in cancel_requests
 
     try:
         raw_text      = document["raw_text"]
@@ -135,6 +142,7 @@ def _run_analysis_background(doc_id: str) -> None:
             document["filename"],
             preprocessed=pre,
             progress_callback=_progress_cb,
+            cancel_check=_check_cancel,
         )
 
         # Generate PDF report
@@ -205,15 +213,32 @@ def _run_analysis_background(doc_id: str) -> None:
             "risk_level": results.get("risk_score", {}).get("level", "Unknown"),
         }
 
+    except InterruptedError:
+        cancel_requests.discard(doc_id)
+        completed = [{"step_num": k, "step_name": v} for k, v in sorted(seen_steps.items())]
+        db.update_document(doc_id, {
+            "status": "cancelled",
+            "error_message": "Analysis cancelled by user",
+        })
+        progress_store[doc_id] = {
+            "step_num": 0, "total_steps": 7, "step_name": "Cancelled",
+            "message": "Analysis cancelled by user", "percent": 0,
+            "completed_steps": completed,
+            "error": "Analysis cancelled by user", "risk_level": None,
+        }
+
     except Exception as e:
+        import traceback
+        print(f"[ERROR] Analysis failed for {doc_id}: {e}")
+        traceback.print_exc()
         db.update_document(doc_id, {"status": "error", "error_message": str(e)})
         progress_store[doc_id] = {
             "step_num": 0, "total_steps": 7, "step_name": "Error",
             "message": str(e), "percent": 0,
-            "completed_steps": list(
+            "completed_steps": [
                 {"step_num": k, "step_name": v}
                 for k, v in sorted(seen_steps.items())
-            ),
+            ],
             "error": str(e), "risk_level": None,
         }
 
@@ -361,16 +386,34 @@ async def list_documents():
 
 @app.delete("/api/contract/{doc_id}")
 async def delete_document(doc_id: str):
-    document = db.get_document(doc_id)
-    if not document:
-        raise HTTPException(status_code=404, detail="Not found")
-    Path(document["file_path"]).unlink(missing_ok=True)
-    if document.get("pdf_report_path"):
-        (REPORTS_DIR / document["pdf_report_path"]).unlink(missing_ok=True)
-    if document.get("excel_report_path"):
-        (REPORTS_DIR / document["excel_report_path"]).unlink(missing_ok=True)
-    db.delete_document(doc_id)
-    return JSONResponse({"deleted": True})
+    try:
+        document = db.get_document(doc_id)
+        if not document:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document {doc_id} not found",
+            )
+        # Delete associated files — each is optional so guard against None
+        if document.get("file_path"):
+            Path(document["file_path"]).unlink(missing_ok=True)
+        if document.get("pdf_report_path"):
+            (REPORTS_DIR / document["pdf_report_path"]).unlink(missing_ok=True)
+        if document.get("excel_report_path"):
+            (REPORTS_DIR / document["excel_report_path"]).unlink(missing_ok=True)
+        if document.get("tracker_path"):
+            (REPORTS_DIR / document["tracker_path"]).unlink(missing_ok=True)
+        db.delete_document(doc_id)
+        # Clean up any in-memory state
+        progress_store.pop(doc_id, None)
+        cancel_requests.discard(doc_id)
+        return JSONResponse({"deleted": True, "id": doc_id})
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] Delete failed for {doc_id}: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
 
 @app.get("/api/document/{doc_id}/findings")
@@ -429,6 +472,26 @@ async def get_tracker(doc_id: str):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=f"tracker_{document.get('filename','document')}.xlsx",
     )
+
+
+@app.post("/api/cancel/{doc_id}")
+async def cancel_analysis(doc_id: str):
+    document = db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    cancel_requests.add(doc_id)
+    db.update_document(doc_id, {
+        "status": "cancelled",
+        "error_message": "Analysis cancelled by user",
+    })
+    if doc_id in progress_store:
+        progress_store[doc_id] = {
+            **progress_store[doc_id],
+            "step_name": "Cancelling",
+            "message": "Cancellation requested — stopping after current step...",
+            "error": None,
+        }
+    return JSONResponse({"cancelled": True, "id": doc_id})
 
 
 @app.get("/api/llm-status")

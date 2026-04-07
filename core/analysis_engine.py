@@ -318,6 +318,7 @@ class AnalysisEngine:
         filename: str,
         preprocessed: Optional[Dict] = None,
         progress_callback: ProgressCB = None,
+        cancel_check: Optional[Callable] = None,
     ) -> Dict[str, Any]:
         """
         Run the complete 7-pillar analysis pipeline.
@@ -392,7 +393,7 @@ class AnalysisEngine:
         _cb(3, "Pillar Analysis", "Starting pillar analysis...", 28)
         print("  [3/7] Analysing 7 pillars...")
         results["pillars"] = self._analyse_all_pillars(
-            analysis_source, section_index, doc_type, positions, _cb
+            analysis_source, section_index, doc_type, positions, _cb, cancel_check
         )
 
         # ── Step 4: Extract dates (max 3 LLM calls) ───────────────────────────
@@ -575,10 +576,13 @@ class AnalysisEngine:
         doc_type: str,
         positions: Dict,
         cb: Callable,
+        cancel_check: Optional[Callable] = None,
     ) -> List[Dict]:
         pillar_results = []
 
         for i, pillar in enumerate(ALL_PILLARS, 1):
+            if cancel_check and cancel_check():
+                raise InterruptedError("Analysis cancelled by user")
             step_name = f"Pillar: {pillar.name}"
             msg = f"Analysing {pillar.icon} {pillar.name} pillar ({i}/7)..."
             pct = 28 + int(42 * (i - 1) / 7)

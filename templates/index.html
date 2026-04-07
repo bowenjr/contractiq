@@ -329,6 +329,54 @@
   }
   .pc-error.show { display: block; }
 
+  /* ── Progress card controls ────────────────────────────────────── */
+  .pc-controls { display: flex; align-items: center; gap: 8px; }
+  .btn-minimise {
+    background: transparent; color: var(--mist);
+    border: 1px solid var(--border); font-size: 0.78rem;
+    cursor: pointer; padding: 4px 9px;
+    border-radius: var(--radius); font-family: var(--font-sans);
+    transition: all 0.15s;
+  }
+  .btn-minimise:hover { background: var(--parchment2); color: var(--ink); }
+  .btn-cancel-analysis {
+    background: transparent; color: var(--red);
+    border: 1.5px solid #fca5a5; font-size: 0.78rem;
+    cursor: pointer; padding: 4px 10px;
+    border-radius: var(--radius); font-family: var(--font-sans);
+    font-weight: 500; transition: all 0.18s;
+  }
+  .btn-cancel-analysis:hover { background: #fee2e2; }
+
+  /* ── Minimised progress bar ────────────────────────────────────── */
+  #progress-minimised {
+    display: none;
+    background: var(--ink); color: var(--white);
+    padding: 9px 24px;
+    align-items: center; gap: 12px;
+    position: sticky; top: 57px; z-index: 9;
+    border-bottom: 2px solid var(--gold);
+    font-size: 0.84rem; cursor: pointer;
+  }
+  #progress-minimised.show { display: flex; }
+  .min-spinner {
+    width: 13px; height: 13px;
+    border: 2px solid rgba(200,169,110,0.3);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  #min-text { flex: 1; }
+  .btn-min-view {
+    background: rgba(200,169,110,0.15); color: var(--gold);
+    border: 1px solid rgba(200,169,110,0.3);
+    padding: 3px 10px; border-radius: var(--radius);
+    font-size: 0.76rem; cursor: pointer; font-family: var(--font-sans);
+    transition: all 0.15s;
+  }
+  .btn-min-view:hover { background: rgba(200,169,110,0.25); }
+
   /* ── Contracts Table ───────────────────────────────────────────── */
   .section-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -375,6 +423,8 @@
   .badge-error .badge-dot { background: var(--red); }
   .badge-uploaded   { background: var(--parchment2); color: var(--mist); }
   .badge-uploaded .badge-dot { background: var(--mist); }
+  .badge-cancelled  { background: #f3f4f6; color: #6b7280; }
+  .badge-cancelled .badge-dot { background: #9ca3af; }
 
   /* ── Risk Pill ─────────────────────────────────────────────────── */
   .risk-pill {
@@ -528,6 +578,13 @@
       <div class="upload-banner-text" id="upload-banner-text">Uploading...</div>
     </div>
 
+    <!-- Minimised progress bar (sticky, shown when card is collapsed) -->
+    <div id="progress-minimised" onclick="expandProgress()">
+      <div class="min-spinner"></div>
+      <span id="min-text">Analysing...</span>
+      <button class="btn-min-view" onclick="event.stopPropagation();expandProgress()">▲ View</button>
+    </div>
+
     <!-- Progress Card (analysis phase) -->
     <div class="progress-card" id="progress-card">
       <div class="pc-header">
@@ -539,7 +596,11 @@
             <div class="pc-elapsed" id="pc-elapsed">0s elapsed</div>
           </div>
         </div>
-        <div class="pc-pct" id="pc-pct">0%</div>
+        <div class="pc-controls">
+          <div class="pc-pct" id="pc-pct">0%</div>
+          <button class="btn-minimise" id="btn-minimise" onclick="minimiseProgress()" title="Minimise">▼</button>
+          <button class="btn-cancel-analysis" id="btn-cancel" onclick="cancelAnalysis()" style="display:none">✕ Cancel</button>
+        </div>
       </div>
       <div class="pc-bar-track">
         <div class="pc-bar-fill" id="pc-bar-fill" style="width:0%"></div>
@@ -660,6 +721,13 @@
     const contracts = await r.json();
     renderContracts(contracts);
     updateStats(contracts);
+    // Auto-reconnect progress polling for any in-flight analysis
+    if (!activeContractId) {
+      const processing = contracts.filter(c => c.status === 'processing');
+      if (processing.length > 0) {
+        resumeProgressPolling(processing[0].id, processing[0].filename);
+      }
+    }
   }
 
   function updateStats(contracts) {
@@ -693,10 +761,19 @@
         <td style="font-size:0.8rem;color:var(--mist);white-space:nowrap">${formatDate(c.upload_date)}</td>
         <td>
           <div class="action-cell" onclick="event.stopPropagation()">
-            ${c.status === 'uploaded' || c.status === 'error' ? `
+            ${c.status === 'uploaded' || c.status === 'error' || c.status === 'cancelled' ? `
               <button class="btn btn-primary" style="padding:6px 12px;font-size:0.78rem"
                       onclick="startAnalysis('${c.id}','${escHtml(c.filename)}')">
-                Analyse
+                ${c.status === 'cancelled' ? 'Re-analyse' : 'Analyse'}
+              </button>` : ''}
+            ${c.status === 'processing' ? `
+              <button class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem"
+                      onclick="resumeProgressPolling('${c.id}','${escHtml(c.filename)}')">
+                <span style="display:inline-block;animation:spin-icon 1s linear infinite">⟳</span> View Progress
+              </button>
+              <button class="btn-cancel-analysis" style="padding:5px 10px"
+                      onclick="fetch('/api/cancel/${c.id}',{method:'POST'}).then(()=>{ toast('Cancelling analysis…',''); setTimeout(loadContracts,2000); })">
+                ✕ Cancel
               </button>` : ''}
             ${c.status === 'complete' && c.pdf_report_path ? `
               <a class="btn btn-outline" style="padding:6px 12px;font-size:0.78rem"
@@ -720,6 +797,7 @@
       processing: ['badge-processing', '⟳ Processing'],
       error:      ['badge-error',      '✗ Error'],
       uploaded:   ['badge-uploaded',   '↑ Uploaded'],
+      cancelled:  ['badge-cancelled',  '✕ Cancelled'],
     };
     const [cls, label] = map[status] || ['badge-uploaded', status];
     return `<span class="badge ${cls}"><span class="badge-dot"></span>${label}</span>`;
@@ -803,13 +881,17 @@
     activeContractId = contractId;
     elapsedSec = 0;
 
-    // Show card
+    // Show card, hide minimised bar
+    document.getElementById('progress-minimised').classList.remove('show');
     const card = document.getElementById('progress-card');
     card.classList.add('show');
     document.getElementById('pc-title').textContent = `Analysing "${filename}"`;
     document.getElementById('pc-spinner').style.display = '';
     document.getElementById('pc-check').style.display = 'none';
     document.getElementById('pc-error').classList.remove('show');
+    document.getElementById('btn-cancel').style.display = '';
+    document.getElementById('btn-minimise').style.display = '';
+    document.getElementById('min-text').textContent = `⟳ Analysing "${filename}"...`;
     renderSteps({ step_num: 0, message: '' });
     updateBar(0);
 
@@ -822,6 +904,61 @@
     // Progress poller — every 3 seconds, also immediately
     pollProgress(contractId);
     pollTimer = setInterval(() => pollProgress(contractId), 3000);
+  }
+
+  function resumeProgressPolling(contractId, filename) {
+    // If already tracking this contract, just expand the card
+    if (activeContractId === contractId) {
+      expandProgress();
+      return;
+    }
+    // Stop any existing poll
+    if (pollTimer) { clearInterval(pollTimer); clearInterval(elapsedTimer); }
+    activeContractId = contractId;
+    elapsedSec = 0;
+
+    document.getElementById('progress-minimised').classList.remove('show');
+    const card = document.getElementById('progress-card');
+    card.classList.add('show');
+    document.getElementById('pc-title').textContent = `Analysing "${filename}"`;
+    document.getElementById('pc-spinner').style.display = '';
+    document.getElementById('pc-check').style.display = 'none';
+    document.getElementById('pc-error').classList.remove('show');
+    document.getElementById('btn-cancel').style.display = '';
+    document.getElementById('btn-minimise').style.display = '';
+    document.getElementById('min-text').textContent = `⟳ Analysing "${filename}"...`;
+
+    elapsedTimer = setInterval(() => {
+      elapsedSec++;
+      document.getElementById('pc-elapsed').textContent = fmtElapsed(elapsedSec);
+    }, 1000);
+
+    pollProgress(contractId);
+    pollTimer = setInterval(() => pollProgress(contractId), 3000);
+  }
+
+  function minimiseProgress() {
+    document.getElementById('progress-card').classList.remove('show');
+    document.getElementById('progress-minimised').classList.add('show');
+  }
+
+  function expandProgress() {
+    document.getElementById('progress-minimised').classList.remove('show');
+    document.getElementById('progress-card').classList.add('show');
+  }
+
+  async function cancelAnalysis() {
+    if (!activeContractId) return;
+    const id = activeContractId;
+    document.getElementById('btn-cancel').disabled = true;
+    document.getElementById('btn-cancel').textContent = 'Cancelling…';
+    document.getElementById('pc-message').textContent = 'Cancellation requested — stopping after current step...';
+    try {
+      await fetch(`/api/cancel/${id}`, { method: 'POST' });
+      toast('Cancellation requested — analysis will stop after current step', '');
+    } catch(e) {
+      toast('Could not send cancel request', 'error');
+    }
   }
 
   async function pollProgress(contractId) {
@@ -845,9 +982,30 @@
   }
 
   function applyProgress(p) {
+    const isCancelled = p.step_name === 'Cancelled' ||
+                        (p.error && p.error.toLowerCase().includes('cancel'));
+
+    if (isCancelled) {
+      stopTracking();
+      document.getElementById('pc-spinner').style.display = 'none';
+      document.getElementById('btn-cancel').style.display = 'none';
+      const errEl = document.getElementById('pc-error');
+      errEl.textContent = '✕ Analysis cancelled';
+      errEl.classList.add('show');
+      document.getElementById('pc-message').textContent = 'Cancelled';
+      setTimeout(() => {
+        document.getElementById('progress-card').classList.remove('show');
+        document.getElementById('progress-minimised').classList.remove('show');
+        loadContracts();
+        toast('Analysis cancelled', '');
+      }, 1500);
+      return;
+    }
+
     if (p.error) {
       stopTracking();
       document.getElementById('pc-spinner').style.display = 'none';
+      document.getElementById('btn-cancel').style.display = 'none';
       const errEl = document.getElementById('pc-error');
       errEl.textContent = '✗ ' + p.error;
       errEl.classList.add('show');
@@ -858,17 +1016,24 @@
 
     updateBar(p.percent || 0);
     document.getElementById('pc-message').textContent = p.message || '';
+    // Keep minimised bar in sync
+    const pct = p.percent || 0;
+    const title = document.getElementById('pc-title').textContent;
+    document.getElementById('min-text').textContent =
+      `⟳ ${title} — ${pct}%`;
     renderSteps(p);
 
     if (p.percent >= 100) {
-      // Done
       stopTracking();
       document.getElementById('pc-spinner').style.display = 'none';
       document.getElementById('pc-check').style.display = '';
+      document.getElementById('btn-cancel').style.display = 'none';
+      document.getElementById('btn-minimise').style.display = 'none';
       document.getElementById('pc-message').textContent = 'Analysis complete';
       renderSteps({ percent: 100, completed_steps: DEFAULT_STEPS });
       setTimeout(() => {
         document.getElementById('progress-card').classList.remove('show');
+        document.getElementById('progress-minimised').classList.remove('show');
         loadContracts();
         toast(`Analysis complete — Risk: ${p.risk_level || 'see report'}`, 'success');
       }, 2000);
@@ -938,6 +1103,9 @@
     pollTimer = null;
     elapsedTimer = null;
     activeContractId = null;
+    // Reset cancel button state
+    const btn = document.getElementById('btn-cancel');
+    if (btn) { btn.disabled = false; btn.textContent = '✕ Cancel'; }
   }
 
   function fmtElapsed(s) {
@@ -962,10 +1130,23 @@
   }
   async function confirmDelete() {
     if (!deleteTarget) return;
+    const id = deleteTarget;
     closeDeleteModal();
-    const r = await fetch(`/api/contract/${deleteTarget}`, { method: 'DELETE' });
-    if (r.ok) { toast('Contract deleted', ''); loadContracts(); }
-    else        { toast('Delete failed', 'error'); }
+    try {
+      const r = await fetch(`/api/contract/${id}`, { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        toast('Contract deleted', 'success');
+        loadContracts();
+      } else {
+        const msg = d.detail || d.message || `Delete failed (${r.status})`;
+        toast(msg, 'error');
+        console.error('Delete failed:', d);
+      }
+    } catch(e) {
+      toast('Delete failed — network error', 'error');
+      console.error('Delete exception:', e);
+    }
   }
 
   // ── Toasts ────────────────────────────────────────────────────────────────
