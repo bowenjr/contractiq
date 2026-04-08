@@ -321,7 +321,15 @@
       Excel
     </a>
     {% endif %}
+    {% if contract.status == 'complete' %}
+    <button class="btn btn-outline" id="btn-regen" onclick="regenerateReports()"
+            title="Re-generate PDF, Excel and Tracker from saved analysis data">
+      <svg id="regen-icon" width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      Regenerate Reports
+    </button>
+    {% endif %}
   </div>
+  <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
 
   <div class="content">
     {% set a = contract.analysis or {} %}
@@ -895,6 +903,54 @@ async function runAnalysis() {
     if (btn) { btn.disabled = false; btn.textContent = 'Run Analysis Now'; }
   }
 }
+
+async function regenerateReports() {
+  const id   = '{{ contract.id }}';
+  const btn  = document.getElementById('btn-regen');
+  const icon = document.getElementById('regen-icon');
+  if (!btn) return;
+
+  btn.disabled = true;
+  icon.style.animation = 'spin-regen 1s linear infinite';
+
+  try {
+    const r = await fetch(`/api/document/${id}/regenerate-reports`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Regeneration failed');
+
+    showToast(
+      `Reports regenerated — <a href="/reports/${d.pdf}" target="_blank" style="color:var(--gold)">PDF</a>` +
+      ` · <a href="/reports/${d.excel}" target="_blank" style="color:#86efac">Excel</a>`,
+      'success'
+    );
+    // Refresh download links without full reload
+    setTimeout(() => location.reload(), 2500);
+  } catch(e) {
+    showToast('Regeneration failed: ' + e.message, 'error');
+    btn.disabled = false;
+    icon.style.animation = '';
+  }
+}
+
+function showToast(html, type) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.style.cssText = [
+    'padding:12px 18px', 'border-radius:6px', 'font-size:0.85rem',
+    'box-shadow:0 4px 16px rgba(0,0,0,0.15)', 'max-width:340px',
+    'line-height:1.5', 'animation:fadein-toast 0.2s ease',
+    type === 'success'
+      ? 'background:#1a1f2e;color:#f4f1eb;border-left:4px solid #c8a96e'
+      : 'background:#fee2e2;color:#7f1d1d;border-left:4px solid #dc2626',
+  ].join(';');
+  t.innerHTML = html;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
+}
 </script>
+<style>
+@keyframes spin-regen { to { transform: rotate(360deg); } }
+@keyframes fadein-toast { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+</style>
 </body>
 </html>

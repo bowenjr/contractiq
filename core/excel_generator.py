@@ -125,16 +125,25 @@ class ExcelGenerator:
         side = self._Side(style="thin", color=BORDER_CLR)
         return self._Border(left=side, right=side, top=side, bottom=side)
 
+    def _alignment(self, horizontal='left', vertical='center', wrap=False):
+        """Safe Alignment factory — validates values to prevent openpyxl errors."""
+        from openpyxl.styles import Alignment
+        valid_h = {'left', 'center', 'right', 'fill', 'justify',
+                   'centerContinuous', 'distributed'}
+        valid_v = {'top', 'center', 'bottom', 'distributed', 'justify'}
+        h = horizontal if horizontal in valid_h else 'left'
+        v = vertical   if vertical   in valid_v else 'center'
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+
     def _wrap(self, horizontal="left", vertical="top", wrap=True):
-        return self._Align(horizontal=horizontal, vertical=vertical,
-                           wrap_text=wrap)
+        return self._alignment(horizontal=horizontal, vertical=vertical, wrap=wrap)
 
     def _header_row(self, ws, row_num: int, cols: List[str]):
         for ci, col in enumerate(cols, 1):
             cell = ws.cell(row=row_num, column=ci, value=col)
             cell.font = self._hdr_font()
             cell.fill = self._make_fill(HDR_FILL)
-            cell.alignment = self._wrap("center", "middle")
+            cell.alignment = self._alignment("center", "center")
             cell.border = self._thin_border()
 
     def _subheader_row(self, ws, row_num: int, cols: List[str]):
@@ -142,7 +151,7 @@ class ExcelGenerator:
             cell = ws.cell(row=row_num, column=ci, value=col)
             cell.font = self._hdr_font(colour=SUB_FONT)
             cell.fill = self._make_fill(SUB_FILL)
-            cell.alignment = self._wrap("left", "middle")
+            cell.alignment = self._alignment("left", "center")
             cell.border = self._thin_border()
 
     def _data_row(self, ws, row_num: int, values: List,

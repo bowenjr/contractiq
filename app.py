@@ -499,6 +499,65 @@ async def get_tracker(doc_id: str):
     )
 
 
+@app.post("/api/document/{doc_id}/regenerate-reports")
+async def regenerate_reports(doc_id: str):
+    """Re-generate PDF, Excel, and tracker reports from existing analysis_json.
+    Does NOT re-run LLM analysis — useful after fixing report generation bugs."""
+    document = db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if document.get("status") not in ("complete", "error"):
+        raise HTTPException(
+            status_code=422,
+            detail="Reports can only be regenerated for completed documents",
+        )
+    analysis_json_str = document.get("analysis_json")
+    if not analysis_json_str:
+        raise HTTPException(
+            status_code=422,
+            detail="No analysis data found — please run analysis first",
+        )
+    try:
+        results = json.loads(analysis_json_str)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=422, detail="Analysis data is corrupted")
+
+    try:
+        pdf_filename  = f"report_{doc_id}.pdf"
+        xlsx_filename = f"report_{doc_id}.xlsx"
+        tracker_filename = f"tracker_{doc_id}.xlsx"
+
+        report_generator.generate(document, results, REPORTS_DIR / pdf_filename)
+        excel_generator.generate(document, results, REPORTS_DIR / xlsx_filename)
+
+        contractual_items = []
+        if document.get("contractual_items_json"):
+            try:
+                contractual_items = json.loads(document["contractual_items_json"])
+            except Exception:
+                pass
+        preprocessor.generate_tracker_sheet(
+            document, contractual_items, results, REPORTS_DIR / tracker_filename
+        )
+
+        db.update_document(doc_id, {
+            "pdf_report_path":   pdf_filename,
+            "excel_report_path": xlsx_filename,
+            "tracker_path":      tracker_filename,
+        })
+        return JSONResponse({
+            "status":  "complete",
+            "pdf":     pdf_filename,
+            "excel":   xlsx_filename,
+            "tracker": tracker_filename,
+        })
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] Report regeneration failed for {doc_id}: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+
 @app.post("/api/cancel/{doc_id}")
 async def cancel_analysis(doc_id: str):
     document = db.get_document(doc_id)
