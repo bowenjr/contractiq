@@ -264,6 +264,118 @@
   }
   .action-text { font-size:0.88rem; font-weight:500; display:inline; }
   .action-reason { font-size:0.8rem; color:var(--mist); margin-top:3px; padding-left:32px; }
+
+  /* ── Page-level tabs ──────────────────────────────────────── */
+  .page-tabs {
+    display:flex; gap:0; border-bottom:2px solid var(--border);
+    margin-bottom:24px; overflow-x:auto;
+  }
+  .page-tab {
+    padding:11px 22px; font-size:0.875rem; font-weight:500;
+    cursor:pointer; border:none; background:none; color:var(--mist);
+    border-bottom:3px solid transparent; margin-bottom:-2px;
+    transition:all 0.15s; font-family:var(--font-sans);
+    white-space:nowrap; display:flex; align-items:center; gap:7px;
+  }
+  .page-tab:hover { color:var(--ink); }
+  .page-tab.active { color:var(--ink); font-weight:700; border-bottom-color:var(--gold); }
+  .pane { display:none; }
+  .pane.active { display:block; }
+
+  /* ── Tracker / Obligations shared ────────────────────────── */
+  .summary-bar {
+    display:flex; flex-wrap:wrap; gap:0;
+    background:var(--white); border:1px solid var(--border);
+    border-radius:var(--radius); margin-bottom:14px; overflow:hidden;
+  }
+  .sum-item { padding:10px 18px; border-right:1px solid var(--border); min-width:80px; }
+  .sum-item:last-child { border-right:none; }
+  .sum-label { font-size:0.67rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--mist); }
+  .sum-value { font-weight:700; font-size:1.1rem; margin-top:1px; }
+  .sum-red   { color:var(--red); }
+  .sum-amber { color:var(--amber); }
+  .sum-green { color:var(--green); }
+
+  .filter-bar { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; align-items:center; }
+  .filter-btn {
+    padding:4px 12px; border-radius:20px; border:1px solid var(--border);
+    background:none; font-size:0.76rem; cursor:pointer; transition:all 0.12s;
+    font-family:var(--font-sans);
+  }
+  .filter-btn:hover { border-color:var(--ink); }
+  .filter-btn.active { background:var(--ink); color:var(--white); border-color:var(--ink); }
+  .filter-sep { width:1px; height:18px; background:var(--border); margin:0 4px; align-self:center; }
+
+  .tracker-wrap { overflow-x:auto; background:var(--white); border:1px solid var(--border); border-radius:var(--radius); }
+  .tracker-tbl { width:100%; border-collapse:collapse; font-size:0.8rem; }
+  .tracker-tbl th {
+    background:var(--parchment2); font-weight:600; font-size:0.68rem;
+    letter-spacing:0.07em; text-transform:uppercase; color:var(--mist);
+    padding:9px 10px; text-align:left; border-bottom:1px solid var(--border);
+    white-space:nowrap; position:sticky; top:0; z-index:1;
+  }
+  .tracker-tbl td { padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  .tracker-tbl tr:last-child td { border-bottom:none; }
+  .tracker-tbl tbody tr:hover td { background:var(--parchment2); }
+
+  .sev-badge {
+    display:inline-block; padding:2px 7px; border-radius:4px;
+    font-size:0.7rem; font-weight:700; text-transform:uppercase; white-space:nowrap;
+  }
+  .sev-Critical { background:#fee2e2; color:#b91c1c; }
+  .sev-High     { background:#fef3c7; color:#92400e; }
+  .sev-Medium   { background:#fefce8; color:#854d0e; }
+  .sev-Low      { background:#f0fdf4; color:#15803d; }
+  .sev-Info     { background:#f0f9ff; color:#0369a1; }
+
+  .pillar-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+
+  .cell-edit {
+    width:100%; min-width:120px; font-family:var(--font-sans); font-size:0.8rem;
+    padding:3px 5px; border-radius:3px; border:1px solid transparent;
+    background:transparent; color:var(--ink); resize:vertical;
+  }
+  .cell-edit:hover { border-color:var(--border); }
+  .cell-edit:focus { outline:2px solid var(--gold); background:var(--white); border-color:transparent; }
+  .cell-select {
+    width:100%; font-family:var(--font-sans); font-size:0.8rem;
+    padding:3px 5px; border-radius:3px; border:1px solid transparent;
+    background:transparent; color:var(--ink); cursor:pointer;
+  }
+  .cell-select:hover { border-color:var(--border); }
+  .cell-select:focus { outline:2px solid var(--gold); background:var(--white); }
+  .cell-check { width:15px; height:15px; cursor:pointer; accent-color:var(--ink); }
+
+  .save-ind { display:inline-block; font-size:0.68rem; padding:1px 5px; border-radius:3px; }
+  .save-saving { background:#fef3c7; color:#92400e; }
+  .save-ok     { background:#dcfce7; color:#15803d; }
+  .save-err    { background:#fee2e2; color:#b91c1c; }
+
+  .tracker-topbar { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:10px; }
+  .tracker-metrics {
+    background:var(--white); border:1px solid var(--border); border-radius:var(--radius);
+    padding:10px 16px; font-size:0.78rem; margin-bottom:14px;
+    display:flex; flex-wrap:wrap; gap:18px;
+  }
+  .met-item { display:flex; gap:5px; align-items:center; }
+  .met-label { color:var(--mist); }
+  .met-value { color:var(--ink); font-weight:600; }
+
+  .deadline-past { color:var(--red); font-weight:600; }
+  .deadline-soon { color:var(--amber); font-weight:600; }
+  .ob-id { font-family:var(--font-mono); font-size:0.72rem; color:var(--mist); }
+
+  .doc-links-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+  .doc-link-card {
+    display:flex; flex-direction:column; gap:6px; padding:16px 18px;
+    border:1px solid var(--border); border-radius:var(--radius);
+    text-decoration:none; color:var(--ink); background:var(--white);
+    transition:all 0.15s;
+  }
+  .doc-link-card:hover { border-color:var(--gold); box-shadow:var(--shadow); }
+  .doc-link-icon { font-size:1.4rem; }
+  .doc-link-label { font-weight:600; font-size:0.88rem; }
+  .doc-link-sub { font-size:0.74rem; color:var(--mist); }
 </style>
 </head>
 <body>
@@ -277,6 +389,10 @@
     <a class="nav-item" href="/">
       <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
       Dashboard
+    </a>
+    <a class="nav-item" href="/knowledge">
+      <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+      Knowledge Base
     </a>
     {% if contract.pdf_report_path or contract.report_path %}
     <a class="nav-item" href="/reports/{{ contract.pdf_report_path or contract.report_path }}" target="_blank">
@@ -314,6 +430,13 @@
       PDF Report
     </a>
     {% endif %}
+    {% if contract.structured_markdown %}
+    <a class="btn btn-outline" href="/api/document/{{ contract.id }}/markdown/download"
+       style="font-family:var(--font-mono);font-size:0.82rem;letter-spacing:0.05em" download>
+      <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      .md
+    </a>
+    {% endif %}
     {% if contract.excel_report_path %}
     <a class="btn btn-outline" href="/reports/{{ contract.excel_report_path }}" target="_blank"
        style="color:var(--green);border-color:#bbf7d0">
@@ -337,7 +460,97 @@
     {% set level = rs.get('level', 'Unknown') %}
     {% set score = rs.get('overall_score', 0) %}
 
+    <!-- ── Review Context Panel ─────────────────────── -->
+    <div id="ctxPanel" style="background:var(--white);border:1px solid var(--border);border-radius:6px;padding:18px 22px;margin-bottom:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div style="font-weight:600;font-size:0.9rem;">Review Context</div>
+        <button onclick="toggleCtx()" style="background:none;border:none;cursor:pointer;color:var(--mist);font-size:0.8rem;" id="ctxToggleBtn">Hide</button>
+      </div>
+      <div id="ctxForm">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:12px;">
+          <div>
+            <label style="font-size:0.76rem;font-weight:500;color:var(--mist);display:block;margin-bottom:4px;">Business Role</label>
+            <select id="ctx_business_role" style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:0.85rem;font-family:var(--font-sans);">
+              <option value="">— select —</option>
+              <option value="Prime Contractor"{% if contract.business_role == 'Prime Contractor' %} selected{% endif %}>Prime Contractor</option>
+              <option value="Subcontractor"{% if contract.business_role == 'Subcontractor' %} selected{% endif %}>Subcontractor</option>
+              <option value="Supplier"{% if contract.business_role == 'Supplier' %} selected{% endif %}>Supplier</option>
+              <option value="Consultant"{% if contract.business_role == 'Consultant' %} selected{% endif %}>Consultant</option>
+              <option value="Other"{% if contract.business_role == 'Other' %} selected{% endif %}>Other</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:0.76rem;font-weight:500;color:var(--mist);display:block;margin-bottom:4px;">Jurisdiction</label>
+            <select id="ctx_jurisdiction" style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:0.85rem;font-family:var(--font-sans);">
+              <option value="">— select —</option>
+              <option value="Ontario"{% if contract.jurisdiction == 'Ontario' %} selected{% endif %}>Ontario</option>
+              <option value="British Columbia"{% if contract.jurisdiction == 'British Columbia' %} selected{% endif %}>British Columbia</option>
+              <option value="Alberta"{% if contract.jurisdiction == 'Alberta' %} selected{% endif %}>Alberta</option>
+              <option value="Federal Canada"{% if contract.jurisdiction == 'Federal Canada' %} selected{% endif %}>Federal Canada</option>
+              <option value="Quebec"{% if contract.jurisdiction == 'Quebec' %} selected{% endif %}>Quebec</option>
+              <option value="Other"{% if contract.jurisdiction == 'Other' %} selected{% endif %}>Other</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:0.76rem;font-weight:500;color:var(--mist);display:block;margin-bottom:4px;">Delivery Model</label>
+            <select id="ctx_delivery_model" style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:0.85rem;font-family:var(--font-sans);">
+              <option value="">— select —</option>
+              <option value="Fixed Price"{% if contract.delivery_model == 'Fixed Price' %} selected{% endif %}>Fixed Price</option>
+              <option value="Time & Materials"{% if contract.delivery_model == 'Time & Materials' %} selected{% endif %}>Time &amp; Materials</option>
+              <option value="Managed Services"{% if contract.delivery_model == 'Managed Services' %} selected{% endif %}>Managed Services</option>
+              <option value="P3/AFP"{% if contract.delivery_model == 'P3/AFP' %} selected{% endif %}>P3/AFP</option>
+              <option value="Design-Build"{% if contract.delivery_model == 'Design-Build' %} selected{% endif %}>Design-Build</option>
+              <option value="EPC"{% if contract.delivery_model == 'EPC' %} selected{% endif %}>EPC</option>
+              <option value="Supply-Only"{% if contract.delivery_model == 'Supply-Only' %} selected{% endif %}>Supply-Only</option>
+              <option value="Other"{% if contract.delivery_model == 'Other' %} selected{% endif %}>Other</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="font-size:0.76rem;font-weight:500;color:var(--mist);display:block;margin-bottom:4px;">Product Families</label>
+          <div id="pfTagsDisplay" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;min-height:24px;"></div>
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="pfTagInput" placeholder="Type and press Enter to add tag..." style="flex:1;padding:7px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:0.85rem;font-family:var(--font-sans);">
+          </div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="font-size:0.76rem;font-weight:500;color:var(--mist);display:block;margin-bottom:4px;">Review Notes</label>
+          <textarea id="ctx_review_notes" style="width:100%;padding:7px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:0.85rem;font-family:var(--font-sans);min-height:56px;resize:vertical;">{{ contract.review_notes or '' }}</textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button onclick="saveContext()" style="background:var(--ink);color:#fff;border:none;border-radius:6px;padding:8px 18px;font-family:var(--font-sans);font-size:0.85rem;font-weight:500;cursor:pointer;">Save Context</button>
+          <span id="ctxSaveStatus" style="font-size:0.82rem;color:var(--mist);"></span>
+          {% if contract.status == 'complete' %}
+          <span style="font-size:0.78rem;color:var(--amber);margin-left:8px;">Re-run analysis to apply updated context to findings.</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
     {% if contract.status == 'complete' %}
+
+    <!-- ── Page Tabs ─────────────────────────────────── -->
+    <div class="page-tabs">
+      <button class="page-tab active" onclick="switchTab('analysis',this)">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        Analysis
+      </button>
+      <button class="page-tab" onclick="switchTab('tracker',this)">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+        Tracker
+      </button>
+      <button class="page-tab" onclick="switchTab('obligations',this)">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        Obligations
+      </button>
+      <button class="page-tab" onclick="switchTab('documents',this)">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+        Documents
+      </button>
+    </div>
+
+    <!-- ── Analysis Tab ───────────────────────────────── -->
+    <div id="pane-analysis" class="pane active">
 
     <!-- Risk Banner -->
     <div class="risk-banner risk-banner-{{ level }} section-gap">
@@ -871,6 +1084,153 @@
     </div>
     {% endif %}
 
+    </div><!-- /pane-analysis -->
+
+    <!-- ── Tracker Tab ───────────────────────────────── -->
+    <div id="pane-tracker" class="pane">
+      <div class="tracker-metrics">
+        <span class="met-item"><span class="met-label">Analysed:</span><span class="met-value">{{ contract.analysis_date[:10] if contract.analysis_date else '—' }}</span></span>
+        <span class="met-item"><span class="met-label">Risk:</span><span class="met-value">{{ level }} ({{ score }}/100)</span></span>
+        {% set pillars_done = a.get('pillars', [])|length %}
+        <span class="met-item"><span class="met-label">Pillars:</span><span class="met-value">{{ pillars_done }}/7</span></span>
+        <span class="met-item"><span class="met-label">Items:</span><span class="met-value" id="met-items">—</span></span>
+        <span class="met-item"><span class="met-label">Legal Review Required:</span><span class="met-value" id="met-legal">—</span></span>
+      </div>
+
+      <div class="tracker-topbar">
+        <div>
+          <div class="filter-bar" id="filter-sev">
+            <span style="font-size:0.74rem;color:var(--mist);margin-right:2px">Severity:</span>
+            <button class="filter-btn active" onclick="filterSev('all',this)">All</button>
+            <button class="filter-btn" onclick="filterSev('Critical',this)">Critical</button>
+            <button class="filter-btn" onclick="filterSev('High',this)">High</button>
+            <button class="filter-btn" onclick="filterSev('Medium',this)">Medium</button>
+            <button class="filter-btn" onclick="filterSev('Low',this)">Low</button>
+            <span class="filter-sep"></span>
+            <button class="filter-btn" onclick="filterSev('legal',this)">⚖ Legal Only</button>
+          </div>
+          <div class="filter-bar" id="filter-status">
+            <span style="font-size:0.74rem;color:var(--mist);margin-right:2px">Status:</span>
+            <button class="filter-btn active" onclick="filterStatus('all',this)">All</button>
+            <button class="filter-btn" onclick="filterStatus('Open',this)">Open</button>
+            <button class="filter-btn" onclick="filterStatus('In Review',this)">In Review</button>
+            <button class="filter-btn" onclick="filterStatus('Agreed',this)">Agreed</button>
+            <button class="filter-btn" onclick="filterStatus('Escalated',this)">Escalated</button>
+            <button class="filter-btn" onclick="filterStatus('Closed',this)">Closed</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button class="btn btn-outline" style="font-size:0.8rem;padding:7px 14px" onclick="markAllReviewed()">Mark All → In Review</button>
+          {% if contract.tracker_path %}
+          <a class="btn btn-gold" style="font-size:0.8rem;padding:7px 14px" href="/api/document/{{ contract.id }}/tracker" target="_blank">↓ Excel Tracker</a>
+          {% endif %}
+        </div>
+      </div>
+
+      <div id="tracker-summary" class="summary-bar"></div>
+
+      <div class="tracker-wrap">
+        <div id="tracker-loading" style="padding:32px;text-align:center;color:var(--mist)">Loading issues…</div>
+        <table class="tracker-tbl" id="tracker-tbl" style="display:none">
+          <thead><tr>
+            <th style="width:50px">#</th>
+            <th style="width:90px">Pillar</th>
+            <th style="width:100px">Section</th>
+            <th>Issue</th>
+            <th style="width:80px">Severity</th>
+            <th style="width:160px">Our Position / Fallback</th>
+            <th style="width:190px">Proposed Response</th>
+            <th style="width:115px">Owner</th>
+            <th style="width:55px;text-align:center">Legal</th>
+            <th style="width:115px">Status</th>
+          </tr></thead>
+          <tbody id="tracker-tbody"></tbody>
+        </table>
+      </div>
+    </div><!-- /pane-tracker -->
+
+    <!-- ── Obligations Tab ───────────────────────────── -->
+    <div id="pane-obligations" class="pane">
+      <div id="ob-summary" class="summary-bar"></div>
+      <div class="tracker-wrap">
+        <div id="ob-loading" style="padding:32px;text-align:center;color:var(--mist)">Loading obligations…</div>
+        <table class="tracker-tbl" id="ob-tbl" style="display:none">
+          <thead><tr>
+            <th style="width:36px">#</th>
+            <th style="width:90px">Party</th>
+            <th style="width:110px">Type</th>
+            <th>Description</th>
+            <th style="width:140px">Trigger</th>
+            <th style="width:100px">Deadline</th>
+            <th style="width:120px">Notice Required</th>
+            <th style="width:115px">Owner</th>
+            <th style="width:115px">Status</th>
+          </tr></thead>
+          <tbody id="ob-tbody"></tbody>
+        </table>
+      </div>
+    </div><!-- /pane-obligations -->
+
+    <!-- ── Documents Tab ─────────────────────────────── -->
+    <div id="pane-documents" class="pane">
+      <div class="card section-gap">
+        <div class="card-header">
+          <svg width="16" height="16" fill="none" stroke="var(--gold)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+          <span class="card-title">Downloads &amp; Reports</span>
+        </div>
+        <div class="card-body">
+          <div class="doc-links-grid">
+            {% if contract.pdf_report_path or contract.report_path %}
+            <a class="doc-link-card" href="/reports/{{ contract.pdf_report_path or contract.report_path }}" target="_blank">
+              <div class="doc-link-icon">📄</div>
+              <div class="doc-link-label">PDF Report</div>
+              <div class="doc-link-sub">Full analysis report</div>
+            </a>
+            {% endif %}
+            {% if contract.excel_report_path %}
+            <a class="doc-link-card" href="/reports/{{ contract.excel_report_path }}" target="_blank">
+              <div class="doc-link-icon">📊</div>
+              <div class="doc-link-label">Excel Workbook</div>
+              <div class="doc-link-sub">Multi-tab analysis workbook</div>
+            </a>
+            {% endif %}
+            {% if contract.tracker_path %}
+            <a class="doc-link-card" href="/api/document/{{ contract.id }}/tracker" target="_blank">
+              <div class="doc-link-icon">📋</div>
+              <div class="doc-link-label">Excel Tracker</div>
+              <div class="doc-link-sub">Contractual items tracker</div>
+            </a>
+            {% endif %}
+            {% if contract.structured_markdown %}
+            <a class="doc-link-card" href="/api/document/{{ contract.id }}/markdown/download" download>
+              <div class="doc-link-icon">📝</div>
+              <div class="doc-link-label">Structured Markdown</div>
+              <div class="doc-link-sub">{{ contract.structured_markdown|length }} chars · pre-processed</div>
+            </a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      {% if contract.structured_markdown %}
+      <div class="card section-gap">
+        <div class="card-header" style="display:flex;align-items:center;gap:8px">
+          <svg width="16" height="16" fill="none" stroke="var(--gold)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+          <span class="card-title">Structured Markdown Preview</span>
+          <a href="/api/document/{{ contract.id }}/markdown/download" class="btn btn-outline" style="margin-left:auto;padding:5px 12px;font-size:0.78rem" download>↓ Download .md</a>
+        </div>
+        <div class="card-body">
+          <div style="font-size:0.75rem;color:var(--mist);margin-bottom:8px">
+            {{ contract.structured_markdown|length }} chars · Pre-processed clean version of the document
+          </div>
+          <div class="raw-text" style="max-height:500px;overflow-y:auto;font-size:0.77rem;line-height:1.6">{{ contract.structured_markdown[:6000] }}{% if contract.structured_markdown|length > 6000 %}
+
+… [{{ contract.structured_markdown|length - 6000 }} more chars — download full file]{% endif %}</div>
+        </div>
+      </div>
+      {% endif %}
+    </div><!-- /pane-documents -->
+
     {% else %}
     <!-- Not yet analysed -->
     <div style="text-align:center;padding:60px;color:var(--mist)">
@@ -889,12 +1249,46 @@
 </main>
 
 <script>
+'use strict';
+const DOC_ID = '{{ contract.id }}';
+
+// ── Utilities ─────────────────────────────────────────────────
+function escH(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(html, type) {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.style.cssText = [
+    'padding:12px 18px','border-radius:6px','font-size:0.85rem',
+    'box-shadow:0 4px 16px rgba(0,0,0,0.15)','max-width:360px',
+    'line-height:1.5','animation:fadein-toast 0.2s ease',
+    type === 'success'
+      ? 'background:#1a1f2e;color:#f4f1eb;border-left:4px solid #c8a96e'
+      : 'background:#fee2e2;color:#7f1d1d;border-left:4px solid #dc2626',
+  ].join(';');
+  t.innerHTML = html;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
+}
+
+// ── Tab switching ─────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.page-tab').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('pane-' + name).classList.add('active');
+  if (name === 'tracker'     && !trackerLoaded)  loadTracker();
+  if (name === 'obligations' && !obLoaded)       loadObligations();
+}
+
+// ── Run analysis (not-yet-analysed page) ─────────────────────
 async function runAnalysis() {
-  const id = '{{ contract.id }}';
   const btn = document.querySelector('.btn-gold');
   if (btn) { btn.disabled = true; btn.textContent = 'Analysing…'; }
   try {
-    const r = await fetch(`/api/analyse/${id}`, { method: 'POST' });
+    const r = await fetch(`/api/analyse/${DOC_ID}`, { method: 'POST' });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail);
     location.reload();
@@ -904,26 +1298,21 @@ async function runAnalysis() {
   }
 }
 
+// ── Regenerate reports ────────────────────────────────────────
 async function regenerateReports() {
-  const id   = '{{ contract.id }}';
   const btn  = document.getElementById('btn-regen');
   const icon = document.getElementById('regen-icon');
   if (!btn) return;
-
   btn.disabled = true;
   icon.style.animation = 'spin-regen 1s linear infinite';
-
   try {
-    const r = await fetch(`/api/document/${id}/regenerate-reports`, { method: 'POST' });
+    const r = await fetch(`/api/document/${DOC_ID}/regenerate-reports`, { method: 'POST' });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Regeneration failed');
-
     showToast(
       `Reports regenerated — <a href="/reports/${d.pdf}" target="_blank" style="color:var(--gold)">PDF</a>` +
-      ` · <a href="/reports/${d.excel}" target="_blank" style="color:#86efac">Excel</a>`,
-      'success'
+      ` · <a href="/reports/${d.excel}" target="_blank" style="color:#86efac">Excel</a>`, 'success'
     );
-    // Refresh download links without full reload
     setTimeout(() => location.reload(), 2500);
   } catch(e) {
     showToast('Regeneration failed: ' + e.message, 'error');
@@ -932,24 +1321,316 @@ async function regenerateReports() {
   }
 }
 
-function showToast(html, type) {
-  const c = document.getElementById('toast-container');
-  const t = document.createElement('div');
-  t.style.cssText = [
-    'padding:12px 18px', 'border-radius:6px', 'font-size:0.85rem',
-    'box-shadow:0 4px 16px rgba(0,0,0,0.15)', 'max-width:340px',
-    'line-height:1.5', 'animation:fadein-toast 0.2s ease',
-    type === 'success'
-      ? 'background:#1a1f2e;color:#f4f1eb;border-left:4px solid #c8a96e'
-      : 'background:#fee2e2;color:#7f1d1d;border-left:4px solid #dc2626',
-  ].join(';');
-  t.innerHTML = html;
-  c.appendChild(t);
-  setTimeout(() => t.remove(), 6000);
+// ── Tracker ───────────────────────────────────────────────────
+const PILLAR_COLORS = {
+  money:'#16a34a', time:'#d97706', scope:'#1d4ed8',
+  risk_liability:'#dc2626', relationships:'#7c3aed',
+  administration:'#0891b2', exit:'#6b7280',
+};
+const OWNERS    = ['','Contracts','Legal','Estimating','Operations','Management'];
+const STATUSES  = ['Open','In Review','Agreed','Escalated','Closed'];
+const OB_OWNERS = ['','Contracts','Legal','Project Manager','Site Supervisor','Estimating'];
+const OB_STATUSES = ['Open','Complete','Overdue','N/A'];
+
+let trackerLoaded = false, obLoaded = false;
+let allIssues = [], allObligations = [];
+let sevFilter = 'all', statusFilter = 'all';
+
+async function loadTracker() {
+  try {
+    const r = await fetch(`/api/document/${DOC_ID}/issues`);
+    if (!r.ok) throw new Error('Failed');
+    allIssues = await r.json();
+    trackerLoaded = true;
+    applyFilters();
+    document.getElementById('met-items').textContent = allIssues.length;
+    document.getElementById('met-legal').textContent = allIssues.filter(i => i.requires_legal).length;
+  } catch(e) {
+    document.getElementById('tracker-loading').textContent = 'Failed to load issues — ' + e.message;
+  }
+}
+
+function filterSev(sev, btn) {
+  sevFilter = sev;
+  document.querySelectorAll('#filter-sev .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  applyFilters();
+}
+function filterStatus(st, btn) {
+  statusFilter = st;
+  document.querySelectorAll('#filter-status .filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  applyFilters();
+}
+
+function applyFilters() {
+  const visible = allIssues.filter(i => {
+    if (sevFilter === 'legal') return i.requires_legal;
+    if (sevFilter !== 'all' && i.severity !== sevFilter) return false;
+    if (statusFilter !== 'all' && (i.status||'Open') !== statusFilter) return false;
+    return true;
+  });
+  renderTracker(visible);
+  updateTrackerSummary();
+}
+
+function updateTrackerSummary() {
+  const c = {Open:0,'In Review':0,Agreed:0,Escalated:0,Closed:0};
+  allIssues.forEach(i => { const s = i.status||'Open'; c[s] = (c[s]||0)+1; });
+  document.getElementById('tracker-summary').innerHTML =
+    `<div class="sum-item"><div class="sum-label">Total</div><div class="sum-value">${allIssues.length}</div></div>
+     <div class="sum-item"><div class="sum-label">Open</div><div class="sum-value">${c.Open||0}</div></div>
+     <div class="sum-item"><div class="sum-label">In Review</div><div class="sum-value">${c['In Review']||0}</div></div>
+     <div class="sum-item"><div class="sum-label">Agreed</div><div class="sum-value sum-green">${c.Agreed||0}</div></div>
+     <div class="sum-item"><div class="sum-label">Escalated</div><div class="sum-value sum-red">${c.Escalated||0}</div></div>
+     <div class="sum-item"><div class="sum-label">Closed</div><div class="sum-value">${c.Closed||0}</div></div>`;
+}
+
+function renderTracker(issues) {
+  document.getElementById('tracker-loading').style.display = 'none';
+  const tbl = document.getElementById('tracker-tbl');
+  tbl.style.display = '';
+  const tbody = document.getElementById('tracker-tbody');
+  if (!issues.length) {
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--mist)">No issues match current filters</td></tr>';
+    return;
+  }
+  tbody.innerHTML = issues.map(iss => {
+    const pid = iss.pillar||'';
+    const pc  = PILLAR_COLORS[pid]||'#6b7280';
+    const pName = pid.replace('_',' ').replace(/\b\w/g, c => c.toUpperCase());
+    const sev = iss.severity||'';
+    const status = iss.status||'Open';
+    const ownerOpts = OWNERS.map(o => `<option value="${escH(o)}" ${(iss.internal_owner||'')==o?'selected':''}>${o||'—'}</option>`).join('');
+    const stOpts    = STATUSES.map(s => `<option value="${escH(s)}" ${status===s?'selected':''}>${s}</option>`).join('');
+    return `<tr id="irow-${iss.id}">
+      <td class="ob-id">C${String(iss.id).padStart(3,'0')}</td>
+      <td><span class="pillar-dot" style="background:${pc}"></span>${escH(pName)}</td>
+      <td style="font-size:0.75rem;color:var(--mist)">${escH(iss.clause_reference||'')}</td>
+      <td>
+        <div style="font-weight:600;font-size:0.82rem">${escH(iss.issue||'')}</div>
+        ${iss.primary_ask?`<div style="font-size:0.76rem;color:var(--mist);margin-top:2px">Ask: ${escH(iss.primary_ask)}</div>`:''}
+      </td>
+      <td><span class="sev-badge sev-${escH(sev)}">${escH(sev)}</span></td>
+      <td style="font-size:0.76rem;color:var(--mist)">${escH(iss.fallback||iss.response_strategy||'')}</td>
+      <td>
+        <textarea class="cell-edit" rows="2"
+          onchange="saveIssueField(${iss.id},'proposed_response',this.value)"
+          placeholder="Add response…">${escH(iss.proposed_response||'')}</textarea>
+        <span class="save-ind" id="si-${iss.id}-proposed_response"></span>
+      </td>
+      <td>
+        <select class="cell-select" onchange="saveIssueField(${iss.id},'internal_owner',this.value)">${ownerOpts}</select>
+        <span class="save-ind" id="si-${iss.id}-internal_owner"></span>
+      </td>
+      <td style="text-align:center">
+        <input type="checkbox" class="cell-check" ${iss.requires_legal?'checked':''}
+          onchange="saveIssueField(${iss.id},'requires_legal',this.checked?1:0)">
+        <span class="save-ind" id="si-${iss.id}-requires_legal"></span>
+      </td>
+      <td>
+        <select class="cell-select" onchange="saveIssueField(${iss.id},'status',this.value)">${stOpts}</select>
+        <span class="save-ind" id="si-${iss.id}-status"></span>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function saveIssueField(issueId, field, value) {
+  const ind = document.getElementById(`si-${issueId}-${field}`);
+  if (ind) { ind.className='save-ind save-saving'; ind.textContent='Saving…'; }
+  try {
+    const r = await fetch(`/api/document/${DOC_ID}/issue/${issueId}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({field, value}),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail||'Save failed');
+    const iss = allIssues.find(i => i.id === issueId);
+    if (iss) { iss[field] = value; if (field==='status'||field==='requires_legal') { updateTrackerSummary(); document.getElementById('met-legal').textContent = allIssues.filter(i=>i.requires_legal).length; } }
+    if (ind) { ind.className='save-ind save-ok'; ind.textContent='✓'; setTimeout(()=>{ if(ind)ind.textContent=''; },2000); }
+  } catch(e) {
+    if (ind) { ind.className='save-ind save-err'; ind.textContent='✗ Failed'; }
+  }
+}
+
+async function markAllReviewed() {
+  const opens = allIssues.filter(i => (i.status||'Open')==='Open');
+  if (!opens.length) { showToast('No open issues to update.',''); return; }
+  let ok = 0;
+  for (const iss of opens) {
+    try {
+      await fetch(`/api/document/${DOC_ID}/issue/${iss.id}`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({field:'status', value:'In Review'}),
+      });
+      iss.status = 'In Review';
+      ok++;
+    } catch(e) {}
+  }
+  applyFilters();
+  showToast(`${ok} issue${ok!==1?'s':''} marked In Review`, 'success');
+}
+
+// ── Obligations ───────────────────────────────────────────────
+async function loadObligations() {
+  try {
+    const r = await fetch(`/api/document/${DOC_ID}/obligations`);
+    if (!r.ok) throw new Error('Failed');
+    allObligations = await r.json();
+    obLoaded = true;
+    renderObligations();
+    updateObSummary();
+  } catch(e) {
+    document.getElementById('ob-loading').textContent = 'Failed to load obligations — ' + e.message;
+  }
+}
+
+function deadlineClass(dl) {
+  if (!dl) return '';
+  const diff = (new Date(dl) - new Date()) / 86400000;
+  return diff < 0 ? 'deadline-past' : diff <= 30 ? 'deadline-soon' : '';
+}
+
+function updateObSummary() {
+  const now = new Date();
+  let open=0, dueSoon=0, overdue=0, complete=0;
+  allObligations.forEach(ob => {
+    const st = ob.status||'Open';
+    if (st==='Complete') { complete++; return; }
+    open++;
+    if (ob.deadline) {
+      const diff = (new Date(ob.deadline)-now)/86400000;
+      if (diff < 0) overdue++;
+      else if (diff <= 30) dueSoon++;
+    }
+  });
+  document.getElementById('ob-summary').innerHTML =
+    `<div class="sum-item"><div class="sum-label">Total</div><div class="sum-value">${allObligations.length}</div></div>
+     <div class="sum-item"><div class="sum-label">Open</div><div class="sum-value">${open}</div></div>
+     <div class="sum-item"><div class="sum-label">Due ≤30 days</div><div class="sum-value sum-amber">${dueSoon}</div></div>
+     <div class="sum-item"><div class="sum-label">Overdue</div><div class="sum-value sum-red">${overdue}</div></div>
+     <div class="sum-item"><div class="sum-label">Complete</div><div class="sum-value sum-green">${complete}</div></div>`;
+}
+
+function renderObligations() {
+  document.getElementById('ob-loading').style.display = 'none';
+  document.getElementById('ob-tbl').style.display = '';
+  const tbody = document.getElementById('ob-tbody');
+  if (!allObligations.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--mist)">No obligations recorded for this document</td></tr>';
+    return;
+  }
+  tbody.innerHTML = allObligations.map((ob, i) => {
+    const dlCls = deadlineClass(ob.deadline);
+    const owOpts = OB_OWNERS.map(o => `<option value="${escH(o)}" ${(ob.owner||'')==o?'selected':''}>${o||'—'}</option>`).join('');
+    const stOpts = OB_STATUSES.map(s => `<option value="${escH(s)}" ${(ob.status||'Open')===s?'selected':''}>${s}</option>`).join('');
+    return `<tr id="obrow-${ob.id}">
+      <td class="ob-id">${i+1}</td>
+      <td style="font-weight:500;font-size:0.82rem">${escH(ob.party||'')}</td>
+      <td><span class="sev-badge sev-Medium" style="font-size:0.7rem;font-weight:500">${escH(ob.obligation_type||'')}</span></td>
+      <td style="font-size:0.82rem">${escH(ob.description||'')}</td>
+      <td style="font-size:0.78rem;color:var(--mist)">${escH(ob.trigger||'')}</td>
+      <td><span class="${dlCls}">${escH(ob.deadline||'—')}</span></td>
+      <td style="font-size:0.78rem;color:var(--mist)">${escH(ob.notice_required||'—')}</td>
+      <td>
+        <select class="cell-select" onchange="saveObField(${ob.id},'owner',this.value)">${owOpts}</select>
+        <span class="save-ind" id="so-${ob.id}-owner"></span>
+      </td>
+      <td>
+        <select class="cell-select" onchange="saveObField(${ob.id},'status',this.value)">${stOpts}</select>
+        <span class="save-ind" id="so-${ob.id}-status"></span>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Review Context panel ──────────────────────────────────────────────────
+let ctxPfTags = [];
+(function initCtxTags() {
+  const raw = {{ (contract.product_families_json or '[]') | safe }};
+  ctxPfTags = Array.isArray(raw) ? raw : (typeof raw === 'string' ? JSON.parse(raw) : []);
+  renderPfTags();
+})();
+
+function renderPfTags() {
+  const el = document.getElementById('pfTagsDisplay');
+  if (!el) return;
+  el.innerHTML = ctxPfTags.map((t,i) =>
+    `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--ink);color:#fff;padding:3px 10px;border-radius:20px;font-size:0.78rem;">
+      ${escH(t)}
+      <button onclick="removePfTag(${i})" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:1rem;line-height:1;padding:0;">×</button>
+    </span>`
+  ).join('');
+}
+
+function removePfTag(i) {
+  ctxPfTags.splice(i, 1);
+  renderPfTags();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  const pfIn = document.getElementById('pfTagInput');
+  if (pfIn) {
+    pfIn.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const v = pfIn.value.trim();
+        if (v && !ctxPfTags.includes(v)) { ctxPfTags.push(v); renderPfTags(); }
+        pfIn.value = '';
+      }
+    });
+  }
+});
+
+function toggleCtx() {
+  const form = document.getElementById('ctxForm');
+  const btn = document.getElementById('ctxToggleBtn');
+  if (form.style.display === 'none') { form.style.display = ''; btn.textContent = 'Hide'; }
+  else { form.style.display = 'none'; btn.textContent = 'Show'; }
+}
+
+async function saveContext() {
+  const status = document.getElementById('ctxSaveStatus');
+  if (status) { status.textContent = 'Saving…'; status.style.color = 'var(--mist)'; }
+  const body = {
+    business_role:   document.getElementById('ctx_business_role')?.value || '',
+    jurisdiction:    document.getElementById('ctx_jurisdiction')?.value || '',
+    delivery_model:  document.getElementById('ctx_delivery_model')?.value || '',
+    product_families: ctxPfTags,
+    review_notes:    document.getElementById('ctx_review_notes')?.value || '',
+  };
+  try {
+    const res = await fetch(`/api/document/${DOC_ID}/context`, {
+      method: 'PATCH', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Save failed');
+    if (status) { status.textContent = '✓ Saved'; status.style.color = 'var(--green)'; }
+    setTimeout(() => { if (status) status.textContent = ''; }, 3000);
+  } catch(e) {
+    if (status) { status.textContent = '✗ ' + e.message; status.style.color = 'var(--red)'; }
+  }
+}
+
+async function saveObField(obId, field, value) {
+  const ind = document.getElementById(`so-${obId}-${field}`);
+  if (ind) { ind.className='save-ind save-saving'; ind.textContent='Saving…'; }
+  try {
+    const r = await fetch(`/api/document/${DOC_ID}/obligation/${obId}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({field, value}),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail||'Save failed');
+    const ob = allObligations.find(o => o.id === obId);
+    if (ob) { ob[field] = value; updateObSummary(); }
+    if (ind) { ind.className='save-ind save-ok'; ind.textContent='✓'; setTimeout(()=>{ if(ind)ind.textContent=''; },2000); }
+  } catch(e) {
+    if (ind) { ind.className='save-ind save-err'; ind.textContent='✗ Failed'; }
+  }
 }
 </script>
 <style>
-@keyframes spin-regen { to { transform: rotate(360deg); } }
+@keyframes spin-regen { to { transform:rotate(360deg); } }
 @keyframes fadein-toast { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
 </style>
 </body>

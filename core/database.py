@@ -135,6 +135,168 @@ class Database:
                     created_date TEXT,
                     FOREIGN KEY (document_id) REFERENCES documents(id)
                 );
+
+                -- ── Knowledge & Rules Layer ──────────────────────────────────
+
+                CREATE TABLE IF NOT EXISTS company_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    clause_type TEXT NOT NULL,
+                    pillar TEXT,
+                    position_summary TEXT NOT NULL,
+                    acceptable_deviation TEXT,
+                    hard_limit TEXT,
+                    priority INTEGER DEFAULT 5,
+                    active INTEGER DEFAULT 1,
+                    created_date TEXT,
+                    notes TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS insurance_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    insurance_type TEXT NOT NULL,
+                    minimum_coverage_text TEXT,
+                    minimum_coverage_amount REAL,
+                    preferred_coverage_amount REAL,
+                    required INTEGER DEFAULT 1,
+                    notes TEXT,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS escalation_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_name TEXT NOT NULL,
+                    pillar TEXT,
+                    trigger_keywords TEXT,
+                    trigger_condition TEXT,
+                    minimum_severity TEXT DEFAULT 'High',
+                    requires_legal INTEGER DEFAULT 0,
+                    requires_exec INTEGER DEFAULT 0,
+                    escalation_note TEXT,
+                    priority INTEGER DEFAULT 5,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS product_risk_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_family TEXT NOT NULL,
+                    risk_category TEXT,
+                    typical_concern TEXT,
+                    recommended_clause_language TEXT,
+                    pillar TEXT,
+                    notes TEXT,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS commercial_term_library (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    term_name TEXT NOT NULL,
+                    term_category TEXT,
+                    pillar TEXT,
+                    our_standard TEXT,
+                    minimum_acceptable TEXT,
+                    never_accept TEXT,
+                    notes TEXT,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS product_term_risk_map (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_family TEXT NOT NULL,
+                    term_name TEXT NOT NULL,
+                    concern_level TEXT DEFAULT 'Medium',
+                    specific_concern TEXT,
+                    recommended_action TEXT,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS deliverable_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_type TEXT NOT NULL,
+                    deliverable_name TEXT NOT NULL,
+                    description TEXT,
+                    typical_acceptance_criteria TEXT,
+                    notes TEXT,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS clause_playbooks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    playbook_name TEXT NOT NULL,
+                    pillar TEXT,
+                    clause_type TEXT,
+                    trigger_pattern TEXT,
+                    situation_description TEXT,
+                    recommended_response TEXT,
+                    fallback_position TEXT,
+                    escalate INTEGER DEFAULT 0,
+                    notes TEXT,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS review_routing_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_name TEXT NOT NULL,
+                    condition_description TEXT,
+                    trigger_keywords TEXT,
+                    trigger_pillar TEXT,
+                    trigger_severity TEXT,
+                    route_to TEXT NOT NULL,
+                    routing_note TEXT,
+                    priority INTEGER DEFAULT 5,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS negotiation_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    counterparty TEXT,
+                    clause_type TEXT,
+                    pillar TEXT,
+                    our_position TEXT,
+                    their_position TEXT,
+                    outcome TEXT,
+                    settlement_language TEXT,
+                    project_reference TEXT,
+                    date_recorded TEXT,
+                    notes TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS supplier_intelligence (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    counterparty TEXT NOT NULL,
+                    intel_type TEXT,
+                    clause_type TEXT,
+                    their_standard_position TEXT,
+                    flexibility_observed TEXT,
+                    general_intel TEXT,
+                    source TEXT,
+                    date_recorded TEXT,
+                    active INTEGER DEFAULT 1,
+                    notes TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS project_type_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_type TEXT NOT NULL,
+                    typical_risks TEXT,
+                    key_clauses_to_watch TEXT,
+                    recommended_pillars TEXT,
+                    delivery_model TEXT,
+                    notes TEXT,
+                    active INTEGER DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS jurisdiction_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    jurisdiction TEXT NOT NULL,
+                    rule_category TEXT,
+                    rule_name TEXT NOT NULL,
+                    rule_description TEXT,
+                    impact_on_contract TEXT,
+                    pillar TEXT,
+                    requires_legal INTEGER DEFAULT 0,
+                    active INTEGER DEFAULT 1,
+                    notes TEXT
+                );
             """)
             conn.commit()
 
@@ -142,19 +304,38 @@ class Database:
 
     def _evolve_schema(self):
         """Add columns introduced after the initial release. Silent on duplicates."""
-        new_cols = [
+        docs_cols = [
             ("structured_markdown",    "TEXT"),
             ("contractual_items_json", "TEXT"),
             ("tracker_path",           "TEXT"),
+            ("business_role",          "TEXT"),
+            ("delivery_model",         "TEXT"),
+            ("product_families_json",  "TEXT"),
+            ("jurisdiction",           "TEXT"),
+            ("review_notes",           "TEXT"),
+        ]
+        ni_cols = [
+            ("proposed_response", "TEXT"),
+        ]
+        ob_cols = [
+            ("notes", "TEXT"),
         ]
         with self._conn() as conn:
-            for col, col_type in new_cols:
+            for col, col_type in docs_cols:
                 try:
-                    conn.execute(
-                        f"ALTER TABLE documents ADD COLUMN {col} {col_type}"
-                    )
+                    conn.execute(f"ALTER TABLE documents ADD COLUMN {col} {col_type}")
                 except Exception:
-                    pass  # column already exists
+                    pass
+            for col, col_type in ni_cols:
+                try:
+                    conn.execute(f"ALTER TABLE negotiation_issues ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
+            for col, col_type in ob_cols:
+                try:
+                    conn.execute(f"ALTER TABLE obligations ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
             conn.commit()
 
     # ── Legacy migration ──────────────────────────────────────────────────────
@@ -251,7 +432,13 @@ class Database:
                 "word_count, page_count, doc_type, doc_type_confidence, "
                 "risk_score, risk_level, executive_summary, "
                 "pdf_report_path, excel_report_path, tracker_path, "
-                "counterparty, contract_value, project_id "
+                "counterparty, contract_value, project_id, "
+                "CASE WHEN structured_markdown IS NOT NULL "
+                "     AND LENGTH(structured_markdown) > 100 "
+                "     THEN 1 ELSE 0 END as has_markdown, "
+                "CASE WHEN structured_markdown IS NOT NULL "
+                "     THEN LENGTH(structured_markdown) "
+                "     ELSE 0 END as markdown_length "
                 "FROM documents ORDER BY upload_date DESC"
             ).fetchall()
         return [dict(r) for r in rows]
@@ -417,6 +604,56 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_issues_for_document(self, doc_id: str) -> List[Dict]:
+        """All negotiation issues ordered by severity (Critical first) then id."""
+        sev_order = "CASE severity WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END"
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM negotiation_issues WHERE document_id = ? ORDER BY {sev_order}, id",
+                (doc_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_obligations_for_document(self, doc_id: str) -> List[Dict]:
+        """All obligations ordered by deadline ASC (nulls last) then id."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM obligations WHERE document_id = ? "
+                "ORDER BY CASE WHEN deadline IS NULL OR deadline = '' THEN 1 ELSE 0 END, deadline, id",
+                (doc_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    _ISSUE_FIELDS = frozenset({
+        "proposed_response", "internal_owner", "requires_legal",
+        "status", "counterparty_position", "response_strategy",
+    })
+    _OBLIGATION_FIELDS = frozenset({"owner", "status", "deadline", "notes"})
+
+    def update_issue(self, issue_id: int, field: str, value) -> bool:
+        """Update a single validated field on a negotiation_issue row."""
+        if field not in self._ISSUE_FIELDS:
+            return False
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE negotiation_issues SET {field} = ? WHERE id = ?",
+                (value, issue_id)
+            )
+            conn.commit()
+        return True
+
+    def update_obligation_field(self, ob_id: int, field: str, value) -> bool:
+        """Update a single validated field on an obligation row."""
+        if field not in self._OBLIGATION_FIELDS:
+            return False
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE obligations SET {field} = ? WHERE id = ?",
+                (value, ob_id)
+            )
+            conn.commit()
+        return True
+
     def update_negotiation_issue(self, issue_id: int, updates: Dict[str, Any]):
         if not updates:
             return
@@ -482,6 +719,299 @@ class Database:
                 (doc_id,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Document Context ─────────────────────────────────────────────────────
+
+    def update_document_context(self, doc_id: str, context: Dict[str, Any]):
+        """Update review context fields on a document."""
+        allowed = {"business_role", "delivery_model", "product_families_json",
+                   "jurisdiction", "review_notes"}
+        updates = {k: v for k, v in context.items() if k in allowed}
+        if updates:
+            self.update_document(doc_id, updates)
+
+    # ── Knowledge Layer — generic helpers ────────────────────────────────────
+
+    def _kget_all(self, table: str, active_only: bool = True) -> List[Dict]:
+        where = "WHERE active = 1" if active_only else ""
+        with self._conn() as conn:
+            rows = conn.execute(f"SELECT * FROM {table} {where} ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+    def _kget_by_id(self, table: str, row_id: int) -> Optional[Dict]:
+        with self._conn() as conn:
+            row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone()
+        return dict(row) if row else None
+
+    def _kcreate(self, table: str, data: Dict[str, Any]) -> int:
+        cols = ", ".join(data.keys())
+        placeholders = ", ".join("?" * len(data))
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"INSERT INTO {table} ({cols}) VALUES ({placeholders})",
+                list(data.values())
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def _kupdate(self, table: str, row_id: int, updates: Dict[str, Any]):
+        if not updates:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+        values = list(updates.values()) + [row_id]
+        with self._conn() as conn:
+            conn.execute(f"UPDATE {table} SET {set_clause} WHERE id = ?", values)
+            conn.commit()
+
+    def _kdeactivate(self, table: str, row_id: int):
+        with self._conn() as conn:
+            conn.execute(f"UPDATE {table} SET active = 0 WHERE id = ?", (row_id,))
+            conn.commit()
+
+    def _kdelete(self, table: str, row_id: int):
+        with self._conn() as conn:
+            conn.execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
+            conn.commit()
+
+    # ── company_positions ────────────────────────────────────────────────────
+
+    def get_all_company_positions(self, active_only=True): return self._kget_all("company_positions", active_only)
+    def get_company_position(self, row_id): return self._kget_by_id("company_positions", row_id)
+    def create_company_position(self, data): return self._kcreate("company_positions", data)
+    def update_company_position(self, row_id, updates): self._kupdate("company_positions", row_id, updates)
+    def deactivate_company_position(self, row_id): self._kdeactivate("company_positions", row_id)
+    def delete_company_position(self, row_id): self._kdelete("company_positions", row_id)
+
+    def get_positions_for_pillar(self, pillar: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM company_positions WHERE (pillar = ? OR pillar IS NULL) AND active = 1 ORDER BY priority, id",
+                (pillar,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── insurance_positions ──────────────────────────────────────────────────
+
+    def get_all_insurance_positions(self, active_only=True): return self._kget_all("insurance_positions", active_only)
+    def get_insurance_position(self, row_id): return self._kget_by_id("insurance_positions", row_id)
+    def create_insurance_position(self, data): return self._kcreate("insurance_positions", data)
+    def update_insurance_position(self, row_id, updates): self._kupdate("insurance_positions", row_id, updates)
+    def deactivate_insurance_position(self, row_id): self._kdeactivate("insurance_positions", row_id)
+    def delete_insurance_position(self, row_id): self._kdelete("insurance_positions", row_id)
+
+    # ── escalation_rules ─────────────────────────────────────────────────────
+
+    def get_all_escalation_rules(self, active_only=True): return self._kget_all("escalation_rules", active_only)
+    def get_escalation_rule(self, row_id): return self._kget_by_id("escalation_rules", row_id)
+    def create_escalation_rule(self, data): return self._kcreate("escalation_rules", data)
+    def update_escalation_rule(self, row_id, updates): self._kupdate("escalation_rules", row_id, updates)
+    def deactivate_escalation_rule(self, row_id): self._kdeactivate("escalation_rules", row_id)
+    def delete_escalation_rule(self, row_id): self._kdelete("escalation_rules", row_id)
+
+    def get_escalation_rules_for_pillar(self, pillar: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM escalation_rules WHERE (pillar = ? OR pillar IS NULL) AND active = 1 ORDER BY priority, id",
+                (pillar,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── product_risk_profiles ────────────────────────────────────────────────
+
+    def get_all_product_risk_profiles(self, active_only=True): return self._kget_all("product_risk_profiles", active_only)
+    def get_product_risk_profile(self, row_id): return self._kget_by_id("product_risk_profiles", row_id)
+    def create_product_risk_profile(self, data): return self._kcreate("product_risk_profiles", data)
+    def update_product_risk_profile(self, row_id, updates): self._kupdate("product_risk_profiles", row_id, updates)
+    def deactivate_product_risk_profile(self, row_id): self._kdeactivate("product_risk_profiles", row_id)
+    def delete_product_risk_profile(self, row_id): self._kdelete("product_risk_profiles", row_id)
+
+    def get_profiles_for_product(self, product_family: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM product_risk_profiles WHERE product_family = ? AND active = 1 ORDER BY pillar, id",
+                (product_family,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── commercial_term_library ──────────────────────────────────────────────
+
+    def get_all_commercial_terms(self, active_only=True): return self._kget_all("commercial_term_library", active_only)
+    def get_commercial_term(self, row_id): return self._kget_by_id("commercial_term_library", row_id)
+    def create_commercial_term(self, data): return self._kcreate("commercial_term_library", data)
+    def update_commercial_term(self, row_id, updates): self._kupdate("commercial_term_library", row_id, updates)
+    def deactivate_commercial_term(self, row_id): self._kdeactivate("commercial_term_library", row_id)
+    def delete_commercial_term(self, row_id): self._kdelete("commercial_term_library", row_id)
+
+    def search_commercial_terms(self, term_name: str = None, pillar: str = None) -> List[Dict]:
+        query = "SELECT * FROM commercial_term_library WHERE active = 1"
+        params = []
+        if term_name:
+            query += " AND LOWER(term_name) LIKE ?"
+            params.append(f"%{term_name.lower()}%")
+        if pillar:
+            query += " AND (pillar = ? OR pillar IS NULL)"
+            params.append(pillar)
+        query += " ORDER BY term_name"
+        with self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── product_term_risk_map ────────────────────────────────────────────────
+
+    def get_all_product_term_maps(self, active_only=True): return self._kget_all("product_term_risk_map", active_only)
+    def get_product_term_map(self, row_id): return self._kget_by_id("product_term_risk_map", row_id)
+    def create_product_term_map(self, data): return self._kcreate("product_term_risk_map", data)
+    def update_product_term_map(self, row_id, updates): self._kupdate("product_term_risk_map", row_id, updates)
+    def deactivate_product_term_map(self, row_id): self._kdeactivate("product_term_risk_map", row_id)
+    def delete_product_term_map(self, row_id): self._kdelete("product_term_risk_map", row_id)
+
+    def get_term_risks_for_product(self, product_family: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM product_term_risk_map WHERE product_family = ? AND active = 1 ORDER BY concern_level, id",
+                (product_family,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── deliverable_templates ────────────────────────────────────────────────
+
+    def get_all_deliverable_templates(self, active_only=True): return self._kget_all("deliverable_templates", active_only)
+    def get_deliverable_template(self, row_id): return self._kget_by_id("deliverable_templates", row_id)
+    def create_deliverable_template(self, data): return self._kcreate("deliverable_templates", data)
+    def update_deliverable_template(self, row_id, updates): self._kupdate("deliverable_templates", row_id, updates)
+    def deactivate_deliverable_template(self, row_id): self._kdeactivate("deliverable_templates", row_id)
+    def delete_deliverable_template(self, row_id): self._kdelete("deliverable_templates", row_id)
+
+    def get_templates_for_project_type(self, project_type: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM deliverable_templates WHERE project_type = ? AND active = 1 ORDER BY deliverable_name",
+                (project_type,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── clause_playbooks ─────────────────────────────────────────────────────
+
+    def get_all_clause_playbooks(self, active_only=True): return self._kget_all("clause_playbooks", active_only)
+    def get_clause_playbook(self, row_id): return self._kget_by_id("clause_playbooks", row_id)
+    def create_clause_playbook(self, data): return self._kcreate("clause_playbooks", data)
+    def update_clause_playbook(self, row_id, updates): self._kupdate("clause_playbooks", row_id, updates)
+    def deactivate_clause_playbook(self, row_id): self._kdeactivate("clause_playbooks", row_id)
+    def delete_clause_playbook(self, row_id): self._kdelete("clause_playbooks", row_id)
+
+    def get_playbooks_for_pillar(self, pillar: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM clause_playbooks WHERE (pillar = ? OR pillar IS NULL) AND active = 1 ORDER BY clause_type, id",
+                (pillar,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── review_routing_rules ─────────────────────────────────────────────────
+
+    def get_all_routing_rules(self, active_only=True): return self._kget_all("review_routing_rules", active_only)
+    def get_routing_rule(self, row_id): return self._kget_by_id("review_routing_rules", row_id)
+    def create_routing_rule(self, data): return self._kcreate("review_routing_rules", data)
+    def update_routing_rule(self, row_id, updates): self._kupdate("review_routing_rules", row_id, updates)
+    def deactivate_routing_rule(self, row_id): self._kdeactivate("review_routing_rules", row_id)
+    def delete_routing_rule(self, row_id): self._kdelete("review_routing_rules", row_id)
+
+    def get_routing_rules_for_severity(self, severity: str, pillar: str = None) -> List[Dict]:
+        sev_rank = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+        sev_val = sev_rank.get(severity, 99)
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM review_routing_rules WHERE active = 1 ORDER BY priority, id"
+            ).fetchall()
+        results = []
+        for r in rows:
+            rd = dict(r)
+            ts = rd.get("trigger_severity")
+            tp = rd.get("trigger_pillar")
+            if ts and sev_rank.get(ts, 99) < sev_val:
+                continue  # rule requires higher severity than we have
+            if pillar and tp and tp != pillar:
+                continue
+            results.append(rd)
+        return results
+
+    # ── negotiation_history ──────────────────────────────────────────────────
+
+    def get_all_negotiation_history(self): return self._kget_all("negotiation_history", active_only=False)
+    def get_negotiation_record(self, row_id): return self._kget_by_id("negotiation_history", row_id)
+    def create_negotiation_record(self, data): return self._kcreate("negotiation_history", data)
+    def update_negotiation_record(self, row_id, updates): self._kupdate("negotiation_history", row_id, updates)
+    def delete_negotiation_record(self, row_id): self._kdelete("negotiation_history", row_id)
+
+    def get_history_for_counterparty(self, counterparty: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM negotiation_history WHERE LOWER(counterparty) LIKE ? ORDER BY date_recorded DESC, id DESC",
+                (f"%{counterparty.lower()}%",)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── supplier_intelligence ────────────────────────────────────────────────
+
+    def get_all_supplier_intelligence(self, active_only=True): return self._kget_all("supplier_intelligence", active_only)
+    def get_supplier_intel_record(self, row_id): return self._kget_by_id("supplier_intelligence", row_id)
+    def create_supplier_intel(self, data): return self._kcreate("supplier_intelligence", data)
+    def update_supplier_intel(self, row_id, updates): self._kupdate("supplier_intelligence", row_id, updates)
+    def deactivate_supplier_intel(self, row_id): self._kdeactivate("supplier_intelligence", row_id)
+    def delete_supplier_intel(self, row_id): self._kdelete("supplier_intelligence", row_id)
+
+    def get_intel_for_counterparty(self, counterparty: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM supplier_intelligence WHERE LOWER(counterparty) LIKE ? AND active = 1 ORDER BY intel_type, id",
+                (f"%{counterparty.lower()}%",)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── project_type_profiles ────────────────────────────────────────────────
+
+    def get_all_project_type_profiles(self, active_only=True): return self._kget_all("project_type_profiles", active_only)
+    def get_project_type_profile(self, row_id): return self._kget_by_id("project_type_profiles", row_id)
+    def create_project_type_profile(self, data): return self._kcreate("project_type_profiles", data)
+    def update_project_type_profile(self, row_id, updates): self._kupdate("project_type_profiles", row_id, updates)
+    def deactivate_project_type_profile(self, row_id): self._kdeactivate("project_type_profiles", row_id)
+    def delete_project_type_profile(self, row_id): self._kdelete("project_type_profiles", row_id)
+
+    # ── jurisdiction_rules ───────────────────────────────────────────────────
+
+    def get_all_jurisdiction_rules(self, active_only=True): return self._kget_all("jurisdiction_rules", active_only)
+    def get_jurisdiction_rule(self, row_id): return self._kget_by_id("jurisdiction_rules", row_id)
+    def create_jurisdiction_rule(self, data): return self._kcreate("jurisdiction_rules", data)
+    def update_jurisdiction_rule(self, row_id, updates): self._kupdate("jurisdiction_rules", row_id, updates)
+    def deactivate_jurisdiction_rule(self, row_id): self._kdeactivate("jurisdiction_rules", row_id)
+    def delete_jurisdiction_rule(self, row_id): self._kdelete("jurisdiction_rules", row_id)
+
+    def get_rules_for_jurisdiction(self, jurisdiction: str) -> List[Dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM jurisdiction_rules WHERE LOWER(jurisdiction) LIKE ? AND active = 1 ORDER BY pillar, rule_category, id",
+                (f"%{jurisdiction.lower()}%",)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Knowledge stats ───────────────────────────────────────────────────────
+
+    def get_knowledge_counts(self) -> Dict[str, int]:
+        """Row counts for all knowledge tables (active rows only where applicable)."""
+        tables_active = [
+            "company_positions", "insurance_positions", "escalation_rules",
+            "product_risk_profiles", "commercial_term_library", "product_term_risk_map",
+            "deliverable_templates", "clause_playbooks", "review_routing_rules",
+            "supplier_intelligence", "project_type_profiles", "jurisdiction_rules",
+        ]
+        result = {}
+        with self._conn() as conn:
+            for t in tables_active:
+                n = conn.execute(f"SELECT COUNT(*) FROM {t} WHERE active = 1").fetchone()[0]
+                result[t] = n
+            nh = conn.execute("SELECT COUNT(*) FROM negotiation_history").fetchone()[0]
+            result["negotiation_history"] = nh
+        return result
 
     # ── Stats ─────────────────────────────────────────────────────────────────
 

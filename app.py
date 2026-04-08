@@ -21,6 +21,9 @@ from core.analysis_engine import AnalysisEngine
 from core.report_generator import ReportGenerator
 from core.excel_generator import ExcelGenerator
 from core.database import Database
+from core.knowledge_bootstrap import bootstrap_knowledge
+from core.knowledge_io import KnowledgeIO
+from core.knowledge_engine import KnowledgeEngine
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -48,7 +51,7 @@ def render(template_name: str, **context) -> HTMLResponse:
 db = Database(BASE_DIR / "data" / "contractiq.db")
 doc_processor = DocumentProcessor()
 llm_client = LMStudioClient()
-analysis_engine = AnalysisEngine(llm_client)
+analysis_engine = AnalysisEngine(llm_client, db)
 preprocessor = DocumentPreprocessor(llm_client)
 report_generator = ReportGenerator(REPORTS_DIR)
 excel_generator = ExcelGenerator(REPORTS_DIR)
@@ -73,6 +76,23 @@ def recover_stuck_documents() -> None:
 async def startup_event():
     recover_stuck_documents()
     print("  Recovery check complete")
+
+    # Bootstrap knowledge base (only seeds if tables are empty)
+    inserted = bootstrap_knowledge(db)
+    if any(inserted.values()):
+        total = sum(inserted.values())
+        print(f"  Knowledge Base bootstrapped: {total} rows seeded across {len(inserted)} tables")
+
+    # Print knowledge base stats
+    ke = KnowledgeEngine(db)
+    stats = ke.get_knowledge_summary()
+    print(
+        f"  Knowledge Base: "
+        f"{stats.get('company_positions', 0)} positions, "
+        f"{stats.get('escalation_rules', 0)} escalation rules, "
+        f"{stats.get('product_profiles', 0)} product profiles, "
+        f"{stats.get('commercial_terms', 0)} commercial terms"
+    )
 
 
 # ── Progress store ────────────────────────────────────────────────────────────
@@ -320,6 +340,31 @@ async def upload_document(
         "doc_type": doc_type_hint or "General Contract",
     })
 
+    # Run pre-processing immediately — pure Python, no LLM, completes in <1s
+    try:
+        pre = preprocessor.preprocess(
+            extracted["text"],
+            file.filename,
+            doc_type_hint or "General Contract",
+        )
+        db.update_document(doc_id, {
+            "structured_markdown":   pre["structured_markdown"],
+            "contractual_items_json": json.dumps(pre.get("contractual_items", [])),
+        })
+        has_markdown  = True
+        section_count = pre.get("section_count", 0)
+        noise_pct     = pre.get("noise_removed_pct", 0)
+        print(
+            f"  Pre-processed: {section_count} sections, "
+            f"{noise_pct:.1f}% noise removed, "
+            f"{len(pre['structured_markdown']):,} chars markdown"
+        )
+    except Exception as e:
+        print(f"  Pre-processing warning: {e}")
+        has_markdown  = False
+        section_count = 0
+        noise_pct     = 0
+
     return JSONResponse({
         "doc_id": doc_id,
         "contract_id": doc_id,  # backward-compat alias
@@ -327,6 +372,9 @@ async def upload_document(
         "word_count": extracted["word_count"],
         "page_count": extracted["page_count"],
         "status": "uploaded",
+        "has_markdown": has_markdown,
+        "section_count": section_count,
+        "noise_removed_pct": noise_pct,
     })
 
 
@@ -441,6 +489,30 @@ async def delete_document(doc_id: str):
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
 
 
+@app.patch("/api/document/{doc_id}/issue/{issue_id}")
+async def patch_issue(doc_id: str, issue_id: int, request: Request):
+    body = await request.json()
+    field, value = body.get("field"), body.get("value")
+    if not field:
+        raise HTTPException(status_code=422, detail="field required")
+    ok = db.update_issue(issue_id, field, value)
+    if not ok:
+        raise HTTPException(status_code=422, detail=f"Field '{field}' is not editable")
+    return JSONResponse({"updated": True, "issue_id": issue_id})
+
+
+@app.patch("/api/document/{doc_id}/obligation/{ob_id}")
+async def patch_obligation(doc_id: str, ob_id: int, request: Request):
+    body = await request.json()
+    field, value = body.get("field"), body.get("value")
+    if not field:
+        raise HTTPException(status_code=422, detail="field required")
+    ok = db.update_obligation_field(ob_id, field, value)
+    if not ok:
+        raise HTTPException(status_code=422, detail=f"Field '{field}' is not editable")
+    return JSONResponse({"updated": True, "ob_id": ob_id})
+
+
 @app.get("/api/document/{doc_id}/findings")
 async def get_findings(doc_id: str):
     document = db.get_document(doc_id)
@@ -455,7 +527,7 @@ async def get_obligations(doc_id: str):
     document = db.get_document(doc_id)
     if not document:
         raise HTTPException(status_code=404, detail="Not found")
-    obligations = db.get_obligations(doc_id)
+    obligations = db.get_obligations_for_document(doc_id)
     return JSONResponse(obligations)
 
 
@@ -464,20 +536,48 @@ async def get_negotiation_issues(doc_id: str):
     document = db.get_document(doc_id)
     if not document:
         raise HTTPException(status_code=404, detail="Not found")
-    issues = db.get_negotiation_issues(doc_id)
+    issues = db.get_issues_for_document(doc_id)
     return JSONResponse(issues)
 
 
-@app.get("/api/document/{doc_id}/markdown")
-async def get_markdown(doc_id: str):
+@app.get("/api/document/{doc_id}/markdown/download")
+async def download_markdown(doc_id: str):
+    """Download structured markdown as a .md file attachment."""
+    import re
+    from fastapi.responses import Response as FastAPIResponse
     document = db.get_document(doc_id)
     if not document:
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=404, detail="Document not found")
     md = document.get("structured_markdown")
     if not md:
-        raise HTTPException(status_code=404, detail="Structured markdown not yet generated")
-    from fastapi.responses import PlainTextResponse
-    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
+        raise HTTPException(
+            status_code=404,
+            detail="Markdown not available for this document. Re-analyse to generate it.",
+        )
+    original_name = Path(document["filename"]).stem
+    safe_name = re.sub(r"[^\w\-_]", "_", original_name)
+    filename = f"{safe_name}_processed.md"
+    return FastAPIResponse(
+        content=md,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/document/{doc_id}/markdown")
+async def view_markdown(doc_id: str):
+    """View structured markdown as plain text (no download prompt)."""
+    from fastapi.responses import Response as FastAPIResponse
+    document = db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    md = document.get("structured_markdown")
+    if not md:
+        raise HTTPException(
+            status_code=404,
+            detail="Markdown not available for this document. Re-analyse to generate it.",
+        )
+    return FastAPIResponse(content=md, media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/document/{doc_id}/tracker")
@@ -576,6 +676,149 @@ async def cancel_analysis(doc_id: str):
             "error": None,
         }
     return JSONResponse({"cancelled": True, "id": doc_id})
+
+
+@app.patch("/api/document/{doc_id}/context")
+async def update_document_context(doc_id: str, request: Request):
+    """Update review context fields (business_role, jurisdiction, etc.) for a document."""
+    document = db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    body = await request.json()
+    allowed = {"business_role", "delivery_model", "product_families_json", "review_notes", "jurisdiction", "doc_type"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if "product_families" in body:
+        updates["product_families_json"] = json.dumps(body["product_families"])
+    if updates:
+        db.update_document(doc_id, updates)
+    return JSONResponse({"updated": True, "fields": list(updates.keys())})
+
+
+# ── Knowledge Management API ──────────────────────────────────────────────────
+
+_KNOWLEDGE_TABLES = {
+    "company_positions":    ("get_all_company_positions",    "create_company_position",    "update_company_position",    "deactivate_company_position"),
+    "insurance_positions":  ("get_all_insurance_positions",  "create_insurance_position",  "update_insurance_position",  "deactivate_insurance_position"),
+    "escalation_rules":     ("get_all_escalation_rules",     "create_escalation_rule",     "update_escalation_rule",     "deactivate_escalation_rule"),
+    "product_risk_profiles":("get_all_product_risk_profiles","create_product_risk_profile","update_product_risk_profile","deactivate_product_risk_profile"),
+    "commercial_term_library": ("get_all_commercial_terms",  "create_commercial_term",     "update_commercial_term",     "deactivate_commercial_term"),
+    "product_term_risk_map":("get_all_product_term_maps",    "create_product_term_map",    "update_product_term_map",    "deactivate_product_term_map"),
+    "deliverable_templates":("get_all_deliverable_templates","create_deliverable_template","update_deliverable_template","deactivate_deliverable_template"),
+    "clause_playbooks":     ("get_all_clause_playbooks",     "create_clause_playbook",     "update_clause_playbook",     "deactivate_clause_playbook"),
+    "review_routing_rules": ("get_all_routing_rules",        "create_routing_rule",        "update_routing_rule",        "deactivate_routing_rule"),
+    "negotiation_history":  ("get_all_negotiation_history",  "create_negotiation_record",  "update_negotiation_record",  None),
+    "supplier_intelligence":("get_all_supplier_intelligence","create_supplier_intel",      "update_supplier_intel",      "deactivate_supplier_intel"),
+    "project_type_profiles":("get_all_project_type_profiles","create_project_type_profile","update_project_type_profile","deactivate_project_type_profile"),
+    "jurisdiction_rules":   ("get_all_jurisdiction_rules",   "create_jurisdiction_rule",   "update_jurisdiction_rule",   "deactivate_jurisdiction_rule"),
+}
+
+
+def _resolve_table(table_name: str):
+    if table_name not in _KNOWLEDGE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Knowledge table '{table_name}' not found")
+    return _KNOWLEDGE_TABLES[table_name]
+
+
+@app.get("/api/knowledge/{table_name}")
+async def get_knowledge_table(table_name: str):
+    get_name, _, _, _ = _resolve_table(table_name)
+    method = getattr(db, get_name, None)
+    if not method:
+        raise HTTPException(status_code=404, detail=f"No getter for {table_name}")
+    try:
+        records = method(active_only=False)
+    except TypeError:
+        records = method()
+    return JSONResponse(records)
+
+
+@app.post("/api/knowledge/{table_name}")
+async def create_knowledge_record(table_name: str, request: Request):
+    _, create_name, _, _ = _resolve_table(table_name)
+    method = getattr(db, create_name, None)
+    if not method:
+        raise HTTPException(status_code=404, detail=f"No creator for {table_name}")
+    body = await request.json()
+    new_id = method(body)
+    return JSONResponse({"created": True, "id": new_id})
+
+
+@app.patch("/api/knowledge/{table_name}/{record_id}")
+async def update_knowledge_record(table_name: str, record_id: int, request: Request):
+    _, _, update_name, _ = _resolve_table(table_name)
+    method = getattr(db, update_name, None)
+    if not method:
+        raise HTTPException(status_code=404, detail=f"No updater for {table_name}")
+    body = await request.json()
+    method(record_id, body)
+    return JSONResponse({"updated": True})
+
+
+@app.delete("/api/knowledge/{table_name}/{record_id}")
+async def deactivate_knowledge_record(table_name: str, record_id: int):
+    _, _, _, deactivate_name = _resolve_table(table_name)
+    if not deactivate_name:
+        # negotiation_history uses delete instead
+        _, _, _, _ = _resolve_table(table_name)
+        db.delete_negotiation_record(record_id)
+        return JSONResponse({"deleted": True})
+    method = getattr(db, deactivate_name, None)
+    if not method:
+        raise HTTPException(status_code=404, detail=f"No deactivator for {table_name}")
+    method(record_id)
+    return JSONResponse({"deactivated": True})
+
+
+@app.get("/api/knowledge/{table_name}/export")
+async def export_knowledge_table(table_name: str):
+    _resolve_table(table_name)  # validate
+    import tempfile
+    from fastapi.responses import FileResponse
+    kio = KnowledgeIO(db)
+    tmp = Path(tempfile.mktemp(suffix=".xlsx"))
+    success = kio.export_table_to_excel(table_name, tmp)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"No data to export for {table_name}")
+    return FileResponse(
+        str(tmp),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"{table_name}_export.xlsx",
+    )
+
+
+@app.post("/api/knowledge/{table_name}/import")
+async def import_knowledge_table(table_name: str, file: UploadFile = File(...)):
+    _resolve_table(table_name)  # validate
+    import tempfile
+    kio = KnowledgeIO(db)
+    tmp = Path(tempfile.mktemp(suffix=".xlsx"))
+    tmp.write_bytes(await file.read())
+    try:
+        results = kio.import_table_from_excel(table_name, tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return JSONResponse(results)
+
+
+@app.get("/api/knowledge-export-all")
+async def export_all_knowledge():
+    import tempfile
+    from fastapi.responses import FileResponse
+    kio = KnowledgeIO(db)
+    tmp = Path(tempfile.mktemp(suffix=".xlsx"))
+    kio.export_all_knowledge(tmp)
+    return FileResponse(
+        str(tmp),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="contractiq_knowledge_base.xlsx",
+    )
+
+
+@app.get("/knowledge", response_class=HTMLResponse)
+async def knowledge_base_page(request: Request):
+    ke = KnowledgeEngine(db)
+    stats = ke.get_knowledge_summary()
+    return render("knowledge.html", stats=stats)
 
 
 @app.get("/api/llm-status")

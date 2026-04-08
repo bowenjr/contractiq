@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ContractIQ — Knowledge Base</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:       #1a1f2e;
+    --ink-mid:   #2e3548;
+    --gold:      #c8a96e;
+    --gold-dim:  #9e8257;
+    --parchment: #f4f1eb;
+    --parchment2:#ede9e0;
+    --mist:      #6b7280;
+    --border:    #d4cfc6;
+    --white:     #ffffff;
+    --red:       #c0392b;
+    --amber:     #c07b2b;
+    --green:     #2a7a4b;
+    --blue:      #1d4ed8;
+    --shadow:    0 2px 16px rgba(26,31,46,0.10);
+    --radius:    6px;
+    --font-serif:'Playfair Display', Georgia, serif;
+    --font-sans: 'DM Sans', system-ui, sans-serif;
+    --font-mono: 'DM Mono', monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 15px; }
+  body { font-family: var(--font-sans); background: var(--parchment); color: var(--ink); min-height: 100vh; }
+
+  /* Sidebar */
+  .sidebar { position:fixed; top:0; left:0; width:260px; height:100vh; background:var(--ink); display:flex; flex-direction:column; z-index:100; }
+  .sidebar-brand { padding:28px 24px 22px; border-bottom:1px solid rgba(200,169,110,0.2); }
+  .brand-logo { font-family:var(--font-serif); font-size:1.6rem; font-weight:700; color:var(--white); letter-spacing:-0.02em; line-height:1; }
+  .brand-logo span { color:var(--gold); }
+  .brand-tagline { font-size:0.7rem; color:rgba(200,169,110,0.7); margin-top:5px; letter-spacing:0.12em; text-transform:uppercase; }
+  .sidebar-nav { flex:1; padding:20px 0; overflow-y:auto; }
+  .nav-section-label { font-size:0.65rem; letter-spacing:0.16em; text-transform:uppercase; color:rgba(255,255,255,0.3); padding:8px 24px 4px; margin-top:8px; }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:10px 24px; color:rgba(255,255,255,0.65); text-decoration:none; font-size:0.88rem; font-weight:400; transition:all 0.18s; cursor:pointer; border:none; background:none; width:100%; text-align:left; }
+  .nav-item:hover, .nav-item.active { color:var(--white); background:rgba(200,169,110,0.12); }
+  .nav-item.active { border-left:3px solid var(--gold); }
+  .nav-icon { width:18px; opacity:0.8; flex-shrink:0; }
+  .sidebar-footer { padding:16px 24px; border-top:1px solid rgba(255,255,255,0.08); }
+  .llm-status { display:flex; align-items:center; gap:8px; font-size:0.75rem; color:rgba(255,255,255,0.4); }
+  .status-dot { width:7px; height:7px; border-radius:50%; background:var(--mist); }
+  .status-dot.online { background:#4ade80; }
+
+  /* Main */
+  .main { margin-left:260px; min-height:100vh; display:flex; flex-direction:column; }
+  .topbar { background:var(--white); border-bottom:1px solid var(--border); padding:16px 36px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:10; }
+  .page-title { font-family:var(--font-serif); font-size:1.4rem; font-weight:600; color:var(--ink); }
+  .page-subtitle { font-size:0.8rem; color:var(--mist); margin-top:2px; }
+  .topbar-actions { display:flex; gap:10px; }
+  .content { padding:32px 36px; flex:1; }
+
+  /* Buttons */
+  .btn { display:inline-flex; align-items:center; gap:7px; padding:9px 18px; border-radius:var(--radius); font-family:var(--font-sans); font-size:0.85rem; font-weight:500; cursor:pointer; border:none; transition:all 0.18s; text-decoration:none; }
+  .btn-primary { background:var(--ink); color:var(--white); }
+  .btn-primary:hover { background:var(--ink-mid); }
+  .btn-gold { background:var(--gold); color:var(--ink); }
+  .btn-gold:hover { background:#d4b87a; }
+  .btn-outline { background:transparent; color:var(--ink); border:1.5px solid var(--border); }
+  .btn-outline:hover { border-color:var(--ink); background:var(--parchment2); }
+  .btn-sm { padding:5px 12px; font-size:0.8rem; }
+  .btn-danger { background:transparent; color:var(--red); border:1.5px solid #fca5a5; padding:5px 10px; font-size:0.78rem; }
+  .btn-danger:hover { background:#fee2e2; }
+
+  /* Stats row */
+  .stats-row { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:28px; }
+  .stat-card { background:var(--white); border:1px solid var(--border); border-radius:var(--radius); padding:16px 18px; }
+  .stat-label { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--mist); }
+  .stat-value { font-family:var(--font-serif); font-size:1.8rem; font-weight:600; color:var(--ink); margin-top:4px; }
+
+  /* Tab navigation */
+  .tab-bar { display:flex; gap:2px; border-bottom:2px solid var(--border); margin-bottom:24px; overflow-x:auto; flex-wrap:wrap; }
+  .tab-btn { padding:9px 16px; border:none; background:none; font-family:var(--font-sans); font-size:0.82rem; font-weight:500; color:var(--mist); cursor:pointer; border-bottom:3px solid transparent; margin-bottom:-2px; white-space:nowrap; transition:all 0.15s; }
+  .tab-btn.active { color:var(--ink); border-bottom-color:var(--gold); }
+  .tab-btn:hover:not(.active) { color:var(--ink); }
+
+  /* Table panel */
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+  .panel-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:8px; }
+  .panel-title { font-weight:600; font-size:0.95rem; }
+  .panel-actions { display:flex; gap:8px; }
+
+  /* Data table */
+  .data-table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:var(--radius); background:var(--white); margin-bottom:20px; }
+  .data-table { width:100%; border-collapse:collapse; font-size:0.83rem; }
+  .data-table th { background:var(--ink); color:var(--white); padding:10px 12px; text-align:left; font-weight:500; white-space:nowrap; }
+  .data-table td { padding:9px 12px; border-top:1px solid var(--border); vertical-align:top; }
+  .data-table tr:nth-child(even) td { background:var(--parchment); }
+  .data-table tr.inactive td { opacity:0.5; }
+  .data-table .actions-cell { white-space:nowrap; }
+  .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:20px; font-size:0.72rem; font-weight:500; }
+  .badge-yes { background:#dcfce7; color:#166534; }
+  .badge-no { background:#f3f4f6; color:var(--mist); }
+  .badge-active { background:#dcfce7; color:#166534; }
+  .badge-inactive { background:#fee2e2; color:#991b1b; }
+
+  /* Add/edit form */
+  .add-form { background:var(--white); border:1px solid var(--border); border-radius:var(--radius); padding:20px; margin-bottom:20px; display:none; }
+  .add-form.open { display:block; }
+  .form-title { font-weight:600; margin-bottom:14px; font-size:0.9rem; }
+  .form-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+  .form-group { display:flex; flex-direction:column; gap:4px; }
+  .form-group label { font-size:0.78rem; font-weight:500; color:var(--ink); }
+  .form-group input, .form-group select, .form-group textarea {
+    padding:7px 10px; border:1.5px solid var(--border); border-radius:var(--radius);
+    font-family:var(--font-sans); font-size:0.85rem; color:var(--ink);
+    background:var(--white); transition:border-color 0.15s;
+  }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    outline:none; border-color:var(--gold);
+  }
+  .form-group textarea { min-height:72px; resize:vertical; }
+  .form-actions { margin-top:16px; display:flex; gap:8px; }
+
+  /* Import/export toast */
+  .toast { position:fixed; bottom:24px; right:24px; background:var(--ink); color:var(--white); padding:12px 20px; border-radius:var(--radius); font-size:0.85rem; z-index:999; opacity:0; transition:opacity 0.25s; pointer-events:none; max-width:360px; }
+  .toast.show { opacity:1; }
+
+  /* Loading */
+  .loading-row td { text-align:center; color:var(--mist); padding:24px; font-style:italic; }
+
+  /* Truncate long text in tables */
+  .cell-trunc { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cell-expand { cursor:pointer; }
+  .cell-expand:hover { white-space:normal; max-width:none; overflow:visible; }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-logo">Contract<span>IQ</span></div>
+    <div class="brand-tagline">Bids &amp; Contracts Manager</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section-label">Workspace</div>
+    <a class="nav-item" href="/">
+      <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Dashboard
+    </a>
+    <div class="nav-section-label">Knowledge</div>
+    <a class="nav-item active" href="/knowledge">
+      <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+      Knowledge Base
+    </a>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="llm-status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Checking LM Studio...</span>
+    </div>
+  </div>
+</aside>
+
+<!-- Main -->
+<main class="main">
+  <div class="topbar">
+    <div>
+      <div class="page-title">Knowledge Base</div>
+      <div class="page-subtitle">Company positions · Escalation rules · Commercial terms · Product intelligence</div>
+    </div>
+    <div class="topbar-actions">
+      <a class="btn btn-outline" href="/api/knowledge-export-all" download>
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        Export All
+      </a>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Company Positions</div>
+        <div class="stat-value">{{ stats.get('company_positions', 0) }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Escalation Rules</div>
+        <div class="stat-value">{{ stats.get('escalation_rules', 0) }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Product Profiles</div>
+        <div class="stat-value">{{ stats.get('product_profiles', 0) }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Commercial Terms</div>
+        <div class="stat-value">{{ stats.get('commercial_terms', 0) }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Supplier Profiles</div>
+        <div class="stat-value">{{ stats.get('supplier_profiles', 0) }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Clause Playbooks</div>
+        <div class="stat-value">{{ stats.get('clause_playbooks', 0) }}</div>
+      </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="tab-bar" id="tabBar">
+      <button class="tab-btn active" onclick="loadTab('company_positions', this)">Company Positions</button>
+      <button class="tab-btn" onclick="loadTab('insurance_positions', this)">Insurance</button>
+      <button class="tab-btn" onclick="loadTab('escalation_rules', this)">Escalation Rules</button>
+      <button class="tab-btn" onclick="loadTab('product_risk_profiles', this)">Product Profiles</button>
+      <button class="tab-btn" onclick="loadTab('commercial_term_library', this)">Commercial Terms</button>
+      <button class="tab-btn" onclick="loadTab('supplier_intelligence', this)">Supplier Intel</button>
+      <button class="tab-btn" onclick="loadTab('clause_playbooks', this)">Playbooks</button>
+      <button class="tab-btn" onclick="loadTab('deliverable_templates', this)">Deliverables</button>
+      <button class="tab-btn" onclick="loadTab('project_type_profiles', this)">Project Types</button>
+      <button class="tab-btn" onclick="loadTab('jurisdiction_rules', this)">Jurisdiction</button>
+      <button class="tab-btn" onclick="loadTab('negotiation_history', this)">Negotiation History</button>
+      <button class="tab-btn" onclick="loadTab('review_routing_rules', this)">Routing Rules</button>
+      <button class="tab-btn" onclick="loadTab('product_term_risk_map', this)">Product-Term Map</button>
+    </div>
+
+    <!-- Tab content area -->
+    <div id="tabContent">
+      <div class="panel-toolbar">
+        <div class="panel-title" id="panelTitle">Company Positions</div>
+        <div class="panel-actions">
+          <button class="btn btn-outline btn-sm" onclick="toggleImport()">Import Excel</button>
+          <a class="btn btn-outline btn-sm" id="exportBtn" href="#">Export Excel</a>
+          <button class="btn btn-gold btn-sm" onclick="toggleAddForm()">+ Add New</button>
+        </div>
+      </div>
+
+      <!-- Import form (hidden by default) -->
+      <div id="importArea" style="display:none; margin-bottom:16px;">
+        <div style="background:var(--white); border:1px solid var(--border); border-radius:var(--radius); padding:16px; display:flex; align-items:center; gap:12px;">
+          <input type="file" id="importFile" accept=".xlsx" style="font-size:0.85rem;">
+          <button class="btn btn-primary btn-sm" onclick="doImport()">Import</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleImport()">Cancel</button>
+          <span id="importResult" style="font-size:0.82rem; color:var(--mist);"></span>
+        </div>
+      </div>
+
+      <!-- Add form (hidden by default) -->
+      <div class="add-form" id="addForm">
+        <div class="form-title" id="addFormTitle">Add New Record</div>
+        <div class="form-grid" id="addFormFields"></div>
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="submitAdd()">Save</button>
+          <button class="btn btn-outline" onclick="toggleAddForm()">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="data-table-wrap">
+        <table class="data-table" id="dataTable">
+          <thead id="tableHead"></thead>
+          <tbody id="tableBody">
+            <tr class="loading-row"><td colspan="10">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let currentTable = 'company_positions';
+let currentRecords = [];
+
+// ── Table configs: which columns to show and what fields to show in the form
+const TABLE_CONFIG = {
+  company_positions: {
+    label: 'Company Positions',
+    cols: ['id','clause_type','pillar','position_summary','acceptable_deviation','hard_limit','priority','active'],
+    form: [
+      {k:'clause_type', l:'Clause Type', required:true},
+      {k:'pillar', l:'Pillar', type:'select', opts:['money','time','scope','risk_liability','relationships','administration','exit','insurance','commercial','legal','ip','privacy','security','delivery']},
+      {k:'position_summary', l:'Our Standard Position', type:'textarea', required:true},
+      {k:'acceptable_deviation', l:'Acceptable Deviation', type:'textarea'},
+      {k:'hard_limit', l:'Hard Limit (Never Accept)', type:'textarea'},
+      {k:'priority', l:'Priority (1=highest)', type:'number', default:'5'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  insurance_positions: {
+    label: 'Insurance Positions',
+    cols: ['id','insurance_type','minimum_coverage_text','preferred_coverage_amount','required','active'],
+    form: [
+      {k:'insurance_type', l:'Insurance Type', required:true},
+      {k:'minimum_coverage_text', l:'Minimum Coverage (text)', required:true},
+      {k:'minimum_coverage_amount', l:'Minimum Amount ($)', type:'number'},
+      {k:'preferred_coverage_amount', l:'Preferred Amount ($)', type:'number'},
+      {k:'required', l:'Required?', type:'select', opts:['1','0'], labels:['Yes','No'], default:'1'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  escalation_rules: {
+    label: 'Escalation Rules',
+    cols: ['id','rule_name','pillar','minimum_severity','requires_legal','requires_exec','priority','active'],
+    form: [
+      {k:'rule_name', l:'Rule Name', required:true},
+      {k:'pillar', l:'Pillar (or leave blank for all)', type:'select', opts:['','money','time','scope','risk_liability','relationships','administration','exit','insurance','commercial','legal','ip','privacy','security','delivery']},
+      {k:'trigger_keywords', l:'Trigger Keywords (JSON array: ["word1","word2"])', type:'textarea'},
+      {k:'trigger_condition', l:'Trigger Condition (description)'},
+      {k:'minimum_severity', l:'Minimum Severity', type:'select', opts:['Info','Low','Medium','High','Critical'], default:'High'},
+      {k:'requires_legal', l:'Requires Legal?', type:'select', opts:['1','0'], labels:['Yes','No'], default:'0'},
+      {k:'requires_exec', l:'Requires Exec?', type:'select', opts:['1','0'], labels:['Yes','No'], default:'0'},
+      {k:'escalation_note', l:'Note shown in findings', type:'textarea'},
+      {k:'priority', l:'Priority (1=highest)', type:'number', default:'5'},
+    ]
+  },
+  product_risk_profiles: {
+    label: 'Product Risk Profiles',
+    cols: ['id','product_family','risk_category','pillar','typical_concern','active'],
+    form: [
+      {k:'product_family', l:'Product Family', required:true},
+      {k:'risk_category', l:'Risk Category'},
+      {k:'typical_concern', l:'Typical Concern', type:'textarea', required:true},
+      {k:'recommended_clause_language', l:'Recommended Clause Language', type:'textarea'},
+      {k:'pillar', l:'Pillar', type:'select', opts:['','money','scope','risk_liability','ip','privacy','security','delivery','commercial']},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  commercial_term_library: {
+    label: 'Commercial Terms',
+    cols: ['id','term_name','term_category','pillar','our_standard','never_accept','active'],
+    form: [
+      {k:'term_name', l:'Term Name', required:true},
+      {k:'term_category', l:'Category'},
+      {k:'pillar', l:'Pillar', type:'select', opts:['','money','scope','risk_liability','relationships','administration','exit','commercial','legal','ip']},
+      {k:'our_standard', l:'Our Standard Position', type:'textarea', required:true},
+      {k:'minimum_acceptable', l:'Minimum Acceptable', type:'textarea'},
+      {k:'never_accept', l:'Never Accept', type:'textarea'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  supplier_intelligence: {
+    label: 'Supplier Intelligence',
+    cols: ['id','counterparty','intel_type','clause_type','their_standard_position','flexibility_observed','active'],
+    form: [
+      {k:'counterparty', l:'Counterparty Name', required:true},
+      {k:'intel_type', l:'Intel Type', type:'select', opts:['General Intel','Commercial Terms','Behaviour','Relationship']},
+      {k:'clause_type', l:'Clause Type (if commercial terms)'},
+      {k:'their_standard_position', l:'Their Standard Position (terms they offer TO us)', type:'textarea'},
+      {k:'flexibility_observed', l:'Flexibility Observed', type:'textarea'},
+      {k:'general_intel', l:'General Intelligence', type:'textarea'},
+      {k:'source', l:'Source / Reference'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  clause_playbooks: {
+    label: 'Clause Playbooks',
+    cols: ['id','playbook_name','pillar','clause_type','trigger_pattern','escalate','active'],
+    form: [
+      {k:'playbook_name', l:'Playbook Name', required:true},
+      {k:'pillar', l:'Pillar', type:'select', opts:['','money','time','scope','risk_liability','relationships','administration','exit']},
+      {k:'clause_type', l:'Clause Type'},
+      {k:'trigger_pattern', l:'Trigger Pattern / Keyword'},
+      {k:'situation_description', l:'Situation Description', type:'textarea'},
+      {k:'recommended_response', l:'Recommended Response', type:'textarea', required:true},
+      {k:'fallback_position', l:'Fallback Position', type:'textarea'},
+      {k:'escalate', l:'Auto-escalate?', type:'select', opts:['0','1'], labels:['No','Yes'], default:'0'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  deliverable_templates: {
+    label: 'Deliverable Templates',
+    cols: ['id','project_type','deliverable_name','description','active'],
+    form: [
+      {k:'project_type', l:'Project Type', required:true},
+      {k:'deliverable_name', l:'Deliverable Name', required:true},
+      {k:'description', l:'Description', type:'textarea'},
+      {k:'typical_acceptance_criteria', l:'Typical Acceptance Criteria', type:'textarea'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  project_type_profiles: {
+    label: 'Project Type Profiles',
+    cols: ['id','project_type','delivery_model','typical_risks','active'],
+    form: [
+      {k:'project_type', l:'Project Type', required:true},
+      {k:'delivery_model', l:'Delivery Model'},
+      {k:'typical_risks', l:'Typical Risks', type:'textarea'},
+      {k:'key_clauses_to_watch', l:'Key Clauses to Watch (JSON array)', type:'textarea'},
+      {k:'recommended_pillars', l:'Recommended Pillars (JSON array)', type:'textarea'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  jurisdiction_rules: {
+    label: 'Jurisdiction Rules',
+    cols: ['id','jurisdiction','rule_category','rule_name','pillar','requires_legal','active'],
+    form: [
+      {k:'jurisdiction', l:'Jurisdiction', required:true},
+      {k:'rule_category', l:'Rule Category'},
+      {k:'rule_name', l:'Rule Name', required:true},
+      {k:'rule_description', l:'Rule Description', type:'textarea'},
+      {k:'impact_on_contract', l:'Impact on Contract', type:'textarea'},
+      {k:'pillar', l:'Pillar', type:'select', opts:['','privacy','legal','delivery','commercial','security']},
+      {k:'requires_legal', l:'Requires Legal?', type:'select', opts:['1','0'], labels:['Yes','No'], default:'0'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  negotiation_history: {
+    label: 'Negotiation History',
+    cols: ['id','counterparty','clause_type','outcome','our_position','date_recorded'],
+    form: [
+      {k:'counterparty', l:'Counterparty', required:true},
+      {k:'clause_type', l:'Clause Type'},
+      {k:'pillar', l:'Pillar', type:'select', opts:['','money','time','scope','risk_liability','relationships','administration','exit']},
+      {k:'our_position', l:'Our Position', type:'textarea'},
+      {k:'their_position', l:'Their Position', type:'textarea'},
+      {k:'outcome', l:'Outcome', type:'select', opts:['Won','Compromise','Conceded','Ongoing']},
+      {k:'settlement_language', l:'Settlement Language', type:'textarea'},
+      {k:'project_reference', l:'Project Reference'},
+      {k:'date_recorded', l:'Date Recorded'},
+      {k:'notes', l:'Notes', type:'textarea'},
+    ]
+  },
+  review_routing_rules: {
+    label: 'Routing Rules',
+    cols: ['id','rule_name','trigger_severity','trigger_pillar','route_to','priority','active'],
+    form: [
+      {k:'rule_name', l:'Rule Name', required:true},
+      {k:'condition_description', l:'Condition Description', type:'textarea'},
+      {k:'trigger_keywords', l:'Trigger Keywords (JSON array)', type:'textarea'},
+      {k:'trigger_pillar', l:'Trigger Pillar (or blank for all)'},
+      {k:'trigger_severity', l:'Trigger Severity', type:'select', opts:['','Info','Low','Medium','High','Critical']},
+      {k:'route_to', l:'Route To', required:true},
+      {k:'routing_note', l:'Routing Note'},
+      {k:'priority', l:'Priority', type:'number', default:'5'},
+    ]
+  },
+  product_term_risk_map: {
+    label: 'Product-Term Risk Map',
+    cols: ['id','product_family','term_name','concern_level','specific_concern','active'],
+    form: [
+      {k:'product_family', l:'Product Family', required:true},
+      {k:'term_name', l:'Term Name', required:true},
+      {k:'concern_level', l:'Concern Level', type:'select', opts:['Low','Medium','High'], default:'Medium'},
+      {k:'specific_concern', l:'Specific Concern', type:'textarea'},
+      {k:'recommended_action', l:'Recommended Action', type:'textarea'},
+    ]
+  },
+};
+
+// ── Load a tab ───────────────────────────────────────────────────────────────
+async function loadTab(tableName, btnEl) {
+  currentTable = tableName;
+  // Update active button
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+
+  const cfg = TABLE_CONFIG[tableName] || { label: tableName, cols: [], form: [] };
+  document.getElementById('panelTitle').textContent = cfg.label;
+  document.getElementById('exportBtn').href = `/api/knowledge/${tableName}/export`;
+
+  // Hide forms
+  document.getElementById('addForm').classList.remove('open');
+  document.getElementById('importArea').style.display = 'none';
+
+  // Load data
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '<tr class="loading-row"><td colspan="20">Loading...</td></tr>';
+
+  try {
+    const res = await fetch(`/api/knowledge/${tableName}`);
+    const records = await res.json();
+    currentRecords = records;
+    renderTable(tableName, records, cfg);
+  } catch(e) {
+    tbody.innerHTML = `<tr class="loading-row"><td colspan="20">Error loading data: ${e.message}</td></tr>`;
+  }
+}
+
+function renderTable(tableName, records, cfg) {
+  const cols = cfg.cols;
+  const thead = document.getElementById('tableHead');
+  const tbody = document.getElementById('tableBody');
+
+  // Header
+  thead.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '<th>Actions</th></tr>';
+
+  // Body
+  if (!records.length) {
+    tbody.innerHTML = '<tr class="loading-row"><td colspan="' + (cols.length+1) + '">No records yet. Click Add New to create one.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = records.map(r => {
+    const inactive = r.active === 0;
+    const tds = cols.map(c => {
+      let v = r[c];
+      if (v === null || v === undefined) v = '';
+      if (c === 'active') return `<td><span class="badge ${v ? 'badge-active':'badge-inactive'}">${v ? 'Active':'Inactive'}</span></td>`;
+      if (typeof v === 'number' && (c === 'requires_legal' || c === 'requires_exec' || c === 'required' || c === 'escalate')) {
+        return `<td><span class="badge ${v ? 'badge-yes':'badge-no'}">${v ? 'Yes':'No'}</span></td>`;
+      }
+      const display = String(v).length > 80 ? String(v).slice(0,80)+'…' : String(v);
+      return `<td class="cell-trunc cell-expand" title="${String(v).replace(/"/g,'&quot;')}">${display}</td>`;
+    }).join('');
+    const deactivateLabel = (r.active === 0) ? 'Reactivate' : 'Deactivate';
+    const deactivateClass = (r.active === 0) ? 'btn-outline' : 'btn-danger';
+    const actions = `<td class="actions-cell">
+      <button class="btn ${deactivateClass} btn-sm" onclick="deactivateRecord(${r.id})">${deactivateLabel}</button>
+    </td>`;
+    return `<tr${inactive?' class="inactive"':''}>${tds}${actions}</tr>`;
+  }).join('');
+}
+
+// ── Add form ─────────────────────────────────────────────────────────────────
+function toggleAddForm() {
+  const form = document.getElementById('addForm');
+  if (form.classList.contains('open')) { form.classList.remove('open'); return; }
+  buildAddForm(currentTable);
+  form.classList.add('open');
+}
+
+function buildAddForm(tableName) {
+  const cfg = TABLE_CONFIG[tableName] || { form: [] };
+  document.getElementById('addFormTitle').textContent = `Add — ${cfg.label || tableName}`;
+  const container = document.getElementById('addFormFields');
+  container.innerHTML = cfg.form.map(f => {
+    let input = '';
+    if (f.type === 'textarea') {
+      input = `<textarea id="f_${f.k}" name="${f.k}"${f.required?' required':''}></textarea>`;
+    } else if (f.type === 'select') {
+      const opts = f.opts.map((o,i) => {
+        const label = f.labels ? f.labels[i] : o;
+        const selected = (String(o) === String(f.default || '')) ? ' selected' : '';
+        return `<option value="${o}"${selected}>${label}</option>`;
+      }).join('');
+      input = `<select id="f_${f.k}" name="${f.k}">${opts}</select>`;
+    } else if (f.type === 'number') {
+      input = `<input type="number" id="f_${f.k}" name="${f.k}" value="${f.default||''}"${f.required?' required':''}>`;
+    } else {
+      input = `<input type="text" id="f_${f.k}" name="${f.k}" value="${f.default||''}"${f.required?' required':''}>`;
+    }
+    return `<div class="form-group"><label for="f_${f.k}">${f.l}${f.required?' *':''}</label>${input}</div>`;
+  }).join('');
+}
+
+async function submitAdd() {
+  const cfg = TABLE_CONFIG[currentTable] || { form: [] };
+  const data = {};
+  for (const f of cfg.form) {
+    const el = document.getElementById(`f_${f.k}`);
+    if (el && el.value !== '') {
+      data[f.k] = (f.type === 'number') ? Number(el.value) : el.value;
+    }
+  }
+  data.active = 1;
+  try {
+    const res = await fetch(`/api/knowledge/${currentTable}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+    if (result.created) {
+      showToast('Record created successfully.');
+      document.getElementById('addForm').classList.remove('open');
+      loadTab(currentTable, null);
+    } else {
+      showToast('Error: ' + JSON.stringify(result), true);
+    }
+  } catch(e) {
+    showToast('Error: ' + e.message, true);
+  }
+}
+
+// ── Deactivate ───────────────────────────────────────────────────────────────
+async function deactivateRecord(id) {
+  const rec = currentRecords.find(r => r.id === id);
+  const isInactive = rec && rec.active === 0;
+  if (isInactive) {
+    // Reactivate
+    try {
+      await fetch(`/api/knowledge/${currentTable}/${id}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({active: 1}),
+      });
+      showToast('Record reactivated.');
+      loadTab(currentTable, null);
+    } catch(e) { showToast('Error: ' + e.message, true); }
+    return;
+  }
+  if (!confirm('Deactivate this record? It will no longer be used in analysis.')) return;
+  try {
+    await fetch(`/api/knowledge/${currentTable}/${id}`, { method: 'DELETE' });
+    showToast('Record deactivated.');
+    loadTab(currentTable, null);
+  } catch(e) { showToast('Error: ' + e.message, true); }
+}
+
+// ── Import ───────────────────────────────────────────────────────────────────
+function toggleImport() {
+  const area = document.getElementById('importArea');
+  area.style.display = area.style.display === 'none' ? 'block' : 'none';
+}
+
+async function doImport() {
+  const fileInput = document.getElementById('importFile');
+  const resultEl = document.getElementById('importResult');
+  if (!fileInput.files.length) { showToast('Please select an Excel file.', true); return; }
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  resultEl.textContent = 'Importing...';
+  try {
+    const res = await fetch(`/api/knowledge/${currentTable}/import`, {
+      method: 'POST', body: formData,
+    });
+    const result = await res.json();
+    resultEl.textContent = `Imported: ${result.imported}, Skipped: ${result.skipped}${result.errors.length ? ', Errors: ' + result.errors.slice(0,2).join('; ') : ''}`;
+    if (result.imported > 0) {
+      showToast(`Imported ${result.imported} records.`);
+      loadTab(currentTable, null);
+    }
+  } catch(e) {
+    resultEl.textContent = 'Error: ' + e.message;
+    showToast('Import failed: ' + e.message, true);
+  }
+}
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+function showToast(msg, isError=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = isError ? '#c0392b' : '#1a1f2e';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── LLM status ───────────────────────────────────────────────────────────────
+async function checkLLMStatus() {
+  try {
+    const res = await fetch('/api/llm-status');
+    const data = await res.json();
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    if (data.reachable) {
+      dot.className = 'status-dot online';
+      txt.textContent = 'LM Studio connected';
+    } else {
+      dot.className = 'status-dot offline';
+      txt.textContent = 'LM Studio offline';
+    }
+  } catch(e) {}
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadTab('company_positions', document.querySelector('.tab-btn.active'));
+  checkLLMStatus();
+});
+</script>
+</body>
+</html>

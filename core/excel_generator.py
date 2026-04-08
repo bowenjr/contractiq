@@ -106,6 +106,7 @@ class ExcelGenerator:
         self._tab_scope_gaps(pillars)
         self._tab_action_tracker(recs)
         self._tab_questions(pillars)
+        self._tab_knowledge_matches(pillars)
 
         wb.save(str(output_path))
         return output_path
@@ -615,6 +616,88 @@ class ExcelGenerator:
                     pillar_name, question, _safe(answer), found
                 ], fill_hex=bg)
                 row += 1
+
+        self._autofit(ws)
+        self._add_filters(ws)
+
+    # ── Tab 9: Knowledge Matches ──────────────────────────────────────────────
+
+    def _tab_knowledge_matches(self, pillars: List[Dict]):
+        """Show all findings that were enriched by the knowledge layer."""
+        enriched_findings = []
+        for pr in pillars:
+            pillar_name = pr.get("pillar_name", "")
+            for finding in pr.get("findings", []):
+                if finding.get("knowledge_enriched"):
+                    enriched_findings.append((pillar_name, finding))
+
+        ws = self._wb.create_sheet("Knowledge Matches")
+        ws.sheet_properties.tabColor = "6b21a8"
+        ws.freeze_panes = "A2"
+
+        cols = [
+            "#", "Pillar", "Finding", "Original Severity",
+            "Final Severity", "Severity Escalated",
+            "Escalation Rule", "Escalate To",
+            "Position Matched", "Standard Position",
+            "Commercial Term", "Our Standard",
+            "Product Family", "Playbook Used",
+            "Requires Legal", "Requires Management",
+            "Route To", "Enrichment Sources",
+        ]
+        self._header_row(ws, 1, cols)
+
+        if not enriched_findings:
+            ws.cell(row=2, column=1, value="No knowledge-enriched findings in this analysis.")
+            ws.cell(row=2, column=1).font = self._body_font()
+            self._autofit(ws)
+            return
+
+        ESCALATED_FILL = "fef3c7"
+        LEGAL_FILL = "fee2e2"
+
+        for i, (pillar_name, f) in enumerate(enriched_findings, 1):
+            orig_sev = _safe(f.get("original_severity", ""))
+            final_sev = _safe(f.get("severity", ""))
+            escalated = bool(orig_sev) and orig_sev != final_sev
+
+            requires_legal = bool(f.get("requires_legal_review"))
+            requires_mgmt = bool(f.get("requires_management_review"))
+            sources = f.get("enrichment_sources", [])
+
+            row_fill = LEGAL_FILL if requires_legal else (ESCALATED_FILL if escalated else None)
+            row_num = i + 1
+
+            values = [
+                i, pillar_name,
+                _safe(f.get("finding", ""))[:100],
+                orig_sev, final_sev,
+                "Yes" if escalated else "No",
+                _safe(f.get("escalation_rule_name", "")),
+                _safe(f.get("escalate_to", "")),
+                "Yes" if f.get("matched_company_position") else "No",
+                _safe(f.get("position_standard", ""))[:80],
+                _safe(f.get("matched_commercial_term", "")),
+                _safe(f.get("term_our_standard", ""))[:80],
+                _safe(f.get("matched_product_family", "")),
+                _safe(f.get("matched_playbook", "")),
+                "Yes" if requires_legal else "No",
+                "Yes" if requires_mgmt else "No",
+                _safe(f.get("route_to", "Contracts")),
+                "; ".join(sources) if sources else "",
+            ]
+
+            if row_fill:
+                self._data_row(ws, row_num, values, fill_hex=row_fill)
+            else:
+                self._data_row(ws, row_num, values, alt=(i % 2 == 0))
+
+            if requires_legal:
+                ws.cell(row=row_num, column=15).fill = self._make_fill(LEGAL_FILL)
+            if requires_mgmt:
+                ws.cell(row=row_num, column=16).fill = self._make_fill(LEGAL_FILL)
+            if escalated:
+                ws.cell(row=row_num, column=6).fill = self._make_fill(ESCALATED_FILL)
 
         self._autofit(ws)
         self._add_filters(ws)

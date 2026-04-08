@@ -14,6 +14,7 @@ from typing import Callable, Dict, Any, List, Optional
 from .llm_client import LMStudioClient
 from .document_processor import DocumentProcessor
 from .pillars import ALL_PILLARS, PILLAR_MAP, get_weights
+from .knowledge_engine import KnowledgeEngine
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _POSITIONS_PATH = Path(__file__).parent.parent / "positions.json"
@@ -301,8 +302,10 @@ def _load_positions() -> Dict:
 class AnalysisEngine:
     MAX_CHARS = _load_max_chars()
 
-    def __init__(self, llm: LMStudioClient):
+    def __init__(self, llm: LMStudioClient, db=None):
         self.llm = llm
+        self.db = db
+        self.knowledge = KnowledgeEngine(db) if db else None
         self.doc_processor = DocumentProcessor()
         cfg = _load_config()
         self.MAX_CHARS_PER_PILLAR      = int(cfg.get("max_chars_per_pillar",      12_000))
@@ -317,6 +320,8 @@ class AnalysisEngine:
         text: str,
         filename: str,
         preprocessed: Optional[Dict] = None,
+        quick_extract: Optional[Dict] = None,
+        document_context: Optional[Dict] = None,
         progress_callback: ProgressCB = None,
         cancel_check: Optional[Callable] = None,
     ) -> Dict[str, Any]:
@@ -395,6 +400,30 @@ class AnalysisEngine:
         results["pillars"] = self._analyse_all_pillars(
             analysis_source, section_index, doc_type, positions, _cb, cancel_check
         )
+
+        # ── Knowledge enrichment (pure Python, no LLM) ───────────────────────
+        if self.knowledge and results.get("pillars"):
+            doc_ctx = document_context or {}
+            print("  [Knowledge] Enriching findings with knowledge base...")
+            for pillar_result in results["pillars"]:
+                if not isinstance(pillar_result, dict):
+                    continue
+                findings = pillar_result.get("findings", [])
+                if not findings:
+                    continue
+                pillar_id = pillar_result.get("pillar_id", "unknown")
+                # Tag original severity before enrichment
+                for f in findings:
+                    f["original_severity"] = f.get("severity", "Low")
+                enriched = self.knowledge.enrich_findings(findings, doc_ctx)
+                pillar_result["findings"] = enriched
+                escalations = sum(1 for f in enriched if f.get("escalation_triggered"))
+                deviations = sum(1 for f in enriched if f.get("matched_company_position"))
+                if escalations or deviations:
+                    print(
+                        f"  [Knowledge] {pillar_id}: "
+                        f"{escalations} escalations, {deviations} position matches"
+                    )
 
         # ── Step 4: Extract dates (max 3 LLM calls) ───────────────────────────
         _cb(4, "Dates", "Extracting critical dates and deadlines...", 72)
