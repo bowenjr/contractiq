@@ -76,10 +76,11 @@ class ReportGenerator:
         TBL_ALT  = colors.HexColor("#f8f6f0")
         WHITE    = colors.white
 
-        risk_level = analysis.get("risk_score", {}).get("level", "Unknown")
+        rp = analysis.get("review_priority", {})
+        priority = rp.get("review_priority", "Unknown")
         risk_colour = {
             "Low": GREEN, "Medium": AMBER, "High": RED, "Critical": RED
-        }.get(risk_level, MID_GREY)
+        }.get(priority, MID_GREY)
 
         # ── Styles ────────────────────────────────────────────────────────────
         styles = getSampleStyleSheet()
@@ -120,7 +121,7 @@ class ReportGenerator:
             Paragraph("ContractIQ", title_st),
             Paragraph(
                 f"<b>{doc_type}</b><br/>"
-                f'<font color="{_hex(risk_colour)}">{risk_level} Risk</font>',
+                f'<font color="{_hex(risk_colour)}">{priority} Priority</font>',
                 ps("HDR2", fontName="Helvetica", fontSize=11,
                    textColor=WHITE, alignment=TA_RIGHT)
             ),
@@ -186,13 +187,10 @@ class ReportGenerator:
                 f"<b>Subject:</b> {analysis['key_subject']}", body))
         story.append(Spacer(1, 0.4*cm))
 
-        # ── 4. Risk Score Dashboard ───────────────────────────────────────────
-        story.append(Paragraph("Risk Assessment", h1))
+        # ── 4. Review Priority Dashboard ─────────────────────────────────────
+        story.append(Paragraph("Review Priority", h1))
         story.append(HRFlowable(width=W, thickness=1.5,
                                 color=ACCENT, spaceAfter=8))
-
-        rs = analysis.get("risk_score", {})
-        overall_score = rs.get("overall_score", 0)
 
         # Pillar mini-scorecards (only for new format)
         pillar_results = analysis.get("pillars", [])
@@ -234,12 +232,12 @@ class ReportGenerator:
             story.append(pillar_row_tbl)
             story.append(Spacer(1, 0.3*cm))
 
-        # Overall score row
+        # Overall priority row
         risk_cols = [
-            ("Overall Score",    f"{overall_score}/100", risk_colour),
-            ("Risk Level",       risk_level,             risk_colour),
-            ("Critical Flags",   str(rs.get("critical_flags", "—")), RED),
-            ("High Flags",       str(rs.get("high_flags",    "—")), AMBER),
+            ("Review Priority",       priority,                                   risk_colour),
+            ("Critical Findings",     str(rp.get("critical_flag_count", "—")),    RED),
+            ("High Findings",         str(rp.get("high_flag_count",    "—")),     AMBER),
+            ("Negotiation Points",    str(rp.get("negotiation_points_count", "—")), GREEN),
         ]
         risk_grid_data = [[
             Table([[
@@ -263,9 +261,9 @@ class ReportGenerator:
                            colWidths=[(W/4)] * 4,
                            hAlign="LEFT"))
 
-        if rs.get("score_rationale"):
+        if rp.get("priority_rationale"):
             story.append(Spacer(1, 0.3*cm))
-            story.append(Paragraph(rs["score_rationale"], body))
+            story.append(Paragraph(rp["priority_rationale"], body))
 
         story.append(Spacer(1, 0.4*cm))
 
@@ -537,8 +535,8 @@ class ReportGenerator:
                 story.append(cl_tbl)
                 story.append(Spacer(1, 0.4*cm))
 
-            # Legacy red flags from risk_score
-            red_flags = rs.get("red_flags", [])
+            # Legacy red flags from review_priority
+            red_flags = rp.get("red_flags", [])
             if red_flags:
                 story.append(Paragraph("Red Flags & Risk Factors", h2))
                 flag_rows = [["Flag", "Severity", "Description"]]

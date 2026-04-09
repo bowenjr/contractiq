@@ -456,9 +456,11 @@
 
   <div class="content">
     {% set a = contract.analysis or {} %}
-    {% set rs = a.get('risk_score', {}) %}
-    {% set level = rs.get('level', 'Unknown') %}
-    {% set score = rs.get('overall_score', 0) %}
+    {% set rp = a.get('review_priority', {}) %}
+    {% set priority = rp.get('review_priority', 'Unknown') %}
+    {% set critical_ct = rp.get('critical_flag_count', 0) %}
+    {% set high_ct = rp.get('high_flag_count', 0) %}
+    {% set neg_ct = rp.get('negotiation_points_count', 0) %}
 
     <!-- ── Review Context Panel ─────────────────────── -->
     <div id="ctxPanel" style="background:var(--white);border:1px solid var(--border);border-radius:6px;padding:18px 22px;margin-bottom:20px;">
@@ -552,16 +554,17 @@
     <!-- ── Analysis Tab ───────────────────────────────── -->
     <div id="pane-analysis" class="pane active">
 
-    <!-- Risk Banner -->
-    <div class="risk-banner risk-banner-{{ level }} section-gap">
+    <!-- Priority Banner -->
+    <div class="risk-banner risk-banner-{{ priority }} section-gap">
       <div>
-        <div class="risk-banner-label">Overall Risk Assessment</div>
-        <div class="risk-banner-title">{{ level }} Risk</div>
-        <div class="risk-banner-rationale">{{ rs.get('score_rationale', '') }}</div>
+        <div class="risk-banner-label">Review Priority</div>
+        <div class="risk-banner-title">{{ priority }}</div>
+        <div class="risk-banner-rationale">{{ rp.get('priority_rationale', '') }}</div>
       </div>
-      <div>
-        <div class="risk-score-big">{{ score }}</div>
-        <div class="risk-score-label">/ 100</div>
+      <div style="text-align:right">
+        {% if critical_ct > 0 %}<div class="risk-score-big" style="font-size:1.8rem;color:#ef4444">{{ critical_ct }}C</div>{% endif %}
+        {% if high_ct > 0 %}<div class="risk-score-big" style="font-size:1.8rem;color:#f97316">{{ high_ct }}H</div>{% endif %}
+        <div class="risk-score-label">{{ neg_ct }} negotiation pts</div>
       </div>
     </div>
 
@@ -585,7 +588,7 @@
             <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
               <div class="pillar-name">{{ pr.get('pillar_name','') }}</div>
               <div class="pillar-status-{{ pstatus_css }}" style="font-size:0.8rem;font-weight:600">{{ pstatus }}</div>
-              <div class="pillar-score">{{ pr.get('score','') }}/100</div>
+              <div class="pillar-score">{{ pr.get('status','') }}</div>
             </div>
             <div class="pillar-summary">{{ pr.get('summary','') }}</div>
             {% if pr.get('red_flags') %}
@@ -607,7 +610,7 @@
             <span>
               {{ pr.get('pillar_name','') }}
               &nbsp;<span class="pillar-status-{{ pstatus_css }}">{{ pstatus }}</span>
-              &nbsp;<span class="pillar-score">{{ pr.get('score','') }}/100</span>
+              &nbsp;<span class="pillar-score">{{ pr.get('status','') }}</span>
             </span>
           </summary>
           <div class="pillar-detail-body">
@@ -738,7 +741,7 @@
           {% set pillars_check = a.get('pillars', []) %}
           {% if pillars_check %}
           <!-- New format: pillar scores -->
-          {% set pb = rs.get('pillar_breakdown', []) %}
+          {% set pb = rp.get('pillar_breakdown', []) %}
           {% if pb %}
           <table class="data-table">
             <thead><tr><th>Pillar</th><th>Score</th><th>Status</th></tr></thead>
@@ -747,7 +750,7 @@
             {% set pstatus = p.get('status','Issues Found') %}
             <tr>
               <td>{{ p.get('pillar_name', p.get('pillar_id','')) }}</td>
-              <td><span class="chip chip-{{ 'green' if p.get('score',0) >= 70 else 'amber' if p.get('score',0) >= 40 else 'red' }}">{{ p.get('score','') }}/100</span></td>
+              <td><span class="chip chip-{{ 'green' if p.get('status','') == 'Clean' else 'amber' if 'Issues' in p.get('status','') else 'red' }}">{{ p.get('status','—') }}</span></td>
               <td style="font-size:0.82rem">{{ pstatus }}</td>
             </tr>
             {% endfor %}
@@ -755,32 +758,33 @@
           </table>
           {% endif %}
           <div style="margin-top:10px;font-size:0.82rem;color:var(--mist)">
-            Critical flags: <strong style="color:var(--red)">{{ rs.get('critical_flags', 0) }}</strong>
-            &nbsp; High flags: <strong style="color:var(--amber)">{{ rs.get('high_flags', 0) }}</strong>
+            Critical findings: <strong style="color:var(--red)">{{ critical_ct }}</strong>
+            &nbsp; High findings: <strong style="color:var(--amber)">{{ high_ct }}</strong>
+            &nbsp; Negotiation points: <strong>{{ neg_ct }}</strong>
           </div>
           {% else %}
           <!-- Legacy format -->
           <table class="data-table">
             <tr>
               <th>Financial Risk</th>
-              <td>{% set fr = rs.get('financial_risk','—') %}
+              <td>{% set fr = '—' %}
                 <span class="chip chip-{{ 'red' if fr=='High' else 'amber' if fr=='Medium' else 'green' if fr=='Low' else 'grey' }}">{{ fr }}</span>
               </td>
             </tr>
             <tr>
               <th>Legal Risk</th>
-              <td>{% set lr = rs.get('legal_risk','—') %}
+              <td>{% set lr = '—' %}
                 <span class="chip chip-{{ 'red' if lr=='High' else 'amber' if lr=='Medium' else 'green' if lr=='Low' else 'grey' }}">{{ lr }}</span>
               </td>
             </tr>
             <tr>
               <th>Operational Risk</th>
-              <td>{% set or_ = rs.get('operational_risk','—') %}
+              <td>{% set or_ = '—' %}
                 <span class="chip chip-{{ 'red' if or_=='High' else 'amber' if or_=='Medium' else 'green' if or_=='Low' else 'grey' }}">{{ or_ }}</span>
               </td>
             </tr>
           </table>
-          {% set flags = rs.get('red_flags', []) %}
+          {% set flags = [] %}
           {% if flags %}
           <div style="margin-top:14px">
             <div style="font-size:0.8rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--mist);margin-bottom:8px">Red Flags</div>
@@ -1090,7 +1094,7 @@
     <div id="pane-tracker" class="pane">
       <div class="tracker-metrics">
         <span class="met-item"><span class="met-label">Analysed:</span><span class="met-value">{{ contract.analysis_date[:10] if contract.analysis_date else '—' }}</span></span>
-        <span class="met-item"><span class="met-label">Risk:</span><span class="met-value">{{ level }} ({{ score }}/100)</span></span>
+        <span class="met-item"><span class="met-label">Priority:</span><span class="met-value">{{ priority }}{% if critical_ct > 0 %} · {{ critical_ct }}C{% endif %}{% if high_ct > 0 %} {{ high_ct }}H{% endif %}</span></span>
         {% set pillars_done = a.get('pillars', [])|length %}
         <span class="met-item"><span class="met-label">Pillars:</span><span class="met-value">{{ pillars_done }}/7</span></span>
         <span class="met-item"><span class="met-label">Items:</span><span class="met-value" id="met-items">—</span></span>

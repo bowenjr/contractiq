@@ -552,7 +552,7 @@
         <div class="stat-sub">with full reports</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">High Risk</div>
+        <div class="stat-label">High Priority</div>
         <div class="stat-value" id="stat-highrisk" style="color: var(--red)">—</div>
         <div class="stat-sub">requiring attention</div>
       </div>
@@ -671,11 +671,10 @@
   const DEFAULT_STEPS = [
     { step_num: 1, step_name: 'Classification' },
     { step_num: 2, step_name: 'Parties' },
-    { step_num: 3, step_name: 'Pillar Analysis' },
-    { step_num: 4, step_name: 'Dates' },
+    { step_num: 3, step_name: 'Dates' },
+    { step_num: 4, step_name: 'Pillar Analysis' },
     { step_num: 5, step_name: 'Obligations' },
-    { step_num: 6, step_name: 'Risk Score' },
-    { step_num: 7, step_name: 'Recommendations' },
+    { step_num: 6, step_name: 'Recommendations' },
   ];
 
   // ── Polling manager — single source of truth for all intervals ───────────
@@ -778,12 +777,12 @@
 
   // updateContractStatus: update only the status/risk cells of a single row.
   // Avoids destroying and re-creating unchanged rows during live polling.
-  function updateContractStatus(contractId, status, riskLevel, riskScore) {
+  function updateContractStatus(contractId, status, priority, critical, high) {
     const row = document.getElementById(`row-${contractId}`);
     if (!row) return;
     const cells = row.cells;
     if (cells[2]) cells[2].innerHTML = statusBadge(status);
-    if (cells[3]) cells[3].innerHTML = riskPill(riskLevel, riskScore);
+    if (cells[3]) cells[3].innerHTML = priorityBadge(priority, critical || 0, high || 0);
   }
 
   function updateStats(contracts) {
@@ -791,7 +790,7 @@
     document.getElementById('stat-complete').textContent =
       contracts.filter(c => c.status === 'complete').length;
     document.getElementById('stat-highrisk').textContent =
-      contracts.filter(c => ['High','Critical'].includes(c.risk_level)).length;
+      contracts.filter(c => ['High','Critical'].includes(c.review_priority)).length;
     document.getElementById('contract-count').textContent =
       contracts.length > 0 ? `${contracts.length} document${contracts.length !== 1 ? 's' : ''}` : '';
   }
@@ -813,7 +812,7 @@
         </td>
         <td style="font-size:0.8rem;color:var(--mist)">${escHtml(c.doc_type || '—')}</td>
         <td>${statusBadge(c.status)}</td>
-        <td>${riskPill(c.risk_level, c.risk_score)}</td>
+        <td>${priorityBadge(c.review_priority, c.critical_flag_count, c.high_flag_count)}</td>
         <td style="font-size:0.8rem;color:var(--mist);white-space:nowrap">${formatDate(c.upload_date)}</td>
         <td>
           <div class="action-cell" onclick="event.stopPropagation()">
@@ -867,10 +866,14 @@
     return `<span class="badge ${cls}"><span class="badge-dot"></span>${label}</span>`;
   }
 
-  function riskPill(level, score) {
-    if (!level || level === 'Unknown') return `<span class="risk-pill risk-Unknown">—</span>`;
-    const num = score ? `<span class="risk-score-num">${score}</span>` : '';
-    return `<span class="risk-pill risk-${level}">${level} ${num}</span>`;
+  function priorityBadge(priority, critical, high) {
+    if (!priority || priority === 'Unknown') return `<span class="risk-pill risk-Unknown">—</span>`;
+    const colorMap = { Critical: 'Critical', High: 'High', Medium: 'Medium', Low: 'Low' };
+    const cls = colorMap[priority] || 'Unknown';
+    let counts = '';
+    if (critical > 0) counts += ` <span class="risk-score-num" style="color:#e53e3e">${critical}C</span>`;
+    if (high > 0)     counts += ` <span class="risk-score-num" style="color:#dd6b20">${high}H</span>`;
+    return `<span class="risk-pill risk-${cls}">${priority}${counts}</span>`;
   }
 
   function formatDate(dateStr) {
@@ -1099,7 +1102,7 @@
         document.getElementById('progress-card').classList.remove('show');
         document.getElementById('progress-minimised').classList.remove('show');
         fetchAndRender();
-        toast(`Analysis complete — Risk: ${p.risk_level || 'see report'}`, 'success');
+        toast(`Analysis complete — Priority: ${p.review_priority || 'see report'}`, 'success');
       }, 2000);
     }
   }

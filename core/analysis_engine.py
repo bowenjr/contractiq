@@ -333,7 +333,7 @@ class AnalysisEngine:
           When provided, structured_markdown and section_index are used so
           each pillar receives only its relevant sections (max 15 000 chars).
         """
-        total_steps = 7
+        total_steps = 6
 
         def _cb(step_num: int, step_name: str, message: str, percent: int) -> None:
             if progress_callback:
@@ -378,25 +378,30 @@ class AnalysisEngine:
             "contract_value":      doc_meta.get("value_preview"),
         }
 
-        # ── Step 1: Classify and summarise ───────────────────────────────────
-        _cb(1, "Classification", "Classifying document and summarising...", 2)
-        print(f"  [1/7] Classifying: {filename}")
+        # ── Step 1/6: Classify and summarise ─────────────────────────────────
+        _cb(1, "Classification", "Classifying document and summarising...", 5)
+        print(f"  [1/6] Classifying: {filename}")
         classify = self._classify_and_summarise(
             analysis_source[:self.MAX_CHARS_CLASSIFICATION * 8], doc_type
         )
         results.update(classify)
         results["doc_type"] = doc_type  # detection is more reliable
 
-        # ── Step 2: Extract parties ───────────────────────────────────────────
-        _cb(2, "Parties", "Mapping parties and relationships...", 14)
-        print("  [2/7] Mapping parties...")
+        # ── Step 2/6: Extract parties ─────────────────────────────────────────
+        _cb(2, "Parties", "Extracting parties and commercial terms...", 15)
+        print("  [2/6] Extracting parties...")
         results["parties"] = self._extract_parties(
             analysis_source[:self.MAX_CHARS_PARTIES], doc_type
         )
 
-        # ── Step 3: 7-Pillar analysis (section-routed) ────────────────────────
-        _cb(3, "Pillar Analysis", "Starting pillar analysis...", 28)
-        print("  [3/7] Analysing 7 pillars...")
+        # ── Step 3/6: Extract dates (max 3 LLM calls) ────────────────────────
+        _cb(3, "Dates", "Extracting dates and deadlines...", 25)
+        print("  [3/6] Extracting dates...")
+        results["dates"] = self._extract_all_dates(text, _cb)
+
+        # ── Step 4/6: 7-Pillar analysis (section-routed) ─────────────────────
+        _cb(4, "Pillar Analysis", "Starting pillar analysis...", 30)
+        print("  [4/6] Analysing 7 pillars...")
         results["pillars"] = self._analyse_all_pillars(
             analysis_source, section_index, doc_type, positions, _cb, cancel_check
         )
@@ -412,39 +417,38 @@ class AnalysisEngine:
                 if not findings:
                     continue
                 pillar_id = pillar_result.get("pillar_id", "unknown")
-                # Tag original severity before enrichment
                 for f in findings:
                     f["original_severity"] = f.get("severity", "Low")
                 enriched = self.knowledge.enrich_findings(findings, doc_ctx)
                 pillar_result["findings"] = enriched
                 escalations = sum(1 for f in enriched if f.get("escalation_triggered"))
-                deviations = sum(1 for f in enriched if f.get("matched_company_position"))
+                deviations  = sum(1 for f in enriched if f.get("matched_company_position"))
                 if escalations or deviations:
                     print(
                         f"  [Knowledge] {pillar_id}: "
                         f"{escalations} escalations, {deviations} position matches"
                     )
 
-        # ── Step 4: Extract dates (max 3 LLM calls) ───────────────────────────
-        _cb(4, "Dates", "Extracting critical dates and deadlines...", 72)
-        print("  [4/7] Extracting dates...")
-        results["dates"] = self._extract_all_dates(text, _cb)
-
-        # ── Step 5: Extract obligations ───────────────────────────────────────
-        _cb(5, "Obligations", "Extracting obligations and notice requirements...", 80)
-        print("  [5/7] Extracting obligations...")
+        # ── Step 5/6: Extract obligations ─────────────────────────────────────
+        _cb(5, "Obligations", "Extracting obligations and notice requirements...", 78)
+        print("  [5/6] Extracting obligations...")
         results["obligations"] = self._extract_obligations(extraction_text, doc_type)
 
-        # ── Step 6: Risk score (pure Python) ──────────────────────────────────
-        _cb(6, "Risk Score", "Calculating risk score...", 88)
-        print("  [6/7] Calculating risk score...")
-        results["risk_score"] = self._calculate_risk_score(results["pillars"], doc_type)
+        # ── Review priority (pure Python, replaces risk score) ────────────────
+        results["review_priority"] = self._calculate_review_priority(results["pillars"])
+        rp = results["review_priority"]
+        print(
+            f"  Review priority: {rp.get('review_priority','Unknown')} | "
+            f"{rp.get('critical_flag_count',0)} critical, "
+            f"{rp.get('high_flag_count',0)} high, "
+            f"{rp.get('negotiation_points_count',0)} negotiation points"
+        )
 
-        # ── Step 7: Recommendations ───────────────────────────────────────────
-        _cb(7, "Recommendations", "Generating recommendations...", 94)
-        print("  [7/7] Generating recommendations...")
+        # ── Step 6/6: Recommendations ─────────────────────────────────────────
+        _cb(6, "Recommendations", "Generating recommendations...", 90)
+        print("  [6/6] Generating recommendations...")
         results["recommendations"] = self._generate_recommendations(
-            results["pillars"], results["risk_score"], positions, doc_type
+            results["pillars"], results["review_priority"], positions, doc_type
         )
 
         return results
@@ -619,9 +623,9 @@ class AnalysisEngine:
                 raise InterruptedError("Analysis cancelled by user")
             step_name = f"Pillar: {pillar.name}"
             msg = f"Analysing {pillar.icon} {pillar.name} pillar ({i}/7)..."
-            pct = 28 + int(42 * (i - 1) / 7)
-            cb(3, step_name, msg, pct)
-            print(f"  [3/7] {msg}")
+            pct = 30 + int(45 * (i - 1) / 7)
+            cb(4, step_name, msg, pct)
+            print(f"  [4/6] {msg}")
 
             if section_index:
                 pillar_text = self._get_pillar_text(markdown, section_index, pillar)
@@ -735,7 +739,7 @@ class AnalysisEngine:
         max_chars = self.MAX_CHARS_DATES  # default 60 000
 
         if len(text) <= max_chars:
-            cb(4, "Dates", "Extracting dates — single pass...", 73)
+            cb(3, "Dates", "Extracting dates — single pass...", 26)
             return self._extract_dates_single(text[:max_chars])
 
         # Document exceeds limit — split into max 3 equal passes
@@ -747,7 +751,7 @@ class AnalysisEngine:
         ]
         partial: List[Dict] = []
         for i, chunk in enumerate(chunks, 1):
-            cb(4, "Dates", f"Extracting dates — pass {i}/3...", 72 + i * 2)
+            cb(3, "Dates", f"Extracting dates — pass {i}/3...", 25 + i * 2)
             result = self._extract_dates_single(chunk[:max_chars])
             if "error" not in result:
                 partial.append(result)
@@ -846,85 +850,72 @@ class AnalysisEngine:
             return []
         return result.get("obligations", [])
 
-    # ── Step 6: Calculate risk score (pure Python) ────────────────────────────
+    # ── Calculate review priority (replaces risk score) ──────────────────────
 
-    def _calculate_risk_score(
-        self, pillar_results: List[Dict], doc_type: str
-    ) -> Dict:
-        weights = get_weights(doc_type)
-
-        pillar_breakdown = []
-        critical_count = 0
-        high_count = 0
-        weighted_risk_sum = 0.0
-        weight_total = 0.0
+    def _calculate_review_priority(self, pillar_results: List[Dict]) -> Dict:
+        critical = 0
+        high = 0
+        medium = 0
+        negotiation_pts = 0
+        legal_required = 0
+        management_required = 0
 
         for pr in pillar_results:
-            pid = pr.get("pillar_id", "")
-            score = pr.get("score", 50)
-            if not isinstance(score, (int, float)):
-                score = 50
-            score = max(0, min(100, score))
-
-            weight = weights.get(pid, 1 / 7)
-            pillar_risk = 100 - score
-            weighted_risk_sum += pillar_risk * weight
-            weight_total += weight
-
-            # Count flags
+            if not isinstance(pr, dict):
+                continue
+            for finding in pr.get("findings", []):
+                sev = finding.get("severity", "")
+                if sev == "Critical":
+                    critical += 1
+                elif sev == "High":
+                    high += 1
+                elif sev == "Medium":
+                    medium += 1
+                if finding.get("requires_legal_review"):
+                    legal_required += 1
+                if finding.get("requires_management_review"):
+                    management_required += 1
+            # Also count red_flags for severity
             for flag in pr.get("red_flags", []):
                 sev = flag.get("severity", "")
                 if sev == "Critical":
-                    critical_count += 1
+                    critical += 1
                 elif sev == "High":
-                    high_count += 1
+                    high += 1
+                elif sev == "Medium":
+                    medium += 1
+            negotiation_pts += len(pr.get("negotiation_points", []))
 
-            pillar_breakdown.append({
-                "pillar_id": pid,
-                "pillar_name": pr.get("pillar_name", pid),
-                "score": score,
-                "status": pr.get("status", "Issues Found"),
-                "weight": round(weight, 3),
-            })
-
-        # Weighted average risk (0-100)
-        if weight_total > 0:
-            base_score = weighted_risk_sum / weight_total
+        if critical > 0:
+            priority = "Critical"
+        elif high >= 3:
+            priority = "High"
+        elif high >= 1 or medium >= 3:
+            priority = "Medium"
         else:
-            base_score = 50.0
-
-        # Adjust for flag counts
-        adjustment = min(critical_count * 5 + high_count * 2, 30)
-        overall_score = round(min(base_score + adjustment, 100))
-
-        if overall_score <= 25:
-            level = "Low"
-        elif overall_score <= 50:
-            level = "Medium"
-        elif overall_score <= 75:
-            level = "High"
-        else:
-            level = "Critical"
+            priority = "Low"
 
         return {
-            "overall_score": overall_score,
-            "level": level,
-            "critical_flags": critical_count,
-            "high_flags": high_count,
-            "pillar_breakdown": pillar_breakdown,
-            "score_rationale": (
-                f"Overall risk score {overall_score}/100 ({level}). "
-                f"{critical_count} critical flag(s) and {high_count} high flag(s) identified "
-                f"across {len(pillar_results)} pillars."
+            "review_priority": priority,
+            "critical_flag_count": critical,
+            "high_flag_count": high,
+            "medium_flag_count": medium,
+            "negotiation_points_count": negotiation_pts,
+            "legal_reviews_required": legal_required,
+            "management_reviews_required": management_required,
+            "priority_rationale": (
+                f"{critical} critical, {high} high, {medium} medium findings "
+                f"across {len(pillar_results)} pillars. "
+                f"{negotiation_pts} negotiation points."
             ),
         }
 
-    # ── Step 7: Generate recommendations ─────────────────────────────────────
+    # ── Step 6: Generate recommendations ─────────────────────────────────────
 
     def _generate_recommendations(
         self,
         pillar_results: List[Dict],
-        risk_score: Dict,
+        review_priority: Dict,
         positions: Dict,
         doc_type: str,
     ) -> Dict:
@@ -946,8 +937,9 @@ class AnalysisEngine:
 
         prompt = (
             f"Document type: {doc_type}\n"
-            f"Risk score: {risk_score.get('overall_score')}/100 "
-            f"({risk_score.get('level')})\n\n"
+            f"Review priority: {review_priority.get('review_priority','Unknown')} "
+            f"({review_priority.get('critical_flag_count',0)} critical, "
+            f"{review_priority.get('high_flag_count',0)} high flags)\n\n"
             f"Pillar analysis summary:\n{json.dumps(pillar_summary, indent=2)}\n\n"
             "Generate actionable recommendations for the Contracts Manager.\n\n"
             "Return JSON:\n"

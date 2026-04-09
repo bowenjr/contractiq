@@ -305,14 +305,18 @@ class Database:
     def _evolve_schema(self):
         """Add columns introduced after the initial release. Silent on duplicates."""
         docs_cols = [
-            ("structured_markdown",    "TEXT"),
-            ("contractual_items_json", "TEXT"),
-            ("tracker_path",           "TEXT"),
-            ("business_role",          "TEXT"),
-            ("delivery_model",         "TEXT"),
-            ("product_families_json",  "TEXT"),
-            ("jurisdiction",           "TEXT"),
-            ("review_notes",           "TEXT"),
+            ("structured_markdown",      "TEXT"),
+            ("contractual_items_json",   "TEXT"),
+            ("tracker_path",             "TEXT"),
+            ("business_role",            "TEXT"),
+            ("delivery_model",           "TEXT"),
+            ("product_families_json",    "TEXT"),
+            ("jurisdiction",             "TEXT"),
+            ("review_notes",             "TEXT"),
+            ("review_priority",          "TEXT"),
+            ("critical_flag_count",      "INTEGER"),
+            ("high_flag_count",          "INTEGER"),
+            ("negotiation_points_count", "INTEGER"),
         ]
         ni_cols = [
             ("proposed_response", "TEXT"),
@@ -433,6 +437,8 @@ class Database:
                 "risk_score, risk_level, executive_summary, "
                 "pdf_report_path, excel_report_path, tracker_path, "
                 "counterparty, contract_value, project_id, "
+                "review_priority, critical_flag_count, high_flag_count, "
+                "negotiation_points_count, "
                 "CASE WHEN structured_markdown IS NOT NULL "
                 "     AND LENGTH(structured_markdown) > 100 "
                 "     THEN 1 ELSE 0 END as has_markdown, "

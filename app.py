@@ -100,7 +100,7 @@ async def startup_event():
 #   { "step_num": int, "total_steps": int,
 #     "step_name": str, "message": str, "percent": int,
 #     "completed_steps": [{"step_num": int, "step_name": str}],
-#     "error": str|null, "risk_level": str|null }
+#     "error": str|null, "review_priority": str|null }
 progress_store: dict = {}
 
 # ── Cancellation store ────────────────────────────────────────────────────────
@@ -113,9 +113,9 @@ def _run_analysis_background(doc_id: str) -> None:
     document = db.get_document(doc_id)
     if not document:
         progress_store[doc_id] = {
-            "step_num": 0, "total_steps": 7, "step_name": "Error",
+            "step_num": 0, "total_steps": 6, "step_name": "Error",
             "message": "Document not found", "percent": 0,
-            "completed_steps": [], "error": "Document not found", "risk_level": None,
+            "completed_steps": [], "error": "Document not found", "review_priority": None,
         }
         return
 
@@ -139,7 +139,7 @@ def _run_analysis_background(doc_id: str) -> None:
             "percent": percent,
             "completed_steps": completed,
             "error": None,
-            "risk_level": None,
+            "review_priority": None,
         }
 
     def _check_cancel() -> bool:
@@ -172,7 +172,7 @@ def _run_analysis_background(doc_id: str) -> None:
             f"{word_count:,} words | {noise_pct}% noise removed"
         )
         _progress_cb(
-            1, 7, "Pre-processing",
+            1, 6, "Pre-processing",
             f"Pre-processing complete — {section_count} sections detected, "
             f"{noise_pct}% noise removed, {word_count:,} words",
             5,
@@ -220,14 +220,17 @@ def _run_analysis_background(doc_id: str) -> None:
                                datetime.now().isoformat())
 
         # Update document record
+        rp = results.get("review_priority", {})
         db.update_document(doc_id, {
             "status": "complete",
             "analysis_date": datetime.now().isoformat(),
             "analysis_json": json.dumps(results),
             "pdf_report_path": pdf_filename,
             "excel_report_path": xlsx_filename,
-            "risk_score": results.get("risk_score", {}).get("overall_score", 0),
-            "risk_level": results.get("risk_score", {}).get("level", "Unknown"),
+            "review_priority": rp.get("review_priority", "Unknown"),
+            "critical_flag_count": rp.get("critical_flag_count", 0),
+            "high_flag_count": rp.get("high_flag_count", 0),
+            "negotiation_points_count": rp.get("negotiation_points_count", 0),
             "doc_type": results.get("doc_type", "General Contract"),
             "doc_type_confidence": results.get("doc_type_confidence", "Low"),
             "executive_summary": results.get("executive_summary", ""),
@@ -239,20 +242,20 @@ def _run_analysis_background(doc_id: str) -> None:
             "tracker_path": tracker_filename,
         })
 
-        # Build completed_steps from all 7 steps
+        # Build completed_steps from all 6 steps
         all_completed = [
             {"step_num": k, "step_name": v}
             for k, v in sorted(seen_steps.items())
         ]
         progress_store[doc_id] = {
-            "step_num": 8,
-            "total_steps": 7,
+            "step_num": 7,
+            "total_steps": 6,
             "step_name": "Complete",
             "message": "Analysis complete",
             "percent": 100,
             "completed_steps": all_completed,
             "error": None,
-            "risk_level": results.get("risk_score", {}).get("level", "Unknown"),
+            "review_priority": rp.get("review_priority", "Unknown"),
         }
 
     except InterruptedError:
@@ -263,10 +266,10 @@ def _run_analysis_background(doc_id: str) -> None:
             "error_message": "Analysis cancelled by user",
         })
         progress_store[doc_id] = {
-            "step_num": 0, "total_steps": 7, "step_name": "Cancelled",
+            "step_num": 0, "total_steps": 6, "step_name": "Cancelled",
             "message": "Analysis cancelled by user", "percent": 0,
             "completed_steps": completed,
-            "error": "Analysis cancelled by user", "risk_level": None,
+            "error": "Analysis cancelled by user", "review_priority": None,
         }
 
     except Exception as e:
@@ -275,13 +278,13 @@ def _run_analysis_background(doc_id: str) -> None:
         traceback.print_exc()
         db.update_document(doc_id, {"status": "error", "error_message": str(e)})
         progress_store[doc_id] = {
-            "step_num": 0, "total_steps": 7, "step_name": "Error",
+            "step_num": 0, "total_steps": 6, "step_name": "Error",
             "message": str(e), "percent": 0,
             "completed_steps": [
                 {"step_num": k, "step_name": v}
                 for k, v in sorted(seen_steps.items())
             ],
-            "error": str(e), "risk_level": None,
+            "error": str(e), "review_priority": None,
         }
 
 
@@ -402,9 +405,9 @@ async def analyse_document(doc_id: str, background_tasks: BackgroundTasks):
     )
     db.update_document(doc_id, {"status": "processing"})
     progress_store[doc_id] = {
-        "step_num": 0, "total_steps": 7, "step_name": "Starting",
+        "step_num": 0, "total_steps": 6, "step_name": "Starting",
         "message": "Analysis queued...", "percent": 0,
-        "completed_steps": [], "error": None, "risk_level": None,
+        "completed_steps": [], "error": None, "review_priority": None,
     }
     background_tasks.add_task(_run_analysis_background, doc_id)
     return JSONResponse({"status": "processing", "doc_id": doc_id})
@@ -423,25 +426,25 @@ async def get_progress(doc_id: str):
     status = document.get("status", "")
     if status == "complete":
         return JSONResponse({
-            "step_num": 8, "total_steps": 7, "step_name": "Complete",
+            "step_num": 7, "total_steps": 6, "step_name": "Complete",
             "message": "Analysis complete", "percent": 100,
             "completed_steps": [], "error": None,
-            "risk_level": document.get("risk_level"),
+            "review_priority": document.get("review_priority"),
         })
     if status in ("processing", "interrupted"):
         msg = document.get("error_message") or "Server was restarted during analysis — please re-analyse"
         return JSONResponse({
-            "step_num": 0, "total_steps": 7, "step_name": "Interrupted",
+            "step_num": 0, "total_steps": 6, "step_name": "Interrupted",
             "message": msg, "percent": 0, "completed_steps": [],
-            "error": msg, "risk_level": None,
+            "error": msg, "review_priority": None,
         })
     if status == "error":
         return JSONResponse({
-            "step_num": 0, "total_steps": 7, "step_name": "Error",
+            "step_num": 0, "total_steps": 6, "step_name": "Error",
             "message": document.get("error_message", "Analysis failed"),
             "percent": 0, "completed_steps": [],
             "error": document.get("error_message", "Analysis failed"),
-            "risk_level": None,
+            "review_priority": None,
         })
     # uploaded / unknown — no progress to report yet
     raise HTTPException(status_code=404, detail="No progress data for this document")
