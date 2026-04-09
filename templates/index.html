@@ -455,6 +455,7 @@
   }
   .toast.toast-error   { border-left-color: var(--red); }
   .toast.toast-success { border-left-color: var(--green); }
+  .toast.toast-warning { border-left-color: var(--amber); }
   @keyframes slide-up {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -913,6 +914,9 @@
       const d = await r.json();
       if (!r.ok) throw new Error(d.detail || 'Upload failed');
       toast(`Uploaded — ${d.word_count.toLocaleString()} words extracted`, 'success');
+      if (d.scan_warning) {
+        setTimeout(() => toast(d.scan_warning, 'warning'), 1500);
+      }
       hideUploadBanner();
       fetchAndRender();
       setTimeout(() => startAnalysis(d.doc_id || d.contract_id, file.name), 400);

@@ -230,36 +230,144 @@ class DocumentPreprocessor:
     # ── Step 2: Detect sections ───────────────────────────────────────────────
 
     def _detect_sections(self, text: str) -> List[Dict[str, Any]]:
-        """Return [{heading, level, start_pos, end_pos}] sorted by position."""
-        hits: List[Tuple[int, str, int]] = []
+        """
+        Detect sections in any document structure.
+        Tries 7 heading patterns; falls back to positional chunking if fewer
+        than 3 headings are found.
+        Returns [{heading, level, start_pos, end_pos, content}].
+        """
+        lines = text.split("\n")
 
-        for pattern, level in _HEADING_PATTERNS:
-            for m in pattern.finditer(text):
-                heading = m.group(0).strip()
-                if 3 < len(heading) < 120:
-                    hits.append((m.start(), heading, level))
+        # Pattern set 1: Formal legal numbering
+        formal_legal = re.compile(
+            r"^(ARTICLE|Article|SECTION|Section|GC|CLAUSE|Clause)\s+\d+[\d.]*\s*[-\u2013\u2014]?\s*"
+            r"([A-Z][A-Za-z\s&/,-]{2,60})?$",
+            re.MULTILINE,
+        )
+        # Pattern set 2: Numbered with period (1. Intro, 1.1 Payment Terms)
+        numbered = re.compile(
+            r"^(\d+\.)+\s+([A-Z][A-Za-z\s&/,-]{2,60})$",
+            re.MULTILINE,
+        )
+        # Pattern set 3: Appendix/Schedule/Annex/Exhibit/Attachment
+        appendix = re.compile(
+            r"^(Appendix|APPENDIX|Schedule|SCHEDULE|Annex|ANNEX|"
+            r"Exhibit|EXHIBIT|Attachment|ATTACHMENT)\s+[A-Z0-9]"
+            r"[\s\u2013\u2014-]?\s*([A-Za-z\s&/,-]{0,60})$",
+            re.MULTILINE,
+        )
+        # Pattern set 4: ALL CAPS headings
+        all_caps = re.compile(r"^[A-Z][A-Z\s&/,()-]{4,60}$")
+        # Pattern set 5: Part/Division headings
+        part_division = re.compile(
+            r"^(PART|Part|DIVISION|Division|VOLUME|Volume)\s+\d+\s*"
+            r"[-\u2013\u2014]?\s*([A-Z][A-Za-z\s&/,-]{0,60})?$"
+        )
+        # Pattern set 6: Title case (short lines surrounded by blank lines)
+        title_case = re.compile(
+            r"^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,8})$"
+        )
+        # Pattern set 7: Markdown headers
+        markdown_header = re.compile(r"^(#{1,4})\s+(.+)$")
 
-        # Deduplicate by start position (prefer lower level = more important)
-        pos_map: Dict[int, Tuple[str, int]] = {}
-        for pos, heading, level in hits:
-            if pos not in pos_map or level < pos_map[pos][1]:
-                pos_map[pos] = (heading, level)
+        found_headings: List[Dict] = []
 
-        sorted_hits = sorted(pos_map.items())
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            if not line_stripped or len(line_stripped) < 3:
+                continue
+            if len(line_stripped) > 120:
+                continue
 
-        sections: List[Dict] = []
-        for i, (start_pos, (heading, level)) in enumerate(sorted_hits):
-            end_pos = (
-                sorted_hits[i + 1][0] if i + 1 < len(sorted_hits) else len(text)
+            is_heading = False
+            level = 3
+
+            if markdown_header.match(line_stripped):
+                hashes = markdown_header.match(line_stripped).group(1)
+                level = len(hashes)
+                is_heading = True
+
+            elif formal_legal.match(line_stripped):
+                level = 2 if "." not in line_stripped[:15] else 3
+                is_heading = True
+
+            elif appendix.match(line_stripped):
+                level = 2
+                is_heading = True
+
+            elif part_division.match(line_stripped):
+                level = 1
+                is_heading = True
+
+            elif numbered.match(line_stripped):
+                dots = line_stripped.split(".")[0]
+                level = min(len(dots), 4)
+                is_heading = True
+
+            elif all_caps.match(line_stripped):
+                prev_blank = i == 0 or not lines[i - 1].strip()
+                next_blank = i >= len(lines) - 1 or not lines[i + 1].strip()
+                if prev_blank or next_blank:
+                    level = 2
+                    is_heading = True
+
+            elif title_case.match(line_stripped):
+                prev_blank = i == 0 or not lines[i - 1].strip()
+                next_content = i < len(lines) - 1 and len(lines[i + 1].strip()) > 20
+                if prev_blank and next_content:
+                    level = 3
+                    is_heading = True
+
+            if is_heading:
+                pos = sum(len(l) + 1 for l in lines[:i])
+                found_headings.append({
+                    "heading":   line_stripped,
+                    "level":     level,
+                    "line_num":  i,
+                    "start_pos": pos,
+                    "content":   "",
+                })
+
+        # Assign content to each heading
+        for idx, section in enumerate(found_headings):
+            start = section["line_num"] + 1
+            end = (
+                found_headings[idx + 1]["line_num"]
+                if idx + 1 < len(found_headings)
+                else len(lines)
             )
-            sections.append({
-                "heading":   heading,
-                "level":     level,
-                "start_pos": start_pos,
-                "end_pos":   end_pos,
-            })
+            section["content"] = "\n".join(lines[start:end]).strip()
 
-        return sections
+        # Fallback: no standard structure — use positional chunking
+        if len(found_headings) < 3:
+            print(
+                "  Pre-processor: No standard headings detected — "
+                "using positional chunking"
+            )
+            chunk_size = max(500, len(text) // 20)
+            found_headings = []
+            for i in range(0, len(text), chunk_size):
+                chunk = text[i : i + chunk_size]
+                found_headings.append({
+                    "heading":   f"Section {i // chunk_size + 1}",
+                    "level":     2,
+                    "line_num":  0,
+                    "start_pos": i,
+                    "end_pos":   min(i + chunk_size, len(text)),
+                    "content":   chunk,
+                })
+
+        # Assign end_pos for heading-based sections
+        for idx, section in enumerate(found_headings):
+            if "end_pos" not in section:
+                section["end_pos"] = (
+                    found_headings[idx + 1]["start_pos"]
+                    if idx + 1 < len(found_headings)
+                    else len(text)
+                )
+
+        print(f"  Pre-processor: {len(found_headings)} sections detected")
+        return found_headings
 
     # ── Step 3: Build markdown ────────────────────────────────────────────────
 
@@ -315,30 +423,111 @@ class DocumentPreprocessor:
 
     # ── Step 4: Build section index ───────────────────────────────────────────
 
-    def _build_section_index(self, sections: List[Dict], text: str) -> Dict[str, List[str]]:
+    def _build_section_index(self, sections: List[Dict], text: str = "") -> Dict[str, List[str]]:
         """
-        Map keywords → [section headings] for pillar routing in Stage 2.
-        Checks both the heading text and the first 500 chars of section content.
+        Build keyword-to-section mapping using topic scoring.
+        Works regardless of document structure.
+        Returns {topic: [heading, ...]} for pillar routing.
+        """
+        TOPIC_KEYWORDS: Dict[str, List[str]] = {
+            "payment": [
+                "payment", "invoice", "price", "cost", "fee", "rate", "amount",
+                "dollar", "$", "lump sum", "unit price", "total",
+                "subcontract price", "compensation", "remuneration",
+                "billing", "milestone",
+            ],
+            "time": [
+                "time", "schedule", "date", "deadline", "completion", "delay",
+                "extension", "milestone", "duration", "period", "commence",
+                "finish", "programme", "calendar", "working days", "weeks",
+            ],
+            "scope": [
+                "scope", "work", "services", "supply", "deliver", "perform",
+                "furnish", "specification", "drawing", "design", "requirement",
+                "obligation", "exclude", "include", "interface", "provisional",
+            ],
+            "liability": [
+                "liability", "indemnity", "insurance", "warranty", "risk",
+                "force majeure", "limitation", "consequential", "damage",
+                "claim", "loss", "exposure", "cap", "bond", "guarantee",
+                "fitness",
+            ],
+            "termination": [
+                "terminat", "suspend", "default", "breach", "cure", "notice",
+                "exit", "completion", "handover", "defect", "final account",
+                "close",
+            ],
+            "parties": [
+                "contractor", "subcontractor", "owner", "employer", "client",
+                "supplier", "consultant", "party", "parties", "personnel",
+                "key person", "staff", "representative", "authority",
+            ],
+            "administration": [
+                "notice", "dispute", "arbitration", "governing law",
+                "jurisdiction", "confidential", "record", "audit",
+                "communication", "instruction", "approval", "consent", "report",
+            ],
+            "commercial": [
+                "price", "value", "$", "cost", "budget", "retention",
+                "holdback", "bonus", "penalty", "liquidated", "escalation",
+                "adjustment", "variation", "change order",
+            ],
+        }
 
-        Example output:
-          {"payment": ["Article 4 Payment Terms", "Appendix C Rates"],
-           "termination": ["Article 8 Termination for Cause"]}
-        """
-        index: Dict[str, List[str]] = {}
+        # Also include the original flat keyword list for backward compat
+        flat_index: Dict[str, List[str]] = {}
+        topic_index: Dict[str, List[str]] = {}
+
+        for topic, keywords in TOPIC_KEYWORDS.items():
+            scored: List[Dict] = []
+            for section in sections:
+                heading = section.get("heading", "").lower()
+                content = section.get("content", "").lower()
+                combined = heading + " " + content[:2000]
+
+                score = 0
+                for kw in keywords:
+                    if kw in heading:
+                        score += 3
+                    elif kw in content[:500]:
+                        score += 2
+                    elif kw in combined:
+                        score += 1
+
+                if score > 0:
+                    scored.append({
+                        "heading": section["heading"],
+                        "score": score,
+                    })
+
+            scored.sort(key=lambda x: x["score"], reverse=True)
+            topic_index[topic] = [s["heading"] for s in scored[:5]]
+
+        # Keep backward-compat flat index for existing pillar keyword routing
         for section in sections:
-            start = section["start_pos"]
-            end   = section["end_pos"]
-            # heading + first 500 chars of body
-            snippet       = text[start: min(start + 500, end)].lower()
-            heading_lower = section["heading"].lower()
+            start = section.get("start_pos", 0)
+            end   = section.get("end_pos", start + 500)
+            snippet       = text[start: min(start + 500, end)].lower() if text else ""
+            heading_lower = section.get("heading", "").lower()
 
             for kw in _INDEX_KEYWORDS:
                 if kw in heading_lower or kw in snippet:
-                    bucket = index.setdefault(kw, [])
+                    bucket = flat_index.setdefault(kw, [])
                     if section["heading"] not in bucket:
                         bucket.append(section["heading"])
 
-        return index
+        # Merge both indices
+        merged = {**flat_index}
+        for k, v in topic_index.items():
+            if k not in merged:
+                merged[k] = v
+            else:
+                # Add topic headings not already present
+                for h in v:
+                    if h not in merged[k]:
+                        merged[k].append(h)
+
+        return merged
 
     # ── Tracker sheet ─────────────────────────────────────────────────────────
 

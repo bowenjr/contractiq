@@ -25,50 +25,219 @@ class DocumentProcessor:
     def _process_pdf(self, file_path: Path) -> Dict[str, Any]:
         try:
             import fitz  # PyMuPDF
-            doc = fitz.open(str(file_path))
-            pages = []
-            for page in doc:
-                pages.append(page.get_text("text"))
-            doc.close()
-            full_text = "\n\n".join(pages)
-            full_text = self._clean_text(full_text)
-            return {
-                "text": full_text,
-                "word_count": len(full_text.split()),
-                "page_count": len(pages),
-                "doc_type": "PDF",
-            }
         except ImportError:
             raise ImportError("PyMuPDF not installed. Run: pip install pymupdf")
+
+        doc = fitz.open(str(file_path))
+        pages_content = []
+        total_words = 0
+        scanned_pages = 0
+
+        for page_num, page in enumerate(doc):
+            page_content = []
+
+            # Method 1: Extract text blocks with position info
+            blocks = page.get_text("dict")["blocks"]
+
+            text_blocks = []
+            for block in blocks:
+                if block["type"] == 0:  # text block
+                    block_text = ""
+                    for line in block.get("lines", []):
+                        line_text = ""
+                        for span in line.get("spans", []):
+                            line_text += span.get("text", "")
+                        if line_text.strip():
+                            block_text += line_text + "\n"
+                    if block_text.strip():
+                        text_blocks.append({
+                            "text": block_text.strip(),
+                            "bbox": block["bbox"],
+                        })
+
+            # Sort by vertical position then horizontal (handles multi-column)
+            text_blocks.sort(
+                key=lambda b: (round(b["bbox"][1] / 20) * 20, b["bbox"][0])
+            )
+
+            for block in text_blocks:
+                page_content.append(block["text"])
+
+            # Method 2: Extract tables if present
+            try:
+                tables = page.find_tables()
+                if tables and tables.tables:
+                    for table in tables.tables:
+                        try:
+                            df = table.to_pandas()
+                            if not df.empty:
+                                rows = []
+                                for _, row in df.iterrows():
+                                    cells = [
+                                        str(v).strip()
+                                        for v in row.values
+                                        if str(v).strip() and str(v) != "nan"
+                                    ]
+                                    if cells:
+                                        rows.append(" | ".join(cells))
+                                if rows:
+                                    page_content.append("\n".join(rows))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            page_text = "\n".join(page_content)
+            word_count = len(page_text.split())
+            if word_count < 10:
+                scanned_pages += 1
+            else:
+                total_words += word_count
+                pages_content.append(page_text)
+
+        doc.close()
+
+        if scanned_pages > max(1, len(pages_content)) * 0.5:
+            print(
+                f"  WARNING: {scanned_pages} pages appear to be scanned images. "
+                f"Text extraction may be incomplete. Consider using a text-based PDF."
+            )
+
+        full_text = "\n\n".join(pages_content)
+        full_text = self._clean_text(full_text)
+
+        print(
+            f"  PDF extraction: {total_words:,} words, "
+            f"{len(full_text):,} chars, "
+            f"{scanned_pages} scanned pages detected"
+        )
+
+        return {
+            "text": full_text,
+            "word_count": total_words,
+            "page_count": len(pages_content),
+            "doc_type": "PDF",
+            "scanned_pages": scanned_pages,
+        }
 
     def _process_docx(self, file_path: Path) -> Dict[str, Any]:
         try:
             from docx import Document
-            doc = Document(str(file_path))
-            paragraphs = []
-            for para in doc.paragraphs:
-                text = para.text.strip()
-                if text:
-                    paragraphs.append(text)
-            # Also extract tables
-            for table in doc.tables:
-                for row in table.rows:
-                    row_text = " | ".join(
-                        cell.text.strip() for cell in row.cells if cell.text.strip()
-                    )
-                    if row_text:
-                        paragraphs.append(row_text)
-            full_text = "\n\n".join(paragraphs)
-            full_text = self._clean_text(full_text)
-            word_count = len(full_text.split())
-            return {
-                "text": full_text,
-                "word_count": word_count,
-                "page_count": max(1, word_count // 500),
-                "doc_type": "DOCX",
-            }
         except ImportError:
             raise ImportError("python-docx not installed. Run: pip install python-docx")
+
+        WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+        def get_text_from_element(element):
+            texts = []
+            for t in element.iter(f"{{{WORD_NS}}}t"):
+                if t.text:
+                    texts.append(t.text)
+            return "".join(texts)
+
+        def extract_table(tbl_element):
+            rows = []
+            for tr in tbl_element.findall(f".//{{{WORD_NS}}}tr"):
+                cells = []
+                for tc in tr.findall(f".//{{{WORD_NS}}}tc"):
+                    cell_text = get_text_from_element(tc).strip()
+                    if cell_text:
+                        cells.append(cell_text)
+                if cells:
+                    rows.append(" | ".join(cells))
+            return "\n".join(rows) if rows else ""
+
+        def extract_shapes(doc):
+            shape_texts = []
+            for elem in doc.element.body.iter():
+                tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                if tag in ("txbxContent", "wsp", "txPr"):
+                    text = get_text_from_element(elem).strip()
+                    if text and len(text) > 5:
+                        shape_texts.append(f"[TEXT BOX: {text}]")
+            return shape_texts
+
+        doc = Document(str(file_path))
+        content_blocks = []
+
+        # BLOCK 1: Body content in document order
+        for element in doc.element.body:
+            tag = element.tag.split("}")[-1] if "}" in element.tag else element.tag
+
+            if tag == "p":
+                text = get_text_from_element(element).strip()
+                if text:
+                    content_blocks.append(text)
+
+            elif tag == "tbl":
+                table_text = extract_table(element)
+                if table_text:
+                    content_blocks.append(table_text)
+
+            elif tag == "sdt":
+                # Structured document tags (form fields, content controls)
+                text = get_text_from_element(element).strip()
+                if text:
+                    content_blocks.append(text)
+
+        # BLOCK 2: Text boxes and shapes
+        shapes = extract_shapes(doc)
+        if shapes:
+            content_blocks.append("\n--- TEXT BOXES ---")
+            content_blocks.extend(shapes)
+
+        # BLOCK 3: Headers and footers
+        header_content = []
+        for section in doc.sections:
+            for hdr_ftr in [
+                section.header, section.footer,
+                section.even_page_header,
+                section.first_page_header,
+            ]:
+                try:
+                    if hdr_ftr and not hdr_ftr.is_linked_to_previous:
+                        for para in hdr_ftr.paragraphs:
+                            text = para.text.strip()
+                            if text and len(text) > 3:
+                                header_content.append(text)
+                        for table in hdr_ftr.tables:
+                            table_text = extract_table(table._tbl)
+                            if table_text:
+                                header_content.append(table_text)
+                except Exception:
+                    pass
+
+        if header_content:
+            content_blocks.append("\n--- DOCUMENT HEADERS/FOOTERS ---")
+            content_blocks.extend(list(dict.fromkeys(header_content)))
+
+        # BLOCK 4: Footnotes
+        try:
+            footnote_part = doc.part.footnotes_part
+            if footnote_part:
+                for fn in footnote_part._element.findall(f".//{{{WORD_NS}}}footnote"):
+                    text = get_text_from_element(fn).strip()
+                    if text and len(text) > 10:
+                        content_blocks.append(f"[FOOTNOTE: {text}]")
+        except Exception:
+            pass
+
+        full_text = "\n\n".join(b for b in content_blocks if b.strip())
+        full_text = self._clean_text(full_text)
+        word_count = len(full_text.split())
+
+        print(
+            f"  DOCX extraction: {word_count:,} words, "
+            f"{len(full_text):,} chars from "
+            f"{len(content_blocks)} blocks"
+        )
+
+        return {
+            "text": full_text,
+            "word_count": word_count,
+            "page_count": max(1, word_count // 500),
+            "doc_type": "DOCX",
+        }
 
     def _process_txt(self, file_path: Path) -> Dict[str, Any]:
         text = file_path.read_text(encoding="utf-8", errors="replace")

@@ -15,5 +15,8 @@ python-docx>=1.1.0       # DOCX extraction
 reportlab>=4.2.0          # PDF report generation
 openpyxl>=3.1.0           # Excel workbook generation
 
+# Data processing (PDF table extraction)
+pandas>=2.0.0
+
 # HTTP (for LM Studio API calls)
 requests>=2.32.0

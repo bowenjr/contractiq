@@ -139,15 +139,46 @@ class ReportGenerator:
         story.append(Spacer(1, 0.3*cm))
 
         # ── 2. Document Metadata ──────────────────────────────────────────────
+        # Count data confidence across all pillars
+        all_qa_total = 0
+        all_qa_answered = 0
+        _not_found_vals = {
+            "not found", "not applicable", "n/a", "none",
+            "not specified", "not provided", "unknown", "",
+        }
+        for pr in analysis.get("pillars", []):
+            qa = pr.get("questions_answered", {})
+            all_qa_total += len(qa)
+            all_qa_answered += sum(
+                1 for a in qa.values()
+                if str(a).lower().strip() not in _not_found_vals
+            )
+        if all_qa_total > 0:
+            coverage_pct = round(all_qa_answered / all_qa_total * 100)
+            coverage_str = (
+                f"{coverage_pct}% — some commercial details not found in extracted text"
+                if coverage_pct < 80
+                else f"{coverage_pct}%"
+            )
+        else:
+            coverage_str = "N/A"
+
+        # Bold the contract value if it contains a dollar amount
+        raw_value = _safe(analysis.get("contract_value"))
+        value_display = (
+            f"<b>{raw_value}</b>" if "$" in raw_value else raw_value
+        )
+
         meta_items = [
-            ("Document",      _safe(contract.get("filename"))),
-            ("Type",          doc_type),
-            ("Generated",     datetime.now().strftime("%d %B %Y, %H:%M")),
-            ("Pages",         _safe(contract.get("page_count"))),
-            ("Words",         f"{contract.get('word_count', 0):,}"),
-            ("Value",         _safe(analysis.get("contract_value"))),
-            ("Duration",      _safe(analysis.get("contract_duration"))),
-            ("Governing Law", _safe(analysis.get("governing_law"))),
+            ("Document",       _safe(contract.get("filename"))),
+            ("Type",           doc_type),
+            ("Generated",      datetime.now().strftime("%d %B %Y, %H:%M")),
+            ("Pages",          _safe(contract.get("page_count"))),
+            ("Words",          f"{contract.get('word_count', 0):,}"),
+            ("Value",          value_display),
+            ("Duration",       _safe(analysis.get("contract_duration"))),
+            ("Governing Law",  _safe(analysis.get("governing_law"))),
+            ("Data Coverage",  coverage_str),
         ]
         meta_rows = [[
             Paragraph(k, ps("MK", fontName="Helvetica-Bold",
@@ -208,8 +239,7 @@ class ReportGenerator:
                 card = Table([[
                     Paragraph(
                         f'<font color="{_hex(pcolour)}"><b>{pname}</b></font><br/>'
-                        f'<font color="{_hex(scolour)}">{pstatus}</font><br/>'
-                        f"Score: {pscore}/100",
+                        f'<font color="{_hex(scolour)}">{pstatus}</font>',
                         ps(f"PC_{pid}", fontName="Helvetica",
                            fontSize=7.5, leading=11, textColor=DARK)
                     )
@@ -295,8 +325,7 @@ class ReportGenerator:
                         Paragraph(
                             f'<b>{pname}</b>  '
                             f'<font color="{_hex(scolour)}">{pstatus}</font>'
-                            f'  Score: {pscore}/100<br/>'
-                            f'{psummary}<br/>'
+                            f'<br/>{psummary}<br/>'
                             + (f'<i>{top_finding}</i>' if top_finding else ''),
                             ps(f"GC_{pid}", fontName="Helvetica",
                                fontSize=8.5, leading=12, textColor=DARK)
@@ -350,8 +379,7 @@ class ReportGenerator:
                 p_hdr = Table([[
                     Paragraph(
                         f'<b>{pname}</b>  '
-                        f'<font color="{_hex(scolour)}">{pstatus}</font>  '
-                        f'Score: {pr.get("score",50)}/100',
+                        f'<font color="{_hex(scolour)}">{pstatus}</font>',
                         ps(f"PH_{pid}", fontName="Helvetica-Bold",
                            fontSize=11, textColor=WHITE)
                     )
@@ -443,31 +471,63 @@ class ReportGenerator:
                     story.append(rf_tbl)
                     story.append(Spacer(1, 0.2*cm))
 
-                # Questions answered
+                # Questions answered — only show answered questions
                 qa = pr.get("questions_answered", {})
                 if qa:
+                    _not_found_vals = {
+                        "not found", "not applicable", "n/a",
+                        "none", "not specified", "not provided",
+                        "unknown", "",
+                    }
+                    answered_items = [
+                        (q, a) for q, a in list(qa.items())[:10]
+                        if str(a).lower().strip() not in _not_found_vals
+                    ]
+                    total_q = len(qa)
+                    answered_count = len(answered_items)
+
                     story.append(Paragraph("<b>Key Questions:</b>", body))
-                    qa_rows = [["Question", "Answer"]]
-                    for q, a in list(qa.items())[:10]:
-                        qa_rows.append([
-                            Paragraph(q, small),
-                            Paragraph(_safe(a), small),
-                        ])
-                    qa_tbl = Table(qa_rows, colWidths=[W*0.42, W*0.58])
-                    qa_tbl.setStyle(TableStyle([
-                        ("BACKGROUND",    (0,0), (-1,0), TBL_HEAD),
-                        ("TEXTCOLOR",     (0,0), (-1,0), WHITE),
-                        ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
-                        ("FONTSIZE",      (0,0), (-1,0), 8),
-                        ("ROWBACKGROUNDS",(0,1), (-1,-1), [WHITE, TBL_ALT]),
-                        ("GRID",          (0,0), (-1,-1), 0.3,
-                         colors.HexColor("#e0dbd0")),
-                        ("TOPPADDING",    (0,0), (-1,-1), 4),
-                        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-                        ("LEFTPADDING",   (0,0), (-1,-1), 5),
-                        ("VALIGN",        (0,0), (-1,-1), "TOP"),
-                    ]))
-                    story.append(qa_tbl)
+
+                    if answered_items:
+                        qa_rows = [["Question", "Answer"]]
+                        for q, a in answered_items:
+                            qa_rows.append([
+                                Paragraph(q, small),
+                                Paragraph(_safe(a), small),
+                            ])
+                        qa_tbl = Table(qa_rows, colWidths=[W*0.42, W*0.58])
+                        qa_tbl.setStyle(TableStyle([
+                            ("BACKGROUND",    (0,0), (-1,0), TBL_HEAD),
+                            ("TEXTCOLOR",     (0,0), (-1,0), WHITE),
+                            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+                            ("FONTSIZE",      (0,0), (-1,0), 8),
+                            ("ROWBACKGROUNDS",(0,1), (-1,-1), [WHITE, TBL_ALT]),
+                            ("GRID",          (0,0), (-1,-1), 0.3,
+                             colors.HexColor("#e0dbd0")),
+                            ("TOPPADDING",    (0,0), (-1,-1), 4),
+                            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                            ("LEFTPADDING",   (0,0), (-1,-1), 5),
+                            ("VALIGN",        (0,0), (-1,-1), "TOP"),
+                        ]))
+                        story.append(qa_tbl)
+                        story.append(Paragraph(
+                            f'<font color="{_hex(MID_GREY)}">'
+                            f'{answered_count} of {total_q} questions answered '
+                            f'from available text</font>',
+                            ps("QANote", fontName="Helvetica",
+                               fontSize=8, textColor=MID_GREY, spaceAfter=2)
+                        ))
+                    else:
+                        story.append(Paragraph(
+                            "Key commercial details were not found in the available "
+                            "document text. This may indicate:<br/>"
+                            "• Information is in appendices not provided<br/>"
+                            "• Document is scanned/image-based<br/>"
+                            "• Information uses non-standard terminology<br/>"
+                            "Review the source document directly for these details.",
+                            ps("QAMissing", fontName="Helvetica", fontSize=8.5,
+                               textColor=MID_GREY, leading=13, leftIndent=8)
+                        ))
                     story.append(Spacer(1, 0.2*cm))
 
                 # Missing protections

@@ -260,6 +260,27 @@ is a risk not managed.
 
 Respond only with valid JSON as instructed."""
 
+UNIVERSAL_EXTRACTION_HINT = """
+DOCUMENT FORMAT NOTE:
+This document may be a contract, subcontract, RFP, purchase order, bid document, \
+or other commercial document. Commercial data may appear in various formats:
+
+1. INLINE TEXT: "The contract value is $500,000"
+2. TABLE FORMAT: "Total Price | $500,000.00" or pipe-separated: "ITEM | QTY | PRICE"
+3. SCHEDULE FORMAT: "Activity | Completion Date"
+4. FORM FORMAT: Field labels with values beside them
+5. APPENDIX FORMAT: Data in numbered appendices at the end of the document
+
+When extracting information:
+- Look for monetary values ($X,XXX,XXX) anywhere in the provided text
+- Look for dates in any format (Q4 2026, January 2025, 2026-01-15, etc.)
+- Look for table rows with pipe separators (|) as these represent structured commercial data
+- Do NOT mark items as 'Not Found' if similar data appears nearby — use your best \
+judgment to interpret what the value refers to
+- If a value appears ambiguous, include it with a note rather than omitting it
+
+"""
+
 _PILLAR_SUFFIX = """
 
 IMPORTANT ANALYSIS INSTRUCTIONS:
@@ -368,6 +389,18 @@ class AnalysisEngine:
 
         positions = _load_positions()
 
+        # Detect document complexity and choose analysis strategy
+        word_count = len(text.split())
+        if word_count < 1000:
+            analysis_strategy = "full_document"
+            print(f"  Strategy: Full document ({word_count} words — no routing needed)")
+        elif word_count < 5000:
+            analysis_strategy = "medium_routing"
+            print(f"  Strategy: Medium routing ({word_count} words)")
+        else:
+            analysis_strategy = "full_routing"
+            print(f"  Strategy: Full routing with appendix sweep ({word_count} words)")
+
         # Extraction window for steps that need whole-doc context
         extraction_text = self._build_extraction_text(analysis_source)
 
@@ -403,7 +436,8 @@ class AnalysisEngine:
         _cb(4, "Pillar Analysis", "Starting pillar analysis...", 30)
         print("  [4/6] Analysing 7 pillars...")
         results["pillars"] = self._analyse_all_pillars(
-            analysis_source, section_index, doc_type, positions, _cb, cancel_check
+            analysis_source, section_index, doc_type, positions,
+            _cb, cancel_check, analysis_strategy
         )
 
         # ── Knowledge enrichment (pure Python, no LLM) ───────────────────────
@@ -478,59 +512,136 @@ class AnalysisEngine:
         markdown: str,
         section_index: Dict,
         pillar,
+        analysis_strategy: str = "full_routing",
     ) -> str:
         """
-        Return only the sections of markdown relevant to this pillar.
-        Uses section_index (heading → keyword hits) for fast lookup,
-        then falls back to content keyword scanning.
-        Caps output at MAX_CHARS_PER_PILLAR.
+        Get relevant text for a pillar analysis.
+
+        Strategy adapts to document size:
+          full_document  — entire markdown (< 1000 words)
+          medium_routing — first 6000 + last 3000 chars (1000–5000 words)
+          full_routing   — layered: start + keyword-matched middle + end
         """
-        keywords = _PILLAR_KEYWORDS.get(pillar.pillar_id, [])
-        max_chars = self.MAX_CHARS_PER_PILLAR
+        MAX_CHARS = self.MAX_CHARS_PER_PILLAR
+        doc_length = len(markdown)
 
-        # Headings matched via the pre-built index
-        matched_headings: set = set()
-        for kw in keywords:
-            for heading in section_index.get(kw, []):
-                matched_headings.add(heading)
+        # ── full_document: everything fits ───────────────────────────────────
+        if analysis_strategy == "full_document":
+            print(f"  {pillar.name}: full document ({doc_length:,} chars)")
+            return markdown[:MAX_CHARS]
 
-        # Split markdown into ## / ### blocks
-        blocks = re.split(r"(?=^##+ )", markdown, flags=re.MULTILINE)
+        # ── medium_routing: generous head+tail, no keyword scan needed ────────
+        if analysis_strategy == "medium_routing":
+            head = markdown[:6000]
+            tail = markdown[-3000:] if doc_length > 6000 else ""
+            combined = head + ("\n\n[...end of document...]\n\n" + tail if tail else "")
+            combined = combined[:MAX_CHARS]
+            print(f"  {pillar.name}: medium routing ({len(combined):,} chars)")
+            return combined
 
-        matched_parts: List[str] = []
-        for block in blocks:
-            heading_line = block.split("\n", 1)[0].strip("# ").strip()
-            is_match = heading_line in matched_headings
+        # ── full_routing: 3-layer strategy ───────────────────────────────────
+        PILLAR_KEYWORDS_FULL: Dict[str, List[str]] = {
+            "MONEY": [
+                "payment", "price", "invoice", "cost", "retention", "holdback",
+                "variation", "liquidated", "damages", "escalation", "milestone",
+                "billing", "compensation", "subcontract price", "lump sum",
+                "unit rate", "appendix c", "schedule c",
+            ],
+            "TIME": [
+                "time", "schedule", "completion", "delay", "milestone",
+                "extension", "notice", "programme", "deadline", "commencement",
+                "long stop", "appendix g", "activity", "expected finish",
+                "duration",
+            ],
+            "SCOPE": [
+                "scope", "work", "services", "supply", "design", "specification",
+                "drawing", "interface", "exclusion", "provisional", "appendix f",
+                "statement of work", "requirements", "deliverable",
+            ],
+            "RISK_LIABILITY": [
+                "liability", "indemnity", "insurance", "warranty", "risk",
+                "force majeure", "limitation", "consequential", "cap", "bond",
+                "guarantee", "fitness", "appendix d", "claims", "exposure",
+            ],
+            "RELATIONSHIPS": [
+                "subcontract", "assign", "novate", "personnel", "back-to-back",
+                "flow", "step-in", "consent", "approval", "administrator",
+                "key personnel", "appendix l", "appendix m", "sub-subcontractor",
+            ],
+            "ADMINISTRATION": [
+                "notice", "dispute", "arbitration", "governing law",
+                "jurisdiction", "confidential", "record", "audit",
+                "communication", "instruction", "general conditions",
+                "appendix b", "appendix e",
+            ],
+            "EXIT": [
+                "terminat", "suspend", "default", "breach", "cure", "defect",
+                "final account", "completion", "handover", "closeout", "dispute",
+            ],
+        }
 
-            if not is_match:
-                # Content scan: 3+ keyword hits = relevant
-                block_lower = block.lower()
-                hits = sum(1 for kw in keywords if kw in block_lower)
-                is_match = hits >= 3
+        keywords = PILLAR_KEYWORDS_FULL.get(
+            pillar.pillar_id.upper(),
+            _PILLAR_KEYWORDS.get(pillar.pillar_id, []),
+        )
 
-            if is_match:
-                matched_parts.append(block)
+        # LAYER 1: document start (definitions, parties, key terms)
+        start_chars = min(3000, doc_length // 4)
+        layer1 = markdown[:start_chars]
 
-        matched_text = "\n".join(matched_parts)
-        n_sections   = len(matched_parts)
-        chars        = len(matched_text)
-        print(f"  {pillar.name}: routing to {n_sections} sections ({chars:,} chars)")
+        # LAYER 2: document end (appendices, schedules, price tables)
+        end_chars = min(8000, doc_length // 3)
+        layer2 = markdown[-end_chars:] if doc_length > end_chars else ""
 
-        if len(matched_text) > max_chars:
-            matched_text = matched_text[:max_chars]
-        elif len(matched_text) < 3_000:
-            # Always include opening definitions/general provisions
-            preamble = markdown[:5_000]
-            matched_text = preamble + "\n\n" + matched_text
-            if len(matched_text) > max_chars:
-                matched_text = matched_text[:max_chars]
+        # LAYER 3: keyword-scored windows from the middle
+        layer3_parts: List[str] = []
+        remaining_budget = MAX_CHARS - len(layer1) - len(layer2)
 
-        # Hard cap — safety net regardless of all routing logic above
-        if len(matched_text) > max_chars:
-            print(f"  WARNING: {pillar.name} text hard-capped at {max_chars:,} chars")
-            matched_text = matched_text[:max_chars]
+        if remaining_budget > 2000 and keywords:
+            window_size = 2000
+            stride = 1000
+            windows = []
+            for pos in range(start_chars, doc_length - end_chars, stride):
+                window = markdown[pos : pos + window_size]
+                window_lower = window.lower()
+                score = sum(window_lower.count(kw) for kw in keywords)
+                if score > 0:
+                    windows.append({"pos": pos, "text": window, "score": score})
 
-        return matched_text
+            windows.sort(key=lambda x: x["score"], reverse=True)
+            chars_added = 0
+            seen_positions: set = set()
+            for window in windows:
+                if chars_added >= remaining_budget:
+                    break
+                overlap = any(
+                    abs(window["pos"] - p) < stride for p in seen_positions
+                )
+                if not overlap:
+                    layer3_parts.append(window["text"])
+                    chars_added += len(window["text"])
+                    seen_positions.add(window["pos"])
+
+        # Combine all layers
+        parts = [layer1]
+        if layer3_parts:
+            parts.append("\n\n[...relevant sections...]\n\n")
+            parts.extend(layer3_parts)
+        if layer2 and layer2 not in layer1:
+            parts.append("\n\n[...document appendices...]\n\n")
+            parts.append(layer2)
+
+        combined = "".join(parts)
+        if len(combined) > MAX_CHARS:
+            combined = combined[:MAX_CHARS]
+
+        print(
+            f"  {pillar.name}: {len(combined):,} chars "
+            f"(start:{start_chars} + "
+            f"middle:{sum(len(p) for p in layer3_parts)} + "
+            f"end:{len(layer2)})"
+        )
+        return combined
 
     def _detect_document_type(self, text: str, filename: str) -> Dict:
         snippet = text[:self.MAX_CHARS_CLASSIFICATION]
@@ -562,7 +673,8 @@ class AnalysisEngine:
 
     def _classify_and_summarise(self, text: str, doc_type: str) -> Dict:
         prompt = (
-            f"Document type: {doc_type}\n\n"
+            UNIVERSAL_EXTRACTION_HINT
+            + f"Document type: {doc_type}\n\n"
             f"Document text:\n---\n{text}\n---\n\n"
             "Provide a classification and executive summary.\n\n"
             "Return JSON with EXACTLY these fields:\n"
@@ -615,6 +727,7 @@ class AnalysisEngine:
         positions: Dict,
         cb: Callable,
         cancel_check: Optional[Callable] = None,
+        analysis_strategy: str = "full_routing",
     ) -> List[Dict]:
         pillar_results = []
 
@@ -627,10 +740,9 @@ class AnalysisEngine:
             cb(4, step_name, msg, pct)
             print(f"  [4/6] {msg}")
 
-            if section_index:
-                pillar_text = self._get_pillar_text(markdown, section_index, pillar)
-            else:
-                pillar_text = self._build_extraction_text(markdown)
+            pillar_text = self._get_pillar_text(
+                markdown, section_index, pillar, analysis_strategy
+            )
 
             result = self._analyse_single_pillar(pillar_text, pillar, doc_type, positions)
             pillar_results.append(result)
@@ -662,7 +774,8 @@ class AnalysisEngine:
             )
 
         prompt = (
-            f"PILLAR: {pillar.name} ({pillar.description})\n"
+            UNIVERSAL_EXTRACTION_HINT
+            + f"PILLAR: {pillar.name} ({pillar.description})\n"
             f"DOCUMENT TYPE: {doc_type}\n"
             f"{positions_block}\n"
             f"KEY QUESTIONS TO ANSWER:\n{questions_block}\n\n"
@@ -766,7 +879,8 @@ class AnalysisEngine:
 
     def _extract_dates_single(self, text: str) -> Dict:
         prompt = (
-            f"Extract all important dates, deadlines, and time-sensitive provisions.\n\n"
+            UNIVERSAL_EXTRACTION_HINT
+            + f"Extract all important dates, deadlines, and time-sensitive provisions.\n\n"
             f"Document text:\n---\n{text}\n---\n\n"
             "Return JSON:\n"
             "{\n"

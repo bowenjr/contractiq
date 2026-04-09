@@ -331,6 +331,24 @@ async def upload_document(
             detail=f"Could not extract text: {str(e)}"
         )
 
+    # Check for scanned PDF pages
+    scan_warning = None
+    scanned = extracted.get("scanned_pages", 0)
+    total_pages = extracted.get("page_count", 1) or 1
+    if scanned > 0:
+        pct_scanned = round(scanned / total_pages * 100)
+        if pct_scanned > 80:
+            scan_warning = (
+                f"WARNING: This PDF appears to be scanned ({pct_scanned}% image pages). "
+                f"Text extraction will be very limited. For best results use the original "
+                f"Word document or a text-based PDF."
+            )
+        elif pct_scanned > 30:
+            scan_warning = (
+                f"Note: {scanned} of {total_pages} pages appear to be scanned images. "
+                f"Some content may not be extracted."
+            )
+
     db.create_document({
         "id": doc_id,
         "filename": file.filename,
@@ -341,6 +359,7 @@ async def upload_document(
         "page_count": extracted["page_count"],
         "raw_text": extracted["text"],
         "doc_type": doc_type_hint or "General Contract",
+        **({"error_message": scan_warning} if scan_warning else {}),
     })
 
     # Run pre-processing immediately — pure Python, no LLM, completes in <1s
@@ -378,6 +397,7 @@ async def upload_document(
         "has_markdown": has_markdown,
         "section_count": section_count,
         "noise_removed_pct": noise_pct,
+        "scan_warning": scan_warning,
     })
 
 
