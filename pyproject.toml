@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contractiq"
+version = "0.2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "python-multipart>=0.0.9",
+    "jinja2>=3.1.4",
+    "pymupdf>=1.24.0",
+    "python-docx>=1.1.0",
+    "reportlab>=4.2.0",
+    "openpyxl>=3.1.0",
+    "pandas>=2.0.0",
+    "requests>=2.32.0",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov", "ruff", "mypy"]
+
+[tool.setuptools]
+packages = ["core"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = [
+    "app.py",
+    "core/analysis_engine.py",
+    "core/database.py",
+    "core/document_preprocessor.py",
+    "core/document_processor.py",
+    "core/excel_generator.py",
+    "core/knowledge_bootstrap.py",
+    "core/knowledge_engine.py",
+    "core/knowledge_io.py",
+    "core/llm_client.py",
+    "core/pillars.py",
+    "core/report_generator.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"core/enums.py" = ["UP042"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["core/schemas.py", "core/enums.py"]
+
+[[tool.mypy.overrides]]
+module = "*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["core.schemas", "core.enums"]
+ignore_errors = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

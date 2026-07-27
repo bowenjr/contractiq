@@ -1,15 +1,23 @@
 # Python
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # ContractIQ runtime data (not source code)
 data/
 uploads/
 reports/
+outputs/
+*.db
+*.sqlite3
 
 # Environment / secrets
 .env
