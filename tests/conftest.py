@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from core.bid_repository import BidRepository
 from core.database import Database
 from core.enums import Actor, BidLevel, CustomerType
 from core.schemas import Bid, Provenance
@@ -37,3 +38,8 @@ def valid_bid() -> Bid:
 @pytest.fixture
 def tmp_db(tmp_path: Path) -> Database:
     return Database(tmp_path / "contractiq-test.db")
+
+
+@pytest.fixture
+def bid_repo(tmp_db: Database) -> BidRepository:
+    return BidRepository(tmp_db)

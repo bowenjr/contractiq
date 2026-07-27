@@ -1,28 +1,23 @@
-# Handoff — TASK-01
+# Handoff — TASK-02
 
 ## Status
 COMPLETE
 
 ## Files created
-- pyproject.toml (66 lines)
-- core/enums.py (128 lines)
-- core/schemas.py (150 lines)
-- tests/conftest.py (39 lines)
-- tests/unit/test_schemas.py (119 lines)
-- tests/unit/test_pillars.py (34 lines)
-- tests/unit/test_llm_client.py (33 lines)
-- .github/workflows/ci.yml (18 lines)
-- static/.gitkeep (1 line)
-- HANDOFF.md (183 lines)
+- core/bid_repository.py (448 lines)
+- tests/unit/test_bid_repository.py (289 lines)
+- tests/unit/test_migration_safety.py (21 lines)
 
 ## Files modified
-- .gitignore — added required virtualenv, tool-cache, package metadata, database,
-  SQLite, and output artifact exclusions.
+- pyproject.toml — added `core/bid_repository.py` to the default strict-mypy target
+  and skipped analysis of the imported legacy `core.database` implementation.
+- tests/conftest.py — added the reusable `bid_repo` fixture.
+- HANDOFF.md — replaced the TASK-01 handoff with this TASK-02 record.
 
 ## Test results
-`pytest` — 26 passed, 0 failed
+`pytest` — 41 passed, 0 failed
 `ruff check` — pass
-`mypy` (new files) — pass; 2 source files checked
+`mypy` (new files) — pass; 1 source file checked
 `python -u app.py` — startup complete on `0.0.0.0:8000`; shut down cleanly after smoke test
 
 ## Validation command output
@@ -89,8 +84,8 @@ Requirement already satisfied: coverage>=7.10.6 in ./.venv/lib/python3.13/site-p
 Building wheels for collected packages: contractiq
   Building editable for contractiq (pyproject.toml): started
   Building editable for contractiq (pyproject.toml): finished with status 'done'
-  Created wheel for contractiq: filename=contractiq-0.2.0-0.editable-py3-none-any.whl size=2863 sha256=28897cac7046668bf1300b27a0313ccc303dd468cea6f4c6941e29e25ad9031c
-  Stored in directory: /tmp/pip-ephem-wheel-cache-4tnplntl/wheels/20/9a/d3/382869a6f4126bddc7de8dc4b0953478ff12551b12d218b8b0
+  Created wheel for contractiq: filename=contractiq-0.2.0-0.editable-py3-none-any.whl size=2863 sha256=5c9fcd925ecea11d87fb758d911f18c87e5efded53b65a8f767f548582d1d258
+  Stored in directory: /tmp/pip-ephem-wheel-cache-t573y2o3/wheels/20/9a/d3/382869a6f4126bddc7de8dc4b0953478ff12551b12d218b8b0
 Successfully built contractiq
 Installing collected packages: contractiq
   Attempting uninstall: contractiq
@@ -102,7 +97,7 @@ Successfully installed contractiq-0.2.0
 [notice] A new release of pip is available: 26.0.1 -> 26.1.2
 [notice] To update, run: pip install --upgrade pip
 All checks passed!
-Success: no issues found in 2 source files
+Success: no issues found in 1 source file
 ============================= test session starts ==============================
 platform linux -- Python 3.13.13, pytest-9.1.1, pluggy-1.6.0 -- /home/bowen/dev/projects/contractiq/.venv/bin/python
 cachedir: .pytest_cache
@@ -110,74 +105,101 @@ rootdir: /home/bowen/dev/projects/contractiq
 configfile: pyproject.toml
 testpaths: tests
 plugins: anyio-4.14.2, cov-7.1.0
-collecting ... collected 26 items
+collecting ... collected 41 items
 
-tests/unit/test_llm_client.py::test_parse_plain_json PASSED              [  3%]
-tests/unit/test_llm_client.py::test_parse_json_in_markdown_fence PASSED  [  7%]
-tests/unit/test_llm_client.py::test_parse_json_after_leading_prose PASSED [ 11%]
-tests/unit/test_llm_client.py::test_malformed_json_returns_error_shape PASSED [ 15%]
-tests/unit/test_pillars.py::test_all_pillars_contains_exactly_seven_members PASSED [ 19%]
-tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[money] PASSED [ 23%]
-tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[time] PASSED [ 26%]
-tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[scope] PASSED [ 30%]
-tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[risk_liability] PASSED [ 34%]
-tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[relationships] PASSED [ 38%]
-tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[administration] PASSED [ 42%]
-tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[exit] PASSED [ 46%]
-tests/unit/test_pillars.py::test_pillar_weights_are_floats_in_valid_range PASSED [ 50%]
-tests/unit/test_pillars.py::test_weights_sum_to_one_for_each_document_type PASSED [ 53%]
-tests/unit/test_schemas.py::test_every_model_instantiates_from_valid_minimal_data PASSED [ 57%]
-tests/unit/test_schemas.py::test_bid_rejects_internal_due_date_after_customer_due_date PASSED [ 61%]
-tests/unit/test_schemas.py::test_bid_rejects_malformed_bid_id PASSED     [ 65%]
-tests/unit/test_schemas.py::test_bid_rejects_win_probability_above_100 PASSED [ 69%]
-tests/unit/test_schemas.py::test_bid_defaults_to_local_only PASSED       [ 73%]
-tests/unit/test_schemas.py::test_provenance_rejects_unattributed_human_confirmation PASSED [ 76%]
-tests/unit/test_schemas.py::test_provenance_from_ai_is_unconfirmed PASSED [ 80%]
-tests/unit/test_schemas.py::test_gate_override_requires_residual_risk_note PASSED [ 84%]
-tests/unit/test_schemas.py::test_models_forbid_unknown_fields PASSED     [ 88%]
-tests/unit/test_schemas.py::test_pillar_id_matches_existing_pillars PASSED [ 92%]
-tests/unit/test_schemas.py::test_salvaged_taxonomies_have_expected_member_counts PASSED [ 96%]
+tests/unit/test_bid_repository.py::test_create_and_get_bid_round_trips_every_field PASSED [  2%]
+tests/unit/test_bid_repository.py::test_get_unknown_bid_returns_none PASSED [  4%]
+tests/unit/test_bid_repository.py::test_create_duplicate_bid_raises_value_error PASSED [  7%]
+tests/unit/test_bid_repository.py::test_list_bids_returns_all_and_filters_by_status PASSED [  9%]
+tests/unit/test_bid_repository.py::test_update_bid_changes_field_and_bumps_updated_at PASSED [ 12%]
+tests/unit/test_bid_repository.py::test_update_bid_upserts_when_bid_does_not_exist PASSED [ 14%]
+tests/unit/test_bid_repository.py::test_attach_list_and_detach_document PASSED [ 17%]
+tests/unit/test_bid_repository.py::test_existing_create_document_path_defaults_bid_id_to_null PASSED [ 19%]
+tests/unit/test_bid_repository.py::test_approval_round_trips_provenance PASSED [ 21%]
+tests/unit/test_bid_repository.py::test_update_approval_persists_full_model PASSED [ 24%]
+tests/unit/test_bid_repository.py::test_upsert_gate_record_updates_without_duplicate PASSED [ 26%]
+tests/unit/test_bid_repository.py::test_overridden_gate_round_trips_residual_risk_note PASSED [ 29%]
+tests/unit/test_bid_repository.py::test_append_and_list_audit_with_optional_bid_filter PASSED [ 31%]
+tests/unit/test_bid_repository.py::test_schema_evolution_is_idempotent_and_bid_id_is_nullable_once PASSED [ 34%]
+tests/unit/test_llm_client.py::test_parse_plain_json PASSED              [ 36%]
+tests/unit/test_llm_client.py::test_parse_json_in_markdown_fence PASSED  [ 39%]
+tests/unit/test_llm_client.py::test_parse_json_after_leading_prose PASSED [ 41%]
+tests/unit/test_llm_client.py::test_malformed_json_returns_error_shape PASSED [ 43%]
+tests/unit/test_migration_safety.py::test_bid_migration_preserves_pre_existing_documents PASSED [ 46%]
+tests/unit/test_pillars.py::test_all_pillars_contains_exactly_seven_members PASSED [ 48%]
+tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[money] PASSED [ 51%]
+tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[time] PASSED [ 53%]
+tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[scope] PASSED [ 56%]
+tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[risk_liability] PASSED [ 58%]
+tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[relationships] PASSED [ 60%]
+tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[administration] PASSED [ 63%]
+tests/unit/test_pillars.py::test_each_pillar_has_characterisation_content[exit] PASSED [ 65%]
+tests/unit/test_pillars.py::test_pillar_weights_are_floats_in_valid_range PASSED [ 68%]
+tests/unit/test_pillars.py::test_weights_sum_to_one_for_each_document_type PASSED [ 70%]
+tests/unit/test_schemas.py::test_every_model_instantiates_from_valid_minimal_data PASSED [ 73%]
+tests/unit/test_schemas.py::test_bid_rejects_internal_due_date_after_customer_due_date PASSED [ 75%]
+tests/unit/test_schemas.py::test_bid_rejects_malformed_bid_id PASSED     [ 78%]
+tests/unit/test_schemas.py::test_bid_rejects_win_probability_above_100 PASSED [ 80%]
+tests/unit/test_schemas.py::test_bid_defaults_to_local_only PASSED       [ 82%]
+tests/unit/test_schemas.py::test_provenance_rejects_unattributed_human_confirmation PASSED [ 85%]
+tests/unit/test_schemas.py::test_provenance_from_ai_is_unconfirmed PASSED [ 87%]
+tests/unit/test_schemas.py::test_gate_override_requires_residual_risk_note PASSED [ 90%]
+tests/unit/test_schemas.py::test_models_forbid_unknown_fields PASSED     [ 92%]
+tests/unit/test_schemas.py::test_pillar_id_matches_existing_pillars PASSED [ 95%]
+tests/unit/test_schemas.py::test_salvaged_taxonomies_have_expected_member_counts PASSED [ 97%]
 tests/unit/test_schemas.py::test_obligation_type_uses_short_codes_as_values PASSED [100%]
 
-============================== 26 passed in 0.11s ==============================
+============================= 41 passed in 12.10s ==============================
 app imports OK
 ```
 
 ## Decisions I made
-- Used a temporary SQLite file for `tmp_db`, because the existing `Database` opens a new
-  connection for each operation and therefore cannot preserve a plain `:memory:` database.
-- `Provenance.from_human(who)` records the human as both creator and confirmer, with the same
-  UTC timestamp for creation and confirmation.
-- Added a setuptools build backend and limited package discovery to `core`, because editable
-  installation otherwise rejects the repository's flat `core/` and `templates/` layout.
-- Scoped Ruff away from the named legacy Python modules. An unscoped first run found 493
-  pre-existing violations; modifying those modules is explicitly out of scope. New and future
-  files remain linted by `ruff check .`.
-- Added a Ruff per-file exception for `UP042` in `core/enums.py`, because TASK-01 explicitly
-  requires every enum to inherit `str, Enum` rather than `StrEnum`.
+- Implemented the required "bid documents" capability as
+  `BidRepository.list_documents_for_bid()` rather than a SQL view, matching the task's helper
+  option and the existing document dict-row style.
+- `update_bid()` uses SQLite `ON CONFLICT` as a full-object upsert and writes a copied model with
+  `updated_at=datetime.now(UTC)`, leaving the caller's Pydantic object unchanged.
+- Added a typed `_conn()` adapter in the new repository and configured mypy to skip analysis of
+  the imported legacy `core.database` module. This keeps the new file strict without changing or
+  suppressing errors inside the new repository.
+- Used an explicit `PRAGMA table_info(documents)` guard for `bid_id`, rather than the legacy
+  exception-swallowing migration loop, because TASK-02 explicitly requires an inspected,
+  idempotent `ALTER TABLE`.
 
 ## Deviations from the task spec
-- Added `static/.gitkeep`, which was not in the listed files. `app.py` mounts `static/` during
-  import and README documents the directory, but no `static/` entry existed in git. Without
-  this placeholder, the required `python -c "import app"` validation and `python app.py` smoke
-  test fail on a clean checkout before reaching any TASK-01 code.
+- None.
 
 ## Concerns for review
-- Ruff's legacy exclusions should be reduced incrementally when later tasks intentionally touch
-  those modules.
-- A standalone strict-mypy audit of legacy files found substantial debt: `core/database.py`
-  181 errors; `core/excel_generator.py` 94; `core/document_preprocessor.py` 47; `app.py` 45;
-  `core/analysis_engine.py` 44; `core/report_generator.py` 39; `core/knowledge_bootstrap.py` 18;
-  `core/knowledge_io.py` 16; `core/knowledge_engine.py` 15; `core/document_processor.py` 15; and
-  `core/llm_client.py` 5. The configured `mypy` command remains strict only for the two new
-  domain files, as required.
-- FastAPI reports that the existing `@app.on_event("startup")` API is deprecated during the
-  app smoke test. No existing application code was changed.
+- `audit_log.bid_id` intentionally has no foreign key because the supplied SQL defines none.
+- The existing `Database._evolve_schema()` does not inspect `PRAGMA table_info`; it attempts each
+  `ALTER TABLE` and catches every `Exception`. TASK-03 should use explicit column inspection so
+  genuine migration failures are not mistaken for harmless duplicate-column errors.
+- Existing analysis tables contain live rows and currently have no provenance fields. TASK-03
+  will need an additive/backfill-compatible strategy; adding a new non-null provenance column
+  directly would be unsafe for those rows.
+- The user-provided untracked TASK-02 spec and its Windows `Zone.Identifier` sidecar were
+  preserved unchanged and are intentionally outside this implementation commit.
 
 ## Reporting requirements from the task
-- Actual doc-type weight sums from `test_pillars.py`: Subcontract Agreement `1.000`; Prime
-  Contract `1.001`; Bid/Tender Response `1.000`; RFP/Tender Document `1.000`; Change
-  Order/Variation `1.000`; Claim Letter `1.000`; General Contract `0.986`.
-- No database file, uploaded document, or generated report artifact is currently tracked in git.
-- Existing strict-mypy findings are listed under "Concerns for review"; `core/database.py` and
-  `core/excel_generator.py` are the largest future remediation areas.
+- `PRAGMA table_info(documents)` after constructing `BidRepository` twice:
+
+```text
+PRAGMA table_info(documents) bid_id rows:
+{'cid': 37, 'name': 'bid_id', 'type': 'TEXT', 'notnull': 0, 'dflt_value': None, 'pk': 0}
+bid_id column count: 1
+bid_id nullable (notnull=0): True
+```
+
+- The existing document path remains valid:
+
+```text
+existing create_document bid_id: None
+```
+
+- `_evolve_bid_schema()` is safe to run repeatedly. This was verified by constructing two
+  `BidRepository` instances over the same temp-file `Database`, asserting that construction did
+  not raise, and confirming via the PRAGMA output above that exactly one nullable `bid_id` column
+  exists.
+- TASK-03 note: the legacy evolution method broadly swallows `ALTER TABLE` errors and the
+  existing analysis tables may already contain rows. Provenance retrofits should inspect columns
+  explicitly and preserve those existing rows during additive migration/backfill.
