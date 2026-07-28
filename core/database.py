@@ -7,10 +7,19 @@ On startup: if the legacy 'contracts' table exists, rows are
 migrated to 'documents' automatically and silently.
 """
 
-import sqlite3
 import json
+import logging
+import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+from core.enums import ObligationType, TriggerType
+from core.schemas import Provenance
+from core.taxonomy import normalize_obligation_type, normalize_trigger
+
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -20,6 +29,7 @@ class Database:
         self._init_schema()
         self._migrate_legacy()
         self._evolve_schema()
+        self._evolve_provenance_schema()
 
     # ── Connection ────────────────────────────────────────────────────────────
 
@@ -342,6 +352,52 @@ class Database:
                     pass
             conn.commit()
 
+    def _evolve_provenance_schema(self) -> None:
+        """Add and backfill flat provenance columns on analysis tables."""
+        analysis_tables = (
+            "clause_findings",
+            "scope_items",
+            "obligations",
+            "negotiation_issues",
+        )
+        provenance_cols = (
+            ("prov_created_by", "TEXT"),
+            ("prov_agent_name", "TEXT"),
+            ("prov_model", "TEXT"),
+            ("prov_source_location", "TEXT"),
+            ("prov_created_at", "TEXT"),
+            ("human_confirmed", "INTEGER DEFAULT 0"),
+            ("confirmed_by", "TEXT"),
+            ("confirmed_at", "TEXT"),
+        )
+        migration_timestamp = datetime.now(UTC).isoformat()
+        with self._conn() as conn:
+            for table in analysis_tables:
+                existing_columns = {
+                    row["name"]
+                    for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                for col, col_type in provenance_cols:
+                    if col in existing_columns:
+                        continue
+                    try:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+                    except Exception:
+                        pass
+                conn.execute(
+                    f"""
+                    UPDATE {table}
+                    SET prov_created_by = ?,
+                        prov_agent_name = ?,
+                        prov_model = NULL,
+                        prov_created_at = ?,
+                        human_confirmed = 0
+                    WHERE prov_created_by IS NULL
+                    """,
+                    ("ai", "legacy_import", migration_timestamp),
+                )
+            conn.commit()
+
     # ── Legacy migration ──────────────────────────────────────────────────────
 
     def _migrate_legacy(self):
@@ -496,8 +552,38 @@ class Database:
 
     # ── Clause Findings ───────────────────────────────────────────────────────
 
-    def save_clause_findings(self, doc_id: str, pillar_results: List[Dict]):
+    @staticmethod
+    def _provenance_values(provenance: Provenance) -> tuple[object, ...]:
+        """Flatten provenance while reserving confirmation for confirm methods."""
+        return (
+            provenance.created_by.value,
+            provenance.agent_name,
+            provenance.model,
+            provenance.source_location,
+            provenance.created_at.isoformat(),
+            0,
+            None,
+            None,
+        )
+
+    @staticmethod
+    def _default_analysis_provenance(doc_id: str) -> Provenance:
+        return Provenance.from_ai(
+            agent_name="analysis_engine",
+            model="unknown",
+            source_document_id=doc_id,
+        )
+
+    def save_clause_findings(
+        self,
+        doc_id: str,
+        pillar_results: List[Dict],
+        provenance: Provenance | None = None,
+    ) -> None:
         """Persist per-finding rows from pillar analysis results."""
+        stamp = self._provenance_values(
+            provenance or self._default_analysis_provenance(doc_id)
+        )
         rows = []
         for pillar_data in pillar_results:
             pillar_id = pillar_data.get("pillar_id", "")
@@ -509,6 +595,7 @@ class Database:
                     f.get("severity"), "Medium",
                     f.get("recommended_action"), None, None,
                     1 if f.get("requires_legal") else 0,
+                    *stamp,
                 ))
         if not rows:
             return
@@ -517,7 +604,10 @@ class Database:
                 "INSERT INTO clause_findings "
                 "(document_id, pillar, topic, clause_heading, source_excerpt, "
                 " risk_summary, severity, confidence, position, fallback, owner, "
-                " requires_legal) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " requires_legal, prov_created_by, prov_agent_name, prov_model, "
+                " prov_source_location, prov_created_at, human_confirmed, "
+                " confirmed_by, confirmed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rows
             )
             conn.commit()
@@ -532,23 +622,54 @@ class Database:
 
     # ── Obligations ───────────────────────────────────────────────────────────
 
-    def save_obligations(self, doc_id: str, obligations: List[Dict]):
+    def save_obligations(
+        self,
+        doc_id: str,
+        obligations: List[Dict],
+        provenance: Provenance | None = None,
+    ) -> None:
         if not obligations:
             return
+        stamp = self._provenance_values(
+            provenance or self._default_analysis_provenance(doc_id)
+        )
         rows = []
         for ob in obligations:
+            raw_obligation_type = ob.get("obligation_type")
+            raw_trigger = ob.get("trigger")
+            obligation_type = normalize_obligation_type(raw_obligation_type)
+            trigger = normalize_trigger(raw_trigger)
+            if (
+                raw_obligation_type is not None
+                and obligation_type == raw_obligation_type
+                and raw_obligation_type not in {item.value for item in ObligationType}
+            ):
+                logger.warning(
+                    "Unrecognized obligation_type preserved unchanged: %r",
+                    raw_obligation_type,
+                )
+            if (
+                raw_trigger is not None
+                and trigger == raw_trigger
+                and raw_trigger not in {item.value for item in TriggerType}
+            ):
+                logger.warning("Unrecognized trigger preserved unchanged: %r", raw_trigger)
             rows.append((
                 doc_id,
-                ob.get("party"), ob.get("obligation_type"),
-                ob.get("description"), ob.get("trigger"),
+                ob.get("party"), obligation_type,
+                ob.get("description"), trigger,
                 ob.get("deadline"), ob.get("notice_required"),
                 ob.get("owner"), ob.get("status", "Open"),
+                *stamp,
             ))
         with self._conn() as conn:
             conn.executemany(
                 "INSERT INTO obligations "
                 "(document_id, party, obligation_type, description, trigger, "
-                " deadline, notice_required, owner, status) VALUES (?,?,?,?,?,?,?,?,?)",
+                " deadline, notice_required, owner, status, prov_created_by, "
+                " prov_agent_name, prov_model, prov_source_location, prov_created_at, "
+                " human_confirmed, confirmed_by, confirmed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rows
             )
             conn.commit()
@@ -574,8 +695,16 @@ class Database:
 
     # ── Negotiation Issues ────────────────────────────────────────────────────
 
-    def save_negotiation_issues(self, doc_id: str, pillar_results: List[Dict]):
+    def save_negotiation_issues(
+        self,
+        doc_id: str,
+        pillar_results: List[Dict],
+        provenance: Provenance | None = None,
+    ) -> None:
         """Flatten negotiation_points from all pillars into DB rows."""
+        stamp = self._provenance_values(
+            provenance or self._default_analysis_provenance(doc_id)
+        )
         rows = []
         for pillar_data in pillar_results:
             pillar_id = pillar_data.get("pillar_id", "")
@@ -588,6 +717,7 @@ class Database:
                     np.get("fallback"), None, None, None,
                     1 if np.get("requires_legal") else 0,
                     "Open",
+                    *stamp,
                 ))
         if not rows:
             return
@@ -597,7 +727,10 @@ class Database:
                 "(document_id, pillar, issue, clause_reference, source_excerpt, "
                 " risk_description, severity, primary_ask, fallback, "
                 " counterparty_position, response_strategy, internal_owner, "
-                " requires_legal, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " requires_legal, status, prov_created_by, prov_agent_name, "
+                " prov_model, prov_source_location, prov_created_at, "
+                " human_confirmed, confirmed_by, confirmed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rows
             )
             conn.commit()
@@ -673,9 +806,17 @@ class Database:
 
     # ── Scope Items ───────────────────────────────────────────────────────────
 
-    def save_scope_items(self, doc_id: str, items: List[Dict]):
+    def save_scope_items(
+        self,
+        doc_id: str,
+        items: List[Dict],
+        provenance: Provenance | None = None,
+    ) -> None:
         if not items:
             return
+        stamp = self._provenance_values(
+            provenance or self._default_analysis_provenance(doc_id)
+        )
         rows = []
         for item in items:
             rows.append((
@@ -686,13 +827,16 @@ class Database:
                 1 if item.get("priced") else 0,
                 item.get("owner"), item.get("gap_status"),
                 item.get("comments"),
+                *stamp,
             ))
         with self._conn() as conn:
             conn.executemany(
                 "INSERT INTO scope_items "
                 "(document_id, project_id, requirement_source, requirement_text, "
-                " included_in_quote, excluded_in_quote, priced, owner, gap_status, comments) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " included_in_quote, excluded_in_quote, priced, owner, gap_status, comments, "
+                " prov_created_by, prov_agent_name, prov_model, prov_source_location, "
+                " prov_created_at, human_confirmed, confirmed_by, confirmed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rows
             )
             conn.commit()
@@ -704,6 +848,58 @@ class Database:
                 (doc_id,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def _confirm_analysis_row(
+        self,
+        table: str,
+        row_id: int,
+        confirmed_by: str,
+    ) -> bool:
+        with self._conn() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE {table}
+                SET human_confirmed = 1,
+                    confirmed_by = ?,
+                    confirmed_at = ?
+                WHERE id = ?
+                """,
+                (confirmed_by, datetime.now(UTC).isoformat(), row_id),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+
+    def confirm_clause_finding(self, finding_id: int, confirmed_by: str) -> bool:
+        return self._confirm_analysis_row("clause_findings", finding_id, confirmed_by)
+
+    def confirm_scope_item(self, item_id: int, confirmed_by: str) -> bool:
+        return self._confirm_analysis_row("scope_items", item_id, confirmed_by)
+
+    def confirm_obligation(self, ob_id: int, confirmed_by: str) -> bool:
+        return self._confirm_analysis_row("obligations", ob_id, confirmed_by)
+
+    def confirm_negotiation_issue(self, issue_id: int, confirmed_by: str) -> bool:
+        return self._confirm_analysis_row("negotiation_issues", issue_id, confirmed_by)
+
+    def count_unconfirmed(self, doc_id: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        with self._conn() as conn:
+            for table in (
+                "clause_findings",
+                "scope_items",
+                "obligations",
+                "negotiation_issues",
+            ):
+                row = conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS count
+                    FROM {table}
+                    WHERE document_id = ? AND human_confirmed = 0
+                    """,
+                    (doc_id,),
+                ).fetchone()
+                counts[table] = int(row["count"])
+        return counts
 
     # ── Report Packages ───────────────────────────────────────────────────────
 

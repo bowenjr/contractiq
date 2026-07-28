@@ -52,7 +52,12 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["core/schemas.py", "core/enums.py", "core/bid_repository.py"]
+files = [
+    "core/schemas.py",
+    "core/enums.py",
+    "core/bid_repository.py",
+    "core/taxonomy.py",
+]
 
 [[tool.mypy.overrides]]
 module = "*"
@@ -64,7 +69,7 @@ follow_imports = "skip"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = ["core.schemas", "core.enums", "core.bid_repository"]
+module = ["core.schemas", "core.enums", "core.bid_repository", "core.taxonomy"]
 ignore_errors = false
 
 [tool.pytest.ini_options]

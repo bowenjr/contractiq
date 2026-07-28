@@ -19,3 +19,24 @@ def test_bid_migration_preserves_pre_existing_documents(tmp_path: Path) -> None:
     assert first_document["bid_id"] is None
     assert second_document["bid_id"] is None
     assert len(db.get_all_documents()) == count_before
+
+
+def test_provenance_retrofit_accepts_legacy_obligation_values(tmp_path: Path) -> None:
+    db = Database(tmp_path / "legacy-obligation.db")
+    db.create_document({"id": "DOC-LEGACY", "filename": "legacy.pdf"})
+
+    db.save_obligations(
+        "DOC-LEGACY",
+        [
+            {
+                "party": "Customer",
+                "obligation_type": "Payment",
+                "description": "Pay within the agreed period",
+                "trigger": "after customer acceptance",
+            }
+        ],
+    )
+
+    [obligation] = db.get_obligations("DOC-LEGACY")
+    assert obligation["obligation_type"] == "PAY"
+    assert obligation["trigger"] == "after customer acceptance"
