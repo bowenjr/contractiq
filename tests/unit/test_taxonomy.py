@@ -49,7 +49,7 @@ def test_normalize_obligation_type_known_variants(raw: str, expected: str) -> No
         ("project milestone", "milestone"),
         ("within 10 days of acceptance", "milestone"),
         ("rolling period", "rolling"),
-        ("recurring", "rolling"),
+        ("recurring", "calendar"),
         ("within 30 days of the effective date", "rolling"),
         ("ongoing", "continuous"),
         ("at all times", "continuous"),

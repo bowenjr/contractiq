@@ -68,7 +68,7 @@ TRIGGER_VARIANTS: dict[str, TriggerType] = {
     "completion milestone": TriggerType.MILESTONE,
     "within 10 days of acceptance": TriggerType.MILESTONE,
     "rolling period": TriggerType.ROLLING,
-    "recurring": TriggerType.ROLLING,
+    "recurring": TriggerType.CALENDAR,
     "periodic": TriggerType.ROLLING,
     "within 30 days of the effective date": TriggerType.ROLLING,
     "ongoing": TriggerType.CONTINUOUS,

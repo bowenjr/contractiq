@@ -57,6 +57,9 @@ files = [
     "core/enums.py",
     "core/bid_repository.py",
     "core/taxonomy.py",
+    "core/classifier.py",
+    "core/classifier_config.py",
+    "core/classifier_service.py",
 ]
 
 [[tool.mypy.overrides]]
@@ -69,7 +72,15 @@ follow_imports = "skip"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = ["core.schemas", "core.enums", "core.bid_repository", "core.taxonomy"]
+module = [
+    "core.schemas",
+    "core.enums",
+    "core.bid_repository",
+    "core.taxonomy",
+    "core.classifier",
+    "core.classifier_config",
+    "core.classifier_service",
+]
 ignore_errors = false
 
 [tool.pytest.ini_options]
