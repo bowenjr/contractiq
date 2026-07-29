@@ -60,6 +60,8 @@ files = [
     "core/classifier.py",
     "core/classifier_config.py",
     "core/classifier_service.py",
+    "core/gates.py",
+    "core/gate_service.py",
 ]
 
 [[tool.mypy.overrides]]
@@ -80,6 +82,8 @@ module = [
     "core.classifier",
     "core.classifier_config",
     "core.classifier_service",
+    "core.gates",
+    "core.gate_service",
 ]
 ignore_errors = false
 
