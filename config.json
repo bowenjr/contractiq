@@ -8,5 +8,6 @@
   "max_chars_per_pillar": 12000,
   "max_chars_classification": 2000,
   "max_chars_parties": 5000,
-  "max_chars_dates": 20000
+  "max_chars_dates": 20000,
+  "working_timezone": "America/Toronto"
 }

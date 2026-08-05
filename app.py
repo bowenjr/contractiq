@@ -3,15 +3,19 @@ ContractIQ - Personal Contract & Bid Analysis System
 7-Pillar analysis engine with background processing and live progress.
 """
 
-import uuid
 import json
-from datetime import datetime
+import os
+import uuid
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
+from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pydantic import ValidationError
 import uvicorn
 
 from core.document_processor import DocumentProcessor
@@ -24,9 +28,28 @@ from core.database import Database
 from core.knowledge_bootstrap import bootstrap_knowledge
 from core.knowledge_io import KnowledgeIO
 from core.knowledge_engine import KnowledgeEngine
+from core.bid_repository import BidRepository
+from core.work_item_repository import (
+    StaleWorkItemError,
+    WorkItemNotFoundError,
+    WorkItemRepository,
+)
+from core.work_item_service import MyDayService, WorkItemService, validation_error_message
+from core.my_day import WorkItemSnapshot
+from core.work_items import WorkItem, WorkItemKind, WorkItemPriority, WorkItemStatus
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
+APP_CONFIG = (
+    json.loads((BASE_DIR / "config.json").read_text())
+    if (BASE_DIR / "config.json").exists()
+    else {}
+)
+try:
+    WORKING_TIMEZONE = ZoneInfo(APP_CONFIG.get("working_timezone", "America/Toronto"))
+except ZoneInfoNotFoundError as exc:
+    raise RuntimeError("config.json contains an invalid working_timezone") from exc
+LOCAL_ACTOR = str(APP_CONFIG.get("local_actor", "local_user"))
 UPLOADS_DIR = BASE_DIR / "uploads"
 REPORTS_DIR = BASE_DIR / "reports"
 UPLOADS_DIR.mkdir(exist_ok=True)
@@ -48,7 +71,11 @@ def render(template_name: str, **context) -> HTMLResponse:
 
 
 # ── Core Services ───────────────────────────────────────────────────────────
-db = Database(BASE_DIR / "data" / "contractiq.db")
+db = Database(Path(os.environ.get("CONTRACTIQ_DB_PATH", BASE_DIR / "data" / "contractiq.db")))
+bid_repository = BidRepository(db)
+work_item_repository = WorkItemRepository(db)
+work_item_service = WorkItemService(work_item_repository, bid_repository)
+my_day_service = MyDayService(work_item_repository, bid_repository, db)
 doc_processor = DocumentProcessor()
 llm_client = LMStudioClient()
 analysis_engine = AnalysisEngine(llm_client, db)
@@ -294,6 +321,114 @@ def _run_analysis_background(doc_id: str) -> None:
 async def index(request: Request):
     documents = db.get_all_documents()
     return render("index.html", contracts=documents)
+
+
+def _working_date() -> date:
+    """Return today's calendar date in the configured working timezone."""
+    return datetime.now(WORKING_TIMEZONE).date()
+
+
+def _parse_as_of(value: str | None) -> date:
+    if value is None:
+        return _working_date()
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="as_of must use YYYY-MM-DD") from exc
+
+
+def _json_item(
+    item: WorkItem | list[WorkItem],
+    *,
+    status_code: int = 200,
+) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(item), status_code=status_code)
+
+
+def _mutation_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ValidationError):
+        return HTTPException(status_code=422, detail=validation_error_message(exc))
+    if isinstance(exc, WorkItemNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, StaleWorkItemError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/my-day", response_class=HTMLResponse)
+async def my_day(request: Request, as_of: str | None = None) -> HTMLResponse:
+    projection_date = _parse_as_of(as_of)
+    projection = my_day_service.get_my_day(as_of=projection_date)
+    bids = bid_repository.list_bids()
+    bid_names = {bid.bid_id: bid.project_name for bid in bids}
+    archived_items = [
+        WorkItemSnapshot(
+            item=item,
+            bid_name=bid_names.get(item.bid_id, item.bid_id),
+        )
+        for item in work_item_repository.list()
+        if item.status in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}
+    ]
+    archived_items.sort(
+        key=lambda snapshot: (snapshot.item.updated_at, snapshot.item.work_item_id),
+        reverse=True,
+    )
+    return render(
+        "my_day.html",
+        projection=projection,
+        bids=bids,
+        archived_items=archived_items,
+        kinds=list(WorkItemKind),
+        priorities=list(WorkItemPriority),
+        statuses=list(WorkItemStatus),
+        actor=LOCAL_ACTOR,
+    )
+
+
+@app.get("/api/work-items")
+async def list_work_items(bid_id: str | None = None) -> JSONResponse:
+    return _json_item(work_item_repository.list(bid_id=bid_id))
+
+
+@app.get("/api/work-items/{work_item_id}")
+async def get_work_item(work_item_id: str) -> JSONResponse:
+    try:
+        return _json_item(work_item_service.get_work_item(work_item_id))
+    except (WorkItemNotFoundError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/work-items")
+async def create_work_item(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        return _json_item(
+            work_item_service.create_work_item(body, actor),
+            status_code=201,
+        )
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.patch("/api/work-items/{work_item_id}")
+async def edit_work_item(work_item_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        return _json_item(work_item_service.edit_work_item(work_item_id, body, actor))
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/work-items/{work_item_id}/transition")
+async def transition_work_item(work_item_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        return _json_item(work_item_service.transition_work_item(work_item_id, body, actor))
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
 
 
 @app.get("/contract/{doc_id}", response_class=HTMLResponse)
@@ -885,11 +1020,10 @@ async def llm_test():
 
 
 if __name__ == "__main__":
-    _cfg = json.loads((BASE_DIR / "config.json").read_text()) if (BASE_DIR / "config.json").exists() else {}
-    _timeout = _cfg.get("lm_studio_timeout", 600)
-    _max_chars = _cfg.get("max_document_chars", 80000)
-    _connect_timeout = _cfg.get("lm_studio_connect_timeout", 30)
-    _read_timeout    = _cfg.get("lm_studio_read_timeout", 3600)
+    _timeout = APP_CONFIG.get("lm_studio_timeout", 600)
+    _max_chars = APP_CONFIG.get("max_document_chars", 80000)
+    _connect_timeout = APP_CONFIG.get("lm_studio_connect_timeout", 30)
+    _read_timeout    = APP_CONFIG.get("lm_studio_read_timeout", 3600)
     print(
         f"\n  ContractIQ starting on http://localhost:8000\n"
         f"  LM Studio: {llm_client.base_url} | "

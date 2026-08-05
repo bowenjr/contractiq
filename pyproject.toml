@@ -62,6 +62,10 @@ files = [
     "core/classifier_service.py",
     "core/gates.py",
     "core/gate_service.py",
+    "core/work_items.py",
+    "core/work_item_repository.py",
+    "core/my_day.py",
+    "core/work_item_service.py",
 ]
 
 [[tool.mypy.overrides]]
@@ -84,6 +88,10 @@ module = [
     "core.classifier_service",
     "core.gates",
     "core.gate_service",
+    "core.work_items",
+    "core.work_item_repository",
+    "core.my_day",
+    "core.work_item_service",
 ]
 ignore_errors = false
 

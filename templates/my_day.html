@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Day — ContractIQ</title>
+<style>
+  :root {
+    --ink: #1a1f2e; --ink-mid: #2e3548; --gold: #c8a96e;
+    --parchment: #f4f1eb; --parchment2: #ede9e0; --mist: #6b7280;
+    --border: #d4cfc6; --white: #fff; --red: #b42318; --amber: #9a6700;
+    --green: #237a45; --blue: #175cd3; --radius: 7px;
+    --shadow: 0 3px 18px rgba(26,31,46,.09);
+    --serif: Georgia, 'Times New Roman', serif;
+    --sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--parchment); font: 15px/1.45 var(--sans); }
+  button, input, select, textarea { font: inherit; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+    outline: 3px solid rgba(23,92,211,.35); outline-offset: 2px;
+  }
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: 250px; background: var(--ink); color: var(--white); display: flex; flex-direction: column; }
+  .brand { padding: 27px 24px 22px; border-bottom: 1px solid rgba(200,169,110,.22); }
+  .brand-name { font: 700 1.6rem/1 var(--serif); }
+  .brand-name span { color: var(--gold); }
+  .brand-sub { margin-top: 6px; color: rgba(200,169,110,.75); font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; }
+  nav { padding: 20px 0; flex: 1; }
+  .nav-label { padding: 8px 24px 5px; color: rgba(255,255,255,.33); font-size: .65rem; letter-spacing: .15em; text-transform: uppercase; }
+  .nav-item { display: block; padding: 11px 24px; color: rgba(255,255,255,.72); text-decoration: none; border-left: 3px solid transparent; }
+  .nav-item:hover, .nav-item.active { color: var(--white); background: rgba(200,169,110,.12); }
+  .nav-item.active { border-left-color: var(--gold); }
+  .offline-note { padding: 16px 24px; border-top: 1px solid rgba(255,255,255,.1); color: rgba(255,255,255,.52); font-size: .75rem; }
+  .offline-note strong { display: block; color: #86efac; font-weight: 600; }
+  main { margin-left: 250px; min-height: 100vh; }
+  .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; padding: 16px 34px; background: var(--white); border-bottom: 1px solid var(--border); }
+  h1 { margin: 0; font: 600 1.5rem var(--serif); }
+  .as-of { color: var(--mist); font-size: .84rem; margin-top: 2px; }
+  .content { padding: 30px 34px 50px; max-width: 1500px; }
+  .btn { border: 1px solid var(--border); border-radius: var(--radius); background: var(--white); color: var(--ink); padding: 8px 13px; cursor: pointer; font-weight: 600; }
+  .btn:hover { background: var(--parchment2); }
+  .btn-primary { border-color: var(--ink); background: var(--ink); color: var(--white); }
+  .btn-primary:hover { background: var(--ink-mid); }
+  .btn-gold { border-color: var(--gold); background: var(--gold); }
+  .btn-small { padding: 5px 9px; font-size: .77rem; }
+  .summary { display: grid; grid-template-columns: repeat(5, minmax(120px,1fr)); gap: 13px; margin-bottom: 28px; }
+  .metric { padding: 17px 18px; background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); border-top: 3px solid var(--gold); }
+  .metric-value { font: 600 1.8rem/1 var(--serif); }
+  .metric-label { margin-top: 5px; color: var(--mist); font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; }
+  .section { margin-top: 27px; }
+  .section-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 10px; }
+  h2 { margin: 0; font: 600 1.15rem var(--serif); }
+  .section-count { color: var(--mist); font-size: .78rem; }
+  .panel { overflow: hidden; background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); }
+  .work-row { display: grid; grid-template-columns: minmax(180px,1.6fr) minmax(170px,1.4fr) 94px 100px 105px minmax(150px,1fr) 155px; align-items: center; gap: 13px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .work-row:last-child { border-bottom: 0; }
+  .work-row:hover { background: #fbfaf7; }
+  .item-title { font-weight: 700; }
+  .item-detail, .parent-name, .context { margin-top: 3px; color: var(--mist); font-size: .77rem; }
+  .parent-id { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .77rem; font-weight: 700; }
+  .meta-label { color: var(--mist); font-size: .65rem; letter-spacing: .08em; text-transform: uppercase; }
+  .meta-value { margin-top: 2px; font-size: .8rem; font-weight: 600; }
+  .badge { display: inline-block; border-radius: 999px; padding: 3px 8px; font-size: .68rem; font-weight: 700; letter-spacing: .035em; }
+  .priority-CRITICAL, .status-BLOCKED, .overdue { color: var(--red); background: #fee4e2; }
+  .priority-HIGH, .status-WAITING { color: var(--amber); background: #fef0c7; }
+  .priority-NORMAL, .status-IN_PROGRESS { color: var(--blue); background: #eaf2ff; }
+  .priority-LOW, .status-OPEN { color: #475467; background: #f2f4f7; }
+  .status-COMPLETED { color: var(--green); background: #dcfae6; }
+  .status-CANCELLED { color: #667085; background: #eaecf0; }
+  .context { color: var(--ink-mid); }
+  .due-line { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .empty { padding: 25px; text-align: center; color: var(--mist); font-size: .84rem; }
+  .hold { padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .hold:last-child { border-bottom: 0; }
+  .hold-title { display: flex; justify-content: space-between; gap: 12px; font-weight: 700; }
+  .hold-summary { margin: 6px 0; color: var(--red); font-size: .84rem; }
+  .hold ul { margin: 7px 0 0 18px; padding: 0; color: var(--ink-mid); font-size: .8rem; }
+  .history { margin-top: 34px; }
+  .history summary { cursor: pointer; font: 600 1rem var(--serif); }
+  .history .panel { margin-top: 10px; }
+  .modal-backdrop { display: none; position: fixed; inset: 0; z-index: 100; padding: 24px; background: rgba(26,31,46,.64); align-items: center; justify-content: center; }
+  .modal-backdrop.open { display: flex; }
+  .modal { width: min(590px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; padding: 26px; background: var(--white); border-radius: 9px; box-shadow: 0 18px 70px rgba(0,0,0,.25); }
+  .modal h2 { margin-bottom: 18px; font-size: 1.3rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .field { margin-bottom: 14px; }
+  .field.full { grid-column: 1 / -1; }
+  label { display: block; margin-bottom: 5px; color: var(--ink-mid); font-size: .76rem; font-weight: 700; }
+  input, select, textarea { width: 100%; padding: 9px 10px; color: var(--ink); background: var(--white); border: 1px solid #b8b2a8; border-radius: 5px; }
+  textarea { min-height: 88px; resize: vertical; }
+  .required { color: var(--red); }
+  .form-error { display: none; margin: 0 0 14px; padding: 10px 12px; color: var(--red); background: #fef3f2; border: 1px solid #fecdca; border-radius: 5px; font-size: .82rem; }
+  .form-error.show { display: block; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 8px; }
+  @media (max-width: 1050px) {
+    .sidebar { position: static; width: 100%; height: auto; }
+    .brand { padding: 18px 22px; }
+    nav { display: flex; padding: 0 10px 10px; }
+    .nav-label, .offline-note { display: none; }
+    .nav-item { width: auto; border-left: 0; border-bottom: 3px solid transparent; }
+    .nav-item.active { border-bottom-color: var(--gold); }
+    main { margin-left: 0; }
+    .work-row { grid-template-columns: 1fr 1fr; }
+    .actions { justify-content: flex-start; }
+  }
+  @media (max-width: 700px) {
+    .topbar, .content { padding-left: 18px; padding-right: 18px; }
+    .summary { grid-template-columns: repeat(2,1fr); }
+    .work-row, .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><div class="brand-name">Contract<span>IQ</span></div><div class="brand-sub">Bids &amp; Contracts Manager</div></div>
+  <nav aria-label="Primary navigation">
+    <div class="nav-label">Workspace</div>
+    <a class="nav-item" href="/">Dashboard</a>
+    <a class="nav-item active" href="/my-day" aria-current="page">My Day</a>
+    <div class="nav-label">Reference</div>
+    <a class="nav-item" href="/knowledge">Knowledge Base</a>
+  </nav>
+  <div class="offline-note"><strong>Local operations ready</strong>My Day does not require Alice or cloud services.</div>
+</aside>
+
+<main>
+  <header class="topbar">
+    <div><h1>My Day</h1><div class="as-of">Operational view as of <time datetime="{{ projection.as_of }}">{{ projection.as_of.strftime('%A, %B %-d, %Y') }}</time></div></div>
+    <button class="btn btn-gold" type="button" onclick="openModal('create-modal')">+ Add work item</button>
+  </header>
+  <div class="content">
+    <section class="summary" aria-label="My Day summary">
+      <div class="metric"><div class="metric-value">{{ projection.counts.overdue }}</div><div class="metric-label">Overdue active</div></div>
+      <div class="metric"><div class="metric-value">{{ projection.counts.due_today }}</div><div class="metric-label">Due today</div></div>
+      <div class="metric"><div class="metric-value">{{ projection.counts.waiting }}</div><div class="metric-label">Waiting</div></div>
+      <div class="metric"><div class="metric-value">{{ projection.counts.blocked }}</div><div class="metric-label">Blocked</div></div>
+      <div class="metric"><div class="metric-value">{{ projection.counts.readiness_holds }}</div><div class="metric-label">Readiness holds</div></div>
+    </section>
+
+    {% macro work_rows(items, empty_message) %}
+      <div class="panel">
+      {% if items %}
+        {% for projected in items %}{% set item = projected.item %}
+        <article class="work-row" data-work-item-id="{{ item.work_item_id }}">
+          <div><div class="item-title">{{ item.title }}</div>{% if item.details %}<div class="item-detail">{{ item.details }}</div>{% endif %}</div>
+          <div><div class="parent-id">{{ item.bid_id }}</div><div class="parent-name">{{ projected.bid_name }}</div></div>
+          <div><div class="meta-label">Kind</div><div class="meta-value">{{ item.kind.value|title }}</div></div>
+          <div><span class="badge priority-{{ item.priority.value }}">{{ item.priority.value }}</span></div>
+          <div><span class="badge status-{{ item.status.value }}">{{ item.status.value.replace('_',' ') }}</span></div>
+          <div>
+            <div class="due-line"><span>{{ item.due_date or 'No due date' }}</span>{% if projected.is_overdue %}<span class="badge overdue">OVERDUE</span>{% endif %}{% if projected.is_due_today %}<span class="badge status-WAITING">TODAY</span>{% endif %}</div>
+            {% if item.waiting_on %}<div class="context"><strong>Waiting on:</strong> {{ item.waiting_on }}</div>{% endif %}
+            {% if item.blocker_note %}<div class="context"><strong>Blocker:</strong> {{ item.blocker_note }}</div>{% endif %}
+          </div>
+          <div class="actions">
+            <button class="btn btn-small" type="button" onclick="openEdit(this)"
+              data-id="{{ item.work_item_id }}" data-version="{{ item.version }}" data-kind="{{ item.kind.value }}"
+              data-title="{{ item.title }}" data-details="{{ item.details or '' }}" data-priority="{{ item.priority.value }}"
+              data-due="{{ item.due_date or '' }}">Edit</button>
+            <button class="btn btn-small" type="button" onclick="openTransition(this)"
+              data-id="{{ item.work_item_id }}" data-version="{{ item.version }}" data-status="{{ item.status.value }}"
+              data-waiting="{{ item.waiting_on or '' }}" data-blocker="{{ item.blocker_note or '' }}">Status</button>
+          </div>
+        </article>
+        {% endfor %}
+      {% else %}<div class="empty">{{ empty_message }}</div>{% endif %}
+      </div>
+    {% endmacro %}
+
+    {% set sections = [
+      ('Blocked', projection.blocked, 'No blocked work items.'),
+      ('Waiting', projection.waiting, 'Nothing is waiting on another party.'),
+      ('Overdue', projection.overdue, 'No unblocked overdue work.'),
+      ('Due today', projection.due_today, 'Nothing else is due today.'),
+      ('Upcoming seven days', projection.upcoming, 'No work is due in the next seven days.'),
+      ('Later or unscheduled', projection.later_or_unscheduled, 'No later or unscheduled active work.')
+    ] %}
+    {% for heading, items, empty_message in sections %}
+    <section class="section" aria-labelledby="section-{{ loop.index }}">
+      <div class="section-head"><h2 id="section-{{ loop.index }}">{{ heading }}</h2><span class="section-count">{{ items|length }}</span></div>
+      {{ work_rows(items, empty_message) }}
+    </section>
+    {% endfor %}
+
+    <section class="section" aria-labelledby="readiness-heading">
+      <div class="section-head"><h2 id="readiness-heading">Readiness holds</h2><span class="section-count">{{ projection.readiness_holds|length }} · read-only from TASK-06</span></div>
+      <div class="panel">
+      {% if projection.readiness_holds %}
+        {% for snapshot in projection.readiness_holds %}
+        <article class="hold">
+          <div class="hold-title"><span>{{ snapshot.bid_id }} · {{ snapshot.bid_name }}</span><span class="badge status-BLOCKED">HOLD</span></div>
+          <div class="hold-summary">{{ snapshot.report.summary }}</div>
+          <ul>{% for blocker in snapshot.report.blockers if not blocker.overridden %}<li><strong>{{ blocker.gate.value|upper }}</strong> — {{ blocker.description }}{% if blocker.detail %}: {{ blocker.detail }}{% endif %}</li>{% endfor %}</ul>
+        </article>
+        {% endfor %}
+      {% else %}<div class="empty">No bids are currently on readiness hold.</div>{% endif %}
+      </div>
+    </section>
+
+    <details class="history">
+      <summary>Completed and cancelled history ({{ archived_items|length }})</summary>
+      <div class="panel">
+      {% if archived_items %}
+        {% for snapshot in archived_items %}{% set item = snapshot.item %}
+        <article class="work-row">
+          <div><div class="item-title">{{ item.title }}</div><div class="item-detail">Retained for audit history</div></div>
+          <div><div class="parent-id">{{ item.bid_id }}</div><div class="parent-name">{{ snapshot.bid_name }}</div></div>
+          <div><div class="meta-label">Kind</div><div class="meta-value">{{ item.kind.value|title }}</div></div>
+          <div><span class="badge priority-{{ item.priority.value }}">{{ item.priority.value }}</span></div>
+          <div><span class="badge status-{{ item.status.value }}">{{ item.status.value }}</span></div>
+          <div>{{ item.due_date or 'No due date' }}</div>
+          <div class="actions"><button class="btn btn-small" type="button" onclick="openTransition(this)"
+            data-id="{{ item.work_item_id }}" data-version="{{ item.version }}" data-status="{{ item.status.value }}"
+            data-waiting="" data-blocker="">Reopen / status</button></div>
+        </article>
+        {% endfor %}
+      {% else %}<div class="empty">No completed or cancelled work items yet.</div>{% endif %}
+      </div>
+    </details>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-title">
+  <div class="modal"><h2 id="create-title">Add operational work</h2><div class="form-error" id="create-error" role="alert" aria-live="assertive" tabindex="-1"></div>
+    <form id="create-form">
+      <div class="grid">
+        <div class="field full"><label for="create-bid">Bid / opportunity <span class="required">*</span></label><select id="create-bid" required>{% for bid in bids %}<option value="{{ bid.bid_id }}">{{ bid.bid_id }} · {{ bid.project_name }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="create-kind">Kind <span class="required">*</span></label><select id="create-kind" required>{% for kind in kinds %}<option value="{{ kind.value }}">{{ kind.value|title }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="create-priority">Priority <span class="required">*</span></label><select id="create-priority" required>{% for priority in priorities %}<option value="{{ priority.value }}"{% if priority.value == 'NORMAL' %} selected{% endif %}>{{ priority.value }}</option>{% endfor %}</select></div>
+        <div class="field full"><label for="create-title-input">Title <span class="required">*</span></label><input id="create-title-input" maxlength="300" required></div>
+        <div class="field full"><label for="create-details">Details</label><textarea id="create-details" maxlength="10000"></textarea></div>
+        <div class="field"><label for="create-due">Due date</label><input id="create-due" type="date"></div>
+        <div class="field"><label for="create-status">Initial status <span class="required">*</span></label><select id="create-status" onchange="toggleConditional('create')"><option>OPEN</option><option>IN_PROGRESS</option><option>WAITING</option><option>BLOCKED</option></select></div>
+        <div class="field full" id="create-waiting-wrap" hidden><label for="create-waiting">Waiting on <span class="required">*</span></label><input id="create-waiting" maxlength="1000"></div>
+        <div class="field full" id="create-blocker-wrap" hidden><label for="create-blocker">Blocker note <span class="required">*</span></label><textarea id="create-blocker" maxlength="2000"></textarea></div>
+      </div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal('create-modal')">Cancel</button><button class="btn btn-primary" type="submit"{% if not bids %} disabled{% endif %}>Create</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-title-heading">
+  <div class="modal"><h2 id="edit-title-heading">Edit work item</h2><div class="form-error" id="edit-error" role="alert" aria-live="assertive" tabindex="-1"></div>
+    <form id="edit-form"><input id="edit-id" type="hidden"><input id="edit-version" type="hidden">
+      <div class="grid">
+        <div class="field"><label for="edit-kind">Kind</label><select id="edit-kind">{% for kind in kinds %}<option value="{{ kind.value }}">{{ kind.value|title }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="edit-priority">Priority</label><select id="edit-priority">{% for priority in priorities %}<option value="{{ priority.value }}">{{ priority.value }}</option>{% endfor %}</select></div>
+        <div class="field full"><label for="edit-title-input">Title</label><input id="edit-title-input" maxlength="300" required></div>
+        <div class="field full"><label for="edit-details">Details</label><textarea id="edit-details" maxlength="10000"></textarea></div>
+        <div class="field"><label for="edit-due">Due date</label><input id="edit-due" type="date"></div>
+      </div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal('edit-modal')">Cancel</button><button class="btn btn-primary" type="submit">Save changes</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="status-modal" role="dialog" aria-modal="true" aria-labelledby="status-title">
+  <div class="modal"><h2 id="status-title">Change work status</h2><div class="form-error" id="status-error" role="alert" aria-live="assertive" tabindex="-1"></div>
+    <form id="status-form"><input id="status-id" type="hidden"><input id="status-version" type="hidden">
+      <div class="field"><label for="status-value">New status</label><select id="status-value" onchange="toggleConditional('status')">{% for status in statuses %}<option value="{{ status.value }}">{{ status.value.replace('_',' ') }}</option>{% endfor %}</select></div>
+      <div class="field" id="status-waiting-wrap" hidden><label for="status-waiting">Waiting on <span class="required">*</span></label><input id="status-waiting" maxlength="1000"></div>
+      <div class="field" id="status-blocker-wrap" hidden><label for="status-blocker">Blocker note <span class="required">*</span></label><textarea id="status-blocker" maxlength="2000"></textarea></div>
+      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal('status-modal')">Cancel</button><button class="btn btn-primary" type="submit">Apply status</button></div>
+    </form>
+  </div>
+</div>
+
+<script>
+  'use strict';
+  const actor = {{ actor|tojson }};
+  function openModal(id) { document.getElementById(id).classList.add('open'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('open'); clearError(id.replace('-modal','')); }
+  function clearError(prefix) { const el = document.getElementById(prefix + '-error'); if (el) { el.textContent = ''; el.classList.remove('show'); } }
+  function showError(prefix, message) { const el = document.getElementById(prefix + '-error'); el.textContent = message; el.classList.add('show'); el.focus(); }
+  function toggleConditional(prefix) {
+    const status = document.getElementById(prefix + (prefix === 'create' ? '-status' : '-value')).value;
+    document.getElementById(prefix + '-waiting-wrap').hidden = status !== 'WAITING';
+    document.getElementById(prefix + '-blocker-wrap').hidden = status !== 'BLOCKED';
+    document.getElementById(prefix + '-waiting').required = status === 'WAITING';
+    document.getElementById(prefix + '-blocker').required = status === 'BLOCKED';
+  }
+  async function send(url, method, body, prefix) {
+    clearError(prefix);
+    let response;
+    try { response = await fetch(url, {method, headers: {'Content-Type':'application/json'}, body: JSON.stringify({...body, actor})}); }
+    catch (_) { showError(prefix, 'ContractIQ could not reach the local application service.'); return; }
+    const payload = await response.json();
+    if (!response.ok) { showError(prefix, payload.detail || 'The work item could not be saved.'); return; }
+    window.location.reload();
+  }
+  document.getElementById('create-form').addEventListener('submit', event => {
+    event.preventDefault();
+    send('/api/work-items', 'POST', {
+      bid_id: document.getElementById('create-bid').value,
+      kind: document.getElementById('create-kind').value,
+      title: document.getElementById('create-title-input').value,
+      details: document.getElementById('create-details').value || null,
+      priority: document.getElementById('create-priority').value,
+      due_date: document.getElementById('create-due').value || null,
+      status: document.getElementById('create-status').value,
+      waiting_on: document.getElementById('create-waiting').value || null,
+      blocker_note: document.getElementById('create-blocker').value || null
+    }, 'create');
+  });
+  function openEdit(button) {
+    document.getElementById('edit-id').value = button.dataset.id;
+    document.getElementById('edit-version').value = button.dataset.version;
+    document.getElementById('edit-kind').value = button.dataset.kind;
+    document.getElementById('edit-title-input').value = button.dataset.title;
+    document.getElementById('edit-details').value = button.dataset.details;
+    document.getElementById('edit-priority').value = button.dataset.priority;
+    document.getElementById('edit-due').value = button.dataset.due;
+    openModal('edit-modal');
+  }
+  document.getElementById('edit-form').addEventListener('submit', event => {
+    event.preventDefault(); const id = document.getElementById('edit-id').value;
+    send('/api/work-items/' + encodeURIComponent(id), 'PATCH', {
+      expected_version: Number(document.getElementById('edit-version').value),
+      kind: document.getElementById('edit-kind').value,
+      title: document.getElementById('edit-title-input').value,
+      details: document.getElementById('edit-details').value || null,
+      priority: document.getElementById('edit-priority').value,
+      due_date: document.getElementById('edit-due').value || null
+    }, 'edit');
+  });
+  function openTransition(button) {
+    document.getElementById('status-id').value = button.dataset.id;
+    document.getElementById('status-version').value = button.dataset.version;
+    document.getElementById('status-value').value = button.dataset.status;
+    document.getElementById('status-waiting').value = button.dataset.waiting;
+    document.getElementById('status-blocker').value = button.dataset.blocker;
+    toggleConditional('status'); openModal('status-modal');
+  }
+  document.getElementById('status-form').addEventListener('submit', event => {
+    event.preventDefault(); const id = document.getElementById('status-id').value;
+    send('/api/work-items/' + encodeURIComponent(id) + '/transition', 'POST', {
+      expected_version: Number(document.getElementById('status-version').value),
+      status: document.getElementById('status-value').value,
+      waiting_on: document.getElementById('status-waiting').value || null,
+      blocker_note: document.getElementById('status-blocker').value || null
+    }, 'status');
+  });
+  document.querySelectorAll('.modal-backdrop').forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) closeModal(modal.id); }));
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelectorAll('.modal-backdrop.open').forEach(modal => closeModal(modal.id)); });
+</script>
+</body>
+</html>

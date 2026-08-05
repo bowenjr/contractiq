@@ -1,4 +1,133 @@
-# Handoff — TASK-06
+# Handoff — TASK-07
+
+## Status
+COMPLETE
+
+## Baseline and scope
+- Base branch: `task-06-readiness-engine`.
+- Exact base commit: `84da5ec20182adf6c5e79edbec146f0c0469f02e`.
+- Task branch: `task-07-operational-work-register`.
+- Pre-edit status contained no tracked changes and only the two known untracked files.
+- Verified assumptions: `Bid`/`bids(bid_id)` is the canonical parent and foreign-key convention; IDs use prefixed UUIDs; UTC-aware datetimes and calendar `date` values are established types; `Database._conn()` supplies foreign-key-enabled SQLite transactions; `audit_log` is the append-only audit seam; `evaluate_readiness` is TASK-06's public readiness seam; FastAPI/Jinja is the existing application/UI framework.
+- Preserved non-goals: no Alice integration, cloud AI, export adapter, scheduler, notifications, identity/RBAC platform, new frontend framework, document feature, or TASK-06 rule change was added.
+
+## Implementation evidence
+
+### Files created
+- core/work_items.py (212 lines)
+- core/work_item_repository.py (271 lines)
+- core/my_day.py (164 lines)
+- core/work_item_service.py (290 lines)
+- scripts/validate_task_07.py (190 lines)
+- templates/my_day.html (348 lines)
+- tests/unit/test_work_items.py (213 lines)
+- tests/unit/test_work_item_repository.py (190 lines)
+- tests/unit/test_my_day.py (185 lines)
+- tests/unit/test_my_day_service.py (65 lines)
+- tests/unit/test_work_item_ui.py (241 lines)
+
+### Files modified
+- app.py — configured the working timezone and isolated-test database override, initialized TASK-07 repositories/services, and added My Day plus validated work-item API routes.
+- config.json — set the explicit `America/Toronto` working timezone used only at the application boundary.
+- pyproject.toml — added the four new production modules to the existing strict-mypy authority list; no dependency or quality rule was added, removed, or weakened.
+- templates/index.html — added My Day to existing dashboard navigation.
+- templates/knowledge.html — added My Day to existing knowledge navigation.
+- templates/contract.html — added My Day to existing document navigation.
+- HANDOFF.md — added TASK-07 evidence while retaining the complete TASK-06 handoff below.
+
+### Migration, domain, repository, service, and UI
+- Migration identifier: `task_07_work_items_v1`.
+- `WorkItemRepository._apply_work_items_v1` is an additive, idempotent forward migration following the repository's existing code-driven SQLite schema-evolution convention. It creates `work_items`, a required foreign key to `bids(bid_id)`, safe enum/conditional checks, provenance storage, optimistic versioning, and `(bid_id, status, due_date)` plus `(status, due_date)` indexes. No released migration was edited.
+- Work-item create/edit/transition inputs are Pydantic v2 models. Input-only title, milestone, WAITING, BLOCKED, enum, and field validation happens before repository access.
+- Every item carries required provenance. UI-created records are attributed through the existing local actor/provenance seam; mutations add actor, operation, entity ID, before/after JSON, and UTC timestamp to the existing `audit_log`.
+- Each authoritative INSERT/UPDATE and its audit INSERT share one SQLite transaction. Repository tests induce failures on either side and prove rollback/no orphan behavior.
+- `core/my_day.py` is pure: it has no database, clock call, environment, network, UI, or LLM import. It implements the required precedence, flags, seven-day inclusive horizon, and priority/date/title/ID ordering.
+- `MyDayService` loads active work, calls TASK-06 `evaluate_readiness`, and supplies the caller-provided calendar date to the projector. The My Day page renders all buckets, independent overdue indicators, read-only readiness holds, empty states, audit-retained history, accessible controls/errors, create/edit/status actions, completion, reopening, and cancellation.
+
+## Verification evidence
+
+### Test results
+`uv run pytest -q tests/unit/test_work_items.py tests/unit/test_work_item_repository.py tests/unit/test_my_day.py tests/unit/test_my_day_service.py tests/unit/test_work_item_ui.py` — 25 passed, 0 failed (8 inherited FastAPI `on_event` deprecation warnings).
+
+`uv run pytest -q` — 194 passed, 0 failed (169 baseline + 25 TASK-07; 8 inherited FastAPI `on_event` deprecation warnings).
+
+`uv run ruff format --check <all 10 TASK-07 Python files>` — pass; 10 files already formatted.
+
+`uv run ruff check .` — pass; `All checks passed!`.
+
+`uv run mypy` — pass; `Success: no issues found in 13 source files` under the repository's canonical strict configuration.
+
+`uv run mypy --strict core/work_items.py core/work_item_repository.py core/my_day.py core/work_item_service.py scripts/validate_task_07.py` — pass; `Success: no issues found in 5 source files`.
+
+`git diff --check` — pass with no output.
+
+### Validation command output
+```text
+$ uv run python scripts/validate_task_07.py
+TASK-07 validation passed: migration=task_07_work_items_v1; fixed_date=2026-08-05; buckets=5 active; overdue_flags=3; readiness_holds=1; atomic_completion_audit=committed; pre_database_validation=passed
+```
+
+### Real application startup and clean shutdown
+```text
+$ python app.py
+ContractIQ starting on http://localhost:8000
+Uvicorn running on http://0.0.0.0:8000
+Started server process
+Waiting for application startup.
+Recovery check complete
+Application startup complete.
+
+$ curl -fsS -o /tmp/contractiq-task07-my-day.html -w "%{http_code} %{size_download}\n" "http://127.0.0.1:8000/my-day?as_of=2026-08-05"
+200 22087
+
+^C
+Shutting down
+Waiting for application shutdown.
+Application shutdown complete.
+Finished server process
+Stopping reloader process
+```
+- The server and reloader exited cleanly with code 0.
+
+### Secret and network scan
+- Secret-pattern scan over every TASK-07 source, test, script, template, configuration, and changed application file found no credential or private-key material.
+- Network/dependency scan found no new HTTP(S) endpoint, CDN, external font/script, telemetry, Anthropic/OpenAI import, request client, or dependency. The only new browser `fetch` targets are same-origin `/api/work-items` routes.
+- The My Day UI test replaces `llm_client.health_check` with a failure sentinel and proves the page does not call it. Runtime startup and the My Day request succeeded without contacting Alice or any cloud service.
+
+## Acceptance evidence
+- `scripts/validate_task_07.py` applies all migrations to a temporary database, creates a canonical bid and the required overdue, due-today milestone, upcoming, waiting, blocked, and completed records, and projects exactly five active items for `2026-08-05`.
+- The validation asserts blocked/waiting precedence, three independent overdue flags (including waiting and blocked), one due-today count, all primary buckets, TASK-06 HOLD integration, completion removal, and the seventh audit entry committed with the completion.
+- `tests/unit/test_my_day.py` covers the `2026-08-04`, `2026-08-05`, `2026-08-06`, `2026-08-12`, and `2026-08-13` boundaries; exclusions; flags; every ordering tie-breaker; unchanged readiness snapshots; and repeated-call equality.
+- `tests/unit/test_work_item_repository.py::test_audit_failure_rolls_back_work_item_write` proves induced audit failure rolls back the item. `test_work_item_failure_does_not_leave_orphan_audit` proves the inverse atomicity direction.
+- `tests/unit/test_work_item_ui.py` proves the fixed-date empty and populated render paths, same-origin create/edit/transition behavior, completion/reopen/cancel history, visible error surface with no mutation, read-only TASK-06 HOLD rendering, existing navigation, and zero Alice health calls. This repository has no screenshot-recording convention, so UI evidence is automated rendered-response coverage rather than a new screenshot artifact.
+
+## Decisions I made
+- Used stable `WI-<uuid>` IDs because existing authoritative records use type-prefixed UUIDs such as `AUD-<uuid>`.
+- Retained creation provenance on the work-item snapshot and recorded every later actor/change in append-only `audit_log`; this preserves who created the register record while the before/after audit trail identifies every mutation.
+- Defaulted the existing single-computer actor seam to `local_user` at the UI boundary. No user store, authentication, permissions, or owner platform was introduced.
+- Included completed/cancelled items in a collapsed audit-history section so the required reopen action remains operational while the pure My Day projection correctly excludes them.
+- Used direct async route invocation for UI tests because the installed Starlette test client requires an unlisted `httpx2` package. This exercises the actual route functions, services, and rendered responses without adding a dependency or modifying protected `uv.lock`.
+
+## Deviations from the task spec
+- None.
+
+## Concerns for review
+- FastAPI emits its pre-existing `on_event("startup")` deprecation warning during UI module tests; TASK-07 does not refactor application lifespan handling.
+- A whole-tree `ruff format --check .` also inspects fenced Python in pre-existing Markdown and would reformat `docs/SALVAGE.md`, `docs/tasks/TASK-01-schemas-and-harness.md`, and the protected untracked TASK-06 task document. TASK-07 correctly left those files untouched and verified formatting on every changed/new Python file instead.
+
+## Reporting requirements from the task
+- Baseline, migration, implementation, verification, acceptance, atomicity, determinism, local-only operation, and file evidence are reported above.
+- Before TASK-07 commit, the complete workspace audit contained only scoped TASK-07 changes plus the two protected untracked files. Expected post-commit/push status is the task branch tracking its origin with only `docs/tasks/TASK-06-readiness-engine.md` and `uv.lock` untracked.
+- Protected-file SHA-256 values before and after implementation: `3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa` for `docs/tasks/TASK-06-readiness-engine.md`; `4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377` for `uv.lock`.
+- `main` and `task-06-readiness-engine` were not switched to, modified, rebased, amended, squashed, or merged. The two known untracked files remained untouched and will remain unstaged.
+
+---
+
+# Appendix — Preserved TASK-06 Handoff Evidence
+
+The complete TASK-06 handoff follows unchanged below.
+
+## Original TASK-06 Status
 
 ## Status
 COMPLETE
