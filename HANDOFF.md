@@ -598,3 +598,131 @@ The repository host's system Python is PEP 668 managed, so the command was run i
 - Confirmed: `tests/unit/test_readiness_service.py::test_unconfirmed_finding_holds_then_confirmation_clears` proves the end-to-end unconfirmed finding → G5 HOLD → human confirmation → CLEAR chain.
 - Whole-suite total: 169 tests, all passing.
 - Future UI persistence note: overrides are loaded first from OVERRIDDEN GateRecords and then from structured `readiness_override` audit entries. Audit detail is JSON with `condition_id` and `risk_note`; audit entries are authoritative for multiple per-condition overrides on the same gate, while the single gate row reflects the most recent override for that gate.
+
+---
+
+# Handoff — TASK-08R
+
+## Status
+COMPLETE
+
+## Base and review gate
+- Branch: `task-08-review-remediation`.
+- Exact base: local and remote `task-08-controlled-document-register` at `dc351e94e389e38fb6735fc269721e3056833712`, ahead/behind `0/0` before branching.
+- Independent reviewer: Claude Code `2.1.222`.
+- Reviewed range: `941a88809e7696b4e6a00288b4eb70e44f8bed6a..dc351e94e389e38fb6735fc269721e3056833712`.
+- Exact verdict: `VERDICT: APPROVE WITH NON-BLOCKING FINDINGS`.
+- Findings 2 and 3 nevertheless blocked TASK-09 because TASK-09 would safely reference document versions only after controlled identity/bid ownership and immutable version evidence were enforced. A reviewer-level approval did not satisfy that narrower downstream safety gate.
+
+## Files created
+- `scripts/validate_task_08r.py` (196 lines) — bounded, deterministic, temporary-path validation using synthetic bytes only.
+- `templates/document_integrity_error.html` (12 lines) — professional per-record degraded detail state without paths, storage keys, or contents.
+- `tests/unit/test_document_review_remediation.py` (617 lines) — focused remediation, corruption, concurrency, symlink, UI, and error-taxonomy coverage.
+
+## Files modified
+- `app.py` — renders register entries independently, degrades corrupt details, and maps stale/lock/storage failures to safe HTTP classes.
+- `core/bid_repository.py` — legacy attach/detach methods reject controlled rows with a typed identity error before mutation.
+- `core/database.py` — every managed SQLite connection defaults both narrow trigger-authorization functions to denied.
+- `core/document_control.py` — adds typed integrity/identity errors and logical/register/diagnostic models.
+- `core/document_repository.py` — makes the existing additive migration self-contained and transactional; replaces triggers idempotently; locks controlled identity and immutable version evidence; asserts supported successor postconditions; adds read-only logical and per-row register diagnostics.
+- `core/document_service.py` — exposes degraded register entries and combines file, symlink, and logical diagnostics.
+- `core/managed_document_storage.py` — adds typed storage failures, rejects committed symlinks, reports symlink entries without traversal, and sanitizes unreadable-file diagnostics.
+- `templates/document_detail.html` — displays logical integrity findings and restricts mutations while a record is degraded.
+- `templates/documents.html` — keeps valid rows available while clearly flagging corrupt rows without exposing evidence paths.
+- `HANDOFF.md` — appended this TASK-08R evidence; TASK-06 through TASK-08 evidence was preserved.
+
+No new migration registry was introduced. TASK-08R safely extends the existing additive/idempotent `task_08_document_control_v1` migration because this repository has no migration ledger: it adds the missing `bid_id` prerequisite in the same transaction and idempotently drops/recreates the owned triggers and indexes. A new identifier without a ledger consumer would falsely imply version tracking that does not exist.
+
+## Changed invariants and behavior
+- A direct `DocumentRepository(Database(path))` now succeeds without constructing `BidRepository`; re-running is safe. Migration DDL executes in an explicit `BEGIN IMMEDIATE` transaction, with rollback and the original precise SQLite exception on induced failure.
+- Any update involving an old or new controlled row cannot flip `control_managed`, null/reassign `bid_id`, violate required controlled fields, restore a withdrawal, or bypass the audited repository authorization seam. Controlled rows cannot be hard-deleted.
+- After insertion, all version evidence is immutable at the SQLite boundary. The only accepted update is repository-authorized `CURRENT` to `SUPERSEDED` during a valid active-parent successor transaction; reverse, arbitrary, combined evidence/state updates and deletion fail.
+- A successor must be `CURRENT`, match the active parent and expected pointer/version, name the exact predecessor, and commit with exactly one current row and pointer agreement. Audit, pointer, state transition, and insert remain one transaction.
+- Logical diagnostics distinguish identity, current-count, pointer, and lineage failures from byte/file integrity. They are read-only and never repair data. Register and detail UI degrade one row without hiding valid rows or exposing paths, keys, tracebacks, secrets, or contents.
+- Stale optimistic concurrency is HTTP 409. Bounded SQLite lock/busy is typed and HTTP 503 with safe text. Managed placement/evidence/collision failures are typed and HTTP 500; raw `OSError` availability failures are safe HTTP 503. Validation remains 4xx.
+- Committed-key symlinks never verify `OK`; file and directory symlink entries under `versions/` are reported separately, never traversed, and cannot be downloaded through the safe seam.
+- Withdrawal is irreversible. A withdrawn document cannot receive a version at service or repository level. Audited descriptive corrections remain allowed, but cannot change bid ownership, control status, lifecycle, current pointer, or evidence.
+
+## Complete disposition of Claude findings
+1. **Migration ordering/partial commit — fixed.** `bid_id` is an owned prerequisite and all TASK-08 migration statements use one explicit transaction. Direct construction, idempotency, representative TASK-07 preservation, and induced rollback are tested.
+2. **Mutable controlled discriminator/bid and NULL decode — fixed.** OLD/NEW triggers, denied-by-default connection functions, typed legacy repository rejection, and precise corrupt-identity decode are tested. This was a TASK-09 blocker.
+3. **Mutable/deletable versions — fixed.** SQLite triggers allow only the exact supported state transition and reject every evidence field, combined mutations, reverse transition, and delete. This was a TASK-09 blocker.
+4. **Missing logical diagnostics/register-wide failure — fixed.** Deterministic read-only identity/pointer/current-count/lineage diagnostics and per-row register/detail degradation were added.
+5. **Concurrent lock/unhandled 500 — fixed.** Successor writes acquire bounded `BEGIN IMMEDIATE`; busy is typed/503 and stale is 409. A genuine two-thread/two-connection test proves one winner, one controlled loser, one current row, correct lineage/audit, and no file/staging leak.
+6. **Multipart request-body spooling — explicitly deferred as authorized.** `MAX_MANAGED_DOCUMENT_BYTES` bounds bytes placed into managed storage, not the complete HTTP request body. Starlette may spool an oversized multipart body before the storage limit runs. A pure-ASGI request-size limiter is mandatory before any non-localhost, multi-user, or untrusted-client deployment; a superficial `Content-Length` check was not added.
+7. **Storage failures mapped 4xx — fixed.** Typed managed failures/collisions map to safe 500 and availability `OSError` to safe 503; tests prove no raw internal path leaks.
+8. **Symlinks invisible/verify OK — fixed.** Verification rejects every symlink component before resolution/read, diagnostics enumerate symlink files/directories without following them, including a symlinked `versions` root.
+9. **Weak repository assertions/unstated withdrawal policy — fixed.** Repository assertions mirror first-version rules and active lifecycle requirements; tests pin rejected withdrawn successors and allowed audited descriptive correction.
+
+## Test results
+`uv run pytest -q tests/unit/test_document_review_remediation.py tests/unit/test_document_control.py tests/unit/test_document_repository.py tests/unit/test_managed_document_storage.py tests/unit/test_document_service.py tests/unit/test_document_ui.py` — 50 passed, 0 failed; 10 existing FastAPI `on_event` deprecation warnings.
+
+`uv run pytest -q` — 244 passed, 0 failed; 18 existing FastAPI `on_event` deprecation warnings.
+
+All five original TASK-08 test modules ran unchanged. No pre-existing TASK-08 test was edited.
+
+`uv run ruff format --check core/bid_repository.py core/document_control.py core/document_repository.py core/document_service.py core/managed_document_storage.py scripts/validate_task_08r.py tests/unit/test_document_review_remediation.py` — pass; 7 files already formatted. `app.py` and `core/database.py` remain in the repository's explicit Ruff exclusion list, so no unrelated legacy formatting was changed.
+
+`uv run ruff check .` — pass; `All checks passed!` under canonical configuration.
+
+`uv run mypy` — pass; `Success: no issues found in 17 source files` under canonical strict configuration.
+
+`uv run mypy --strict core/document_control.py core/document_repository.py core/managed_document_storage.py core/document_service.py scripts/validate_task_08r.py` — pass; `Success: no issues found in 5 source files`.
+
+## Validation command output
+`uv run python scripts/validate_task_08r.py`
+
+```text
+TASK-08R validation: PASS
+Migration: isolated direct construction and idempotent re-run verified
+Identity/version SQLite invariants: direct mutation and deletion rejected
+Successor: exactly one CURRENT with predecessor and pointer agreement
+Withdrawal: successor rejected; audited descriptive correction allowed
+Diagnostics: synthetic pointer corruption reported without repair
+File evidence: exact-byte download and SHA-256 integrity OK
+Network/Alice/cloud/production data: unused
+```
+
+## Migration verification
+- Clean migration: `test_migration_is_self_contained_idempotent_and_failure_is_transactional` proves direct construction and repeat construction. Its malformed pre-existing `document_versions` table induces an index failure after prerequisite work begins; the owned additions roll back completely, the precise error is reported, and a corrected retry succeeds.
+- Representative TASK-07 upgrade: unchanged `test_task07_upgrade_preserves_bid_legacy_document_work_item_and_audit` seeds and preserves the bid, legacy document/attachment, work item, G4 override, and audit records across two migration runs.
+- The 50-test focused command includes both proofs and passed.
+
+## Isolated runtime acceptance
+- Runtime paths: `/tmp/contractiq-task08r-runtime.00oLm8/runtime.db` and `/tmp/contractiq-task08r-runtime.00oLm8/managed`; no production database or real managed root was opened.
+- Uvicorn bound only `127.0.0.1:8767`; startup completed and no Alice/cloud endpoint was called.
+- `/documents` 200; controlled upload 201; initial detail 200; integrity 200; successor 200; successor lineage/pointer returned correctly.
+- Current-version download 200 and `cmp` matched the exact synthetic source bytes.
+- Withdrawal 200; withdrawn successor returned controlled 422 with `withdrawn documents cannot receive new versions`; audited descriptive metadata correction returned 200.
+- Synthetic missing-pointer corruption was inserted only into the isolated database, then owned triggers were restored. `/documents` and its degraded detail both returned 200; the register displayed `CONTROL INTEGRITY ISSUE`/`POINTER_MISSING` without an internal path or storage key.
+- Ctrl-C shutdown completed cleanly with Uvicorn exit code 0.
+
+## Scans and preservation evidence
+- Exact changed-scope secret scan found no key, private-key, password, or secret assignments.
+- Exact changed production/template/test scope external-asset/telemetry scan found no URLs, external scripts/styles, telemetry, analytics, or Sentry references.
+- Network/runtime dependency scan found only two negative operator/validator strings stating Alice/cloud are unused; no Anthropic, Claude, OpenAI, `requests`, `httpx`, or `urllib` dependency was added.
+- `git ls-files` found no tracked PDF, Office, binary, SQLite, or database document bytes.
+- Protected SHA-256 values after implementation remain exact: `docs/tasks/TASK-06-readiness-engine.md` = `3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa`; `uv.lock` = `4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377`. Both remain untracked and unstaged.
+- Pre-existing `.claude/settings.local.json` SHA-256 remains `47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d`; its local Claude/harness configuration modification was not edited and will not be staged.
+- `main`, TASK-06, TASK-07, and TASK-08 local/remote pairs remained at ahead/behind `0/0`; no completed branch was rewritten or merged. TASK-09 was not created or started.
+- No production data, real managed document, secret, environment file, company document, or contract content was accessed.
+
+## Decisions I made
+- Reused and transactionally hardened the existing TASK-08 additive migration instead of inventing a repository-wide migration ledger outside TASK-08R scope.
+- Used denied-by-default, connection-local SQLite authorization functions so direct/generic connections fail closed while the supported repository can perform only its narrow audited document update and successor transition.
+- Classified a symlinked committed path as `UNREADABLE`, while preserving separate `symlink_storage_keys` diagnostics for operator enumeration.
+- Allowed audited descriptive metadata correction after withdrawal exactly as directed, while keeping withdrawal and all identity/evidence fields locked.
+
+## Deviations from the task spec
+- None.
+
+## Failed checks or setup attempts
+- An initial isolated runtime seed command passed a string instead of `Path` to `Database` and stopped before opening a database; the corrected `/tmp`-only seed passed. The first sandboxed localhost probe could not see the sandbox-local listener, so the required smoke server and requests were rerun with approved localhost access and passed. Neither attempt touched production data or repository files.
+
+## Concerns for review
+- The authorized multipart-body deferral remains the named residual risk described in finding 6 and above. Do not deploy this upload surface beyond trusted single-user localhost use without a pure-ASGI total request-size limiter.
+- The connection-local authorization functions are intentionally fail-closed and narrow. Review the trigger/repository handshake closely because it is the enforcement seam permitting the one transactional `CURRENT` to `SUPERSEDED` transition.
+
+## Reporting requirements from the task
+- All nine findings have explicit dispositions above; findings 2 and 3 are fixed before any requirements feature may reference document versions.
+- TASK-09 did not start. Its existing specification still names the pre-remediation TASK-08 commit and must be revised to branch from the final TASK-08R commit.

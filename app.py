@@ -38,10 +38,16 @@ from core.work_item_repository import (
 from core.work_item_service import MyDayService, WorkItemService, validation_error_message
 from core.my_day import WorkItemSnapshot
 from core.work_items import WorkItem, WorkItemKind, WorkItemPriority, WorkItemStatus
-from core.document_control import DocumentCategory, DocumentLifecycle
+from core.document_control import (
+    ControlledDocumentIdentityError,
+    ControlledDocumentIntegrityError,
+    DocumentCategory,
+    DocumentLifecycle,
+)
 from core.document_repository import (
     ControlledDocumentNotFoundError,
     DocumentRepository,
+    DocumentStoreBusyError,
     DocumentVersionNotFoundError,
     DuplicateDocumentVersionError,
     StaleDocumentError,
@@ -51,6 +57,7 @@ from core.managed_document_storage import (
     EmptyManagedFileError,
     ManagedDocumentStorage,
     ManagedFileTooLargeError,
+    ManagedStorageFailureError,
 )
 
 # ── App Setup ──────────────────────────────────────────────────────────────
@@ -398,6 +405,28 @@ def _mutation_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, (StaleDocumentError, DuplicateDocumentVersionError)):
         return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, ControlledDocumentIdentityError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, DocumentStoreBusyError):
+        return HTTPException(
+            status_code=503,
+            detail="The document register is temporarily busy. Please retry.",
+        )
+    if isinstance(exc, ManagedStorageFailureError):
+        return HTTPException(
+            status_code=500,
+            detail="Managed document storage could not complete the operation.",
+        )
+    if isinstance(exc, OSError):
+        return HTTPException(
+            status_code=503,
+            detail="Managed document storage is temporarily unavailable.",
+        )
+    if isinstance(exc, ControlledDocumentIntegrityError):
+        return HTTPException(
+            status_code=409,
+            detail="Controlled document integrity requires operator review.",
+        )
     if isinstance(exc, ManagedFileTooLargeError):
         return HTTPException(status_code=413, detail=str(exc))
     if isinstance(exc, EmptyManagedFileError):
@@ -491,7 +520,7 @@ async def controlled_documents(
     try:
         typed_category = DocumentCategory(category) if category else None
         typed_lifecycle = DocumentLifecycle(lifecycle) if lifecycle else None
-        documents = document_service.list_documents(
+        entries = document_service.list_register_entries(
             bid_id=bid_id or None,
             category=typed_category,
             lifecycle=typed_lifecycle,
@@ -500,14 +529,9 @@ async def controlled_documents(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     bids = bid_repository.list_bids()
     bid_names = {bid.bid_id: bid.project_name for bid in bids}
-    current_versions = {
-        document.document_id: document_service.get_version(document.current_version_id)
-        for document in documents
-    }
     return render(
         "documents.html",
-        documents=documents,
-        current_versions=current_versions,
+        entries=entries,
         bids=bids,
         bid_names=bid_names,
         categories=list(DocumentCategory),
@@ -537,6 +561,17 @@ async def controlled_document_detail(
                     f"Document version not found in {document_id}: {verify_version_id}"
                 )
             integrity_result = document_service.verify_integrity(verify_version_id)
+    except ControlledDocumentIntegrityError:
+        issues = [
+            issue
+            for issue in document_repository.diagnose_logical_integrity()
+            if issue.document_id == document_id
+        ]
+        return render(
+            "document_integrity_error.html",
+            document_id=document_id,
+            issues=issues,
+        )
     except ValueError as exc:
         raise _mutation_error(exc) from exc
     bid = bid_repository.get_bid(document.bid_id)
@@ -547,6 +582,11 @@ async def controlled_document_detail(
         bid=bid,
         integrity_result=integrity_result,
         categories=list(DocumentCategory),
+        logical_issues=[
+            issue
+            for issue in document_repository.diagnose_logical_integrity()
+            if issue.document_id == document_id
+        ],
         actor=LOCAL_ACTOR,
     )
 
@@ -587,7 +627,13 @@ async def register_controlled_document(
             jsonable_encoder({"document": document, "version": version}),
             status_code=201,
         )
-    except (ValidationError, ValueError, OSError) as exc:
+    except (
+        ValidationError,
+        ValueError,
+        OSError,
+        ManagedStorageFailureError,
+        DocumentStoreBusyError,
+    ) as exc:
         raise _mutation_error(exc) from exc
 
 
@@ -618,7 +664,13 @@ async def add_controlled_document_version(
             actor,
         )
         return JSONResponse(jsonable_encoder({"document": document, "version": version}))
-    except (ValidationError, ValueError, OSError) as exc:
+    except (
+        ValidationError,
+        ValueError,
+        OSError,
+        ManagedStorageFailureError,
+        DocumentStoreBusyError,
+    ) as exc:
         raise _mutation_error(exc) from exc
 
 
@@ -661,7 +713,7 @@ async def download_controlled_document_version(
 ) -> StreamingResponse:
     try:
         version, stream = document_service.open_download(document_version_id)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, ManagedStorageFailureError) as exc:
         raise _mutation_error(exc) from exc
 
     def chunks():

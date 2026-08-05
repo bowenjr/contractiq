@@ -40,6 +40,28 @@ class IntegrityStatus(str, Enum):  # noqa: UP042
     HASH_MISMATCH = "HASH_MISMATCH"
 
 
+class LogicalIntegrityStatus(str, Enum):  # noqa: UP042
+    IDENTITY_CORRUPT = "IDENTITY_CORRUPT"
+    CURRENT_COUNT_INVALID = "CURRENT_COUNT_INVALID"
+    MISSING_CURRENT_POINTER = "MISSING_CURRENT_POINTER"
+    POINTER_MISSING = "POINTER_MISSING"
+    POINTER_CROSS_DOCUMENT = "POINTER_CROSS_DOCUMENT"
+    POINTER_STATE_MISMATCH = "POINTER_STATE_MISMATCH"
+    CURRENT_POINTER_MISMATCH = "CURRENT_POINTER_MISMATCH"
+    LINEAGE_MISSING_PREDECESSOR = "LINEAGE_MISSING_PREDECESSOR"
+    LINEAGE_CROSS_DOCUMENT = "LINEAGE_CROSS_DOCUMENT"
+    LINEAGE_CYCLE = "LINEAGE_CYCLE"
+    LINEAGE_DISCONNECTED = "LINEAGE_DISCONNECTED"
+
+
+class ControlledDocumentIntegrityError(ValueError):
+    """Raised when persisted controlled identity cannot be decoded safely."""
+
+
+class ControlledDocumentIdentityError(ValueError):
+    """Raised when a legacy API attempts to mutate controlled identity."""
+
+
 def _required(value: str, name: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -187,8 +209,31 @@ class IntegrityResult(BaseModel):
     reason: str
 
 
+class LogicalIntegrityIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    document_id: str
+    status: LogicalIntegrityStatus
+    reason: str
+
+
+class DocumentRegisterEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    title: str
+    bid_id: str | None = None
+    category: DocumentCategory | None = None
+    lifecycle_state: DocumentLifecycle | None = None
+    document: ControlledDocument | None = None
+    current_version: DocumentVersion | None = None
+    logical_issues: list[LogicalIntegrityIssue] = Field(default_factory=list)
+
+
 class StorageDiagnostic(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     committed_file_results: list[IntegrityResult]
     unreferenced_storage_keys: list[str]
+    symlink_storage_keys: list[str] = Field(default_factory=list)
+    logical_issues: list[LogicalIntegrityIssue] = Field(default_factory=list)

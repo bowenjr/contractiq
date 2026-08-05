@@ -37,6 +37,8 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.create_function("contractiq_version_transition_allowed", 0, lambda: 0)
+        conn.create_function("contractiq_controlled_update_allowed", 0, lambda: 0)
         return conn
 
     # ── Schema ────────────────────────────────────────────────────────────────

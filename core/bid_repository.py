@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import cast
 
 from core.database import Database
+from core.document_control import ControlledDocumentIdentityError
 from core.enums import (
     ApprovalType,
     BidLevel,
@@ -256,13 +257,34 @@ class BidRepository:
             row = conn.execute("SELECT 1 FROM bids WHERE bid_id = ? LIMIT 1", (bid_id,)).fetchone()
         return row is not None
 
+    @staticmethod
+    def _controlled_document_row(conn: sqlite3.Connection, doc_id: str) -> bool:
+        columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(documents)").fetchall()
+        }
+        if "control_managed" not in columns:
+            return False
+        row = conn.execute(
+            "SELECT control_managed FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        return row is not None and int(row["control_managed"] or 0) == 1
+
     def attach_document_to_bid(self, doc_id: str, bid_id: str) -> None:
         with self._conn() as conn:
+            if self._controlled_document_row(conn, doc_id):
+                raise ControlledDocumentIdentityError(
+                    "controlled document bid ownership cannot be reassigned"
+                )
             conn.execute("UPDATE documents SET bid_id = ? WHERE id = ?", (bid_id, doc_id))
             conn.commit()
 
     def detach_document(self, doc_id: str) -> None:
         with self._conn() as conn:
+            if self._controlled_document_row(conn, doc_id):
+                raise ControlledDocumentIdentityError(
+                    "controlled document bid ownership cannot be detached"
+                )
             conn.execute("UPDATE documents SET bid_id = NULL WHERE id = ?", (doc_id,))
             conn.commit()
 

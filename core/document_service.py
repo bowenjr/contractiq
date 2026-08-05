@@ -13,6 +13,7 @@ from core.document_control import (
     DocumentCreate,
     DocumentLifecycle,
     DocumentMetadataEdit,
+    DocumentRegisterEntry,
     DocumentVersion,
     DocumentVersionCreate,
     DocumentVersionState,
@@ -232,6 +233,34 @@ class DocumentService:
             lifecycle=typed_lifecycle,
         )
 
+    def list_register_entries(
+        self,
+        *,
+        bid_id: str | None = None,
+        category: DocumentCategory | str | None = None,
+        lifecycle: DocumentLifecycle | str | None = None,
+    ) -> list[DocumentRegisterEntry]:
+        """Return a register that isolates persisted integrity failures per row."""
+        typed_category = (
+            category
+            if isinstance(category, DocumentCategory)
+            else DocumentCategory(category)
+            if category is not None
+            else None
+        )
+        typed_lifecycle = (
+            lifecycle
+            if isinstance(lifecycle, DocumentLifecycle)
+            else DocumentLifecycle(lifecycle)
+            if lifecycle is not None
+            else None
+        )
+        return self.repository.list_register_entries(
+            bid_id=bid_id,
+            category=typed_category,
+            lifecycle=typed_lifecycle,
+        )
+
     def list_versions(self, document_id: str) -> list[DocumentVersion]:
         """Return version history after confirming the parent exists."""
         self.get_document(document_id)
@@ -402,4 +431,6 @@ class DocumentService:
         return StorageDiagnostic(
             committed_file_results=[self.storage.verify(version) for version in versions],
             unreferenced_storage_keys=sorted(set(self.storage.iter_managed_keys()) - referenced),
+            symlink_storage_keys=sorted(self.storage.iter_symlink_keys()),
+            logical_issues=self.repository.diagnose_logical_integrity(),
         )

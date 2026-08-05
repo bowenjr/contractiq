@@ -31,6 +31,8 @@
   .doc:last-child { border-bottom:0; } .doc:hover { background:#fbfaf7; } .title { font-weight:750; } .muted,.label { color:var(--mist); font-size:.73rem; } .label { text-transform:uppercase; letter-spacing:.07em; } .value { margin-top:2px; font-size:.81rem; font-weight:600; overflow-wrap:anywhere; }
   .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:.67rem; font-weight:750; } .ACTIVE,.CURRENT { color:var(--green); background:#dcfae6; } .WITHDRAWN { color:var(--red); background:#fee4e2; } .category { color:var(--blue); background:#eaf2ff; }
   .integrity { margin-top:6px; color:var(--mist); font-size:.7rem; } .hash { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .doc.degraded { border-left:4px solid var(--red); background:#fff8f7; }
+  .integrity-alert { color:var(--red); font-weight:750; }
   .register { position:sticky; top:88px; padding:20px; } .register h2 { margin-bottom:4px; } .field { margin-top:13px; } .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .full { grid-column:1/-1; } .required { color:var(--red); }
   .error { display:none; margin:12px 0; padding:10px 12px; color:var(--red); background:#fef3f2; border:1px solid #fecdca; border-radius:5px; font-size:.8rem; } .error.show { display:block; }
   .empty { padding:50px 25px; text-align:center; color:var(--mist); } .empty strong { display:block; color:var(--ink); font:600 1.1rem var(--serif); margin-bottom:5px; }
@@ -59,14 +61,22 @@
     </form>
     <div class="layout">
       <section class="panel" aria-labelledby="register-heading">
-        <div class="heading"><h2 id="register-heading">Document register</h2><span class="count">{{ documents|length }} controlled document{% if documents|length != 1 %}s{% endif %}</span></div>
-        {% if documents %}{% for document in documents %}{% set version = current_versions[document.document_id] %}
-        <a class="doc" href="/documents/{{ document.document_id }}">
+        <div class="heading"><h2 id="register-heading">Document register</h2><span class="count">{{ entries|length }} controlled document{% if entries|length != 1 %}s{% endif %}</span></div>
+        {% if entries %}{% for entry in entries %}{% set document = entry.document %}{% set version = entry.current_version %}
+        <a class="doc{% if entry.logical_issues %} degraded{% endif %}" href="/documents/{{ entry.document_id }}">
+          {% if document and version and not entry.logical_issues %}
           <div><div class="title">{{ document.title }}</div><div class="muted">{{ document.document_number or 'No document number' }}</div><div class="integrity">Integrity: not checked in this view</div></div>
           <div><div class="label">Bid / opportunity</div><div class="value">{{ bid_names.get(document.bid_id, document.bid_id) }}</div><div class="muted">{{ document.bid_id }}</div></div>
           <div><span class="badge category">{{ document.category.value }}</span><div class="value">{{ document.issuer or 'Issuer not recorded' }}</div></div>
           <div class="optional"><div class="label">Current version</div><div class="value">{{ version.version_label }}{% if version.issued_date %} · {{ version.issued_date }}{% endif %}</div><div class="muted">{{ version.original_filename }} · {{ version.byte_size }} bytes</div></div>
           <div><span class="badge {{ document.lifecycle_state.value }}">{{ document.lifecycle_state.value }}</span><div class="value hash">{{ version.sha256_digest[:12] }}…</div></div>
+          {% else %}
+          <div><div class="title">{{ entry.title }}</div><div class="muted">{{ entry.document_id }}</div><div class="integrity integrity-alert">CONTROL INTEGRITY ISSUE</div></div>
+          <div><div class="label">Bid / opportunity</div><div class="value">{{ bid_names.get(entry.bid_id, entry.bid_id or 'Identity unavailable') }}</div></div>
+          <div><span class="badge WITHDRAWN">REVIEW</span><div class="value">{{ entry.category.value if entry.category else 'Category unavailable' }}</div></div>
+          <div class="optional"><div class="label">Diagnostic</div>{% for issue in entry.logical_issues %}<div class="value">{{ issue.status.value }}</div><div class="muted">{{ issue.reason }}</div>{% endfor %}</div>
+          <div><div class="label">Evidence access</div><div class="value">Restricted pending review</div></div>
+          {% endif %}
         </a>{% endfor %}{% else %}<div class="empty"><strong>No controlled documents yet</strong>Select an existing bid and register its first immutable file version.</div>{% endif %}
       </section>
       <section class="panel register" aria-labelledby="new-heading">
