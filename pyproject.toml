@@ -70,6 +70,11 @@ files = [
     "core/document_repository.py",
     "core/managed_document_storage.py",
     "core/document_service.py",
+    "core/requirements.py",
+    "core/requirement_coverage.py",
+    "core/requirement_repository.py",
+    "core/requirement_service.py",
+    "scripts/validate_task_09.py",
 ]
 
 [[tool.mypy.overrides]]
@@ -100,6 +105,11 @@ module = [
     "core.document_repository",
     "core.managed_document_storage",
     "core.document_service",
+    "core.requirements",
+    "core.requirement_coverage",
+    "core.requirement_repository",
+    "core.requirement_service",
+    "scripts.validate_task_09",
 ]
 ignore_errors = false
 

@@ -6,6 +6,12 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict
 
 from core.readiness import ReadinessReport, ReadinessVerdict
+from core.requirements import (
+    ATTENTION_SIGNIFICANCE,
+    Requirement,
+    RequirementLifecycle,
+    RequirementSignificance,
+)
 from core.work_items import WorkItem, WorkItemPriority, WorkItemStatus
 
 
@@ -37,6 +43,28 @@ class ReadinessSnapshot(BaseModel):
     report: ReadinessReport
 
 
+class RequirementAttentionSnapshot(BaseModel):
+    """An authoritative requirement plus its parent presentation label."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requirement: Requirement
+    bid_name: str
+
+
+class ProjectedRequirementAttention(BaseModel):
+    """One deduplicated requirement attention item with deterministic reasons."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requirement: Requirement
+    bid_name: str
+    reasons: list[str]
+    is_overdue: bool
+    is_due_today: bool
+    is_high_attention: bool
+
+
 class ProjectedWorkItem(BaseModel):
     """One active work item classified once with independent due flags."""
 
@@ -57,6 +85,9 @@ class MyDayCounts(BaseModel):
     waiting: int
     blocked: int
     readiness_holds: int
+    requirement_attention: int
+    requirement_overdue: int
+    requirement_due_today: int
 
 
 class MyDayProjection(BaseModel):
@@ -73,6 +104,7 @@ class MyDayProjection(BaseModel):
     upcoming: list[ProjectedWorkItem]
     later_or_unscheduled: list[ProjectedWorkItem]
     readiness_holds: list[ReadinessSnapshot]
+    requirement_attention: list[ProjectedRequirementAttention]
     counts: MyDayCounts
 
 
@@ -110,11 +142,63 @@ def _sort_key(projected: ProjectedWorkItem) -> tuple[int, date, str, str]:
     )
 
 
+_REQUIREMENT_SIGNIFICANCE_RANK: dict[RequirementSignificance, int] = {
+    RequirementSignificance.DISQUALIFYING: 0,
+    RequirementSignificance.MANDATORY: 1,
+    RequirementSignificance.SCORED: 2,
+    RequirementSignificance.INFORMATIONAL: 3,
+}
+
+
+def _project_requirement_attention(
+    snapshots: list[RequirementAttentionSnapshot],
+    as_of: date,
+) -> list[ProjectedRequirementAttention]:
+    projected: list[ProjectedRequirementAttention] = []
+    for snapshot in snapshots:
+        requirement = snapshot.requirement
+        if requirement.lifecycle_state != RequirementLifecycle.ACTIVE or requirement.fully_closed:
+            continue
+        overdue = requirement.due_date is not None and requirement.due_date < as_of
+        due_today = requirement.due_date == as_of
+        high_attention = requirement.significance in ATTENTION_SIGNIFICANCE
+        reasons: list[str] = []
+        if overdue:
+            reasons.append("OVERDUE")
+        if due_today:
+            reasons.append("DUE_TODAY")
+        if high_attention:
+            reasons.append("HIGH_ATTENTION")
+        if reasons:
+            projected.append(
+                ProjectedRequirementAttention(
+                    requirement=requirement,
+                    bid_name=snapshot.bid_name,
+                    reasons=reasons,
+                    is_overdue=overdue,
+                    is_due_today=due_today,
+                    is_high_attention=high_attention,
+                )
+            )
+    projected.sort(
+        key=lambda item: (
+            0 if item.is_overdue else 1,
+            0 if item.is_due_today else 1,
+            _REQUIREMENT_SIGNIFICANCE_RANK[item.requirement.significance],
+            item.requirement.due_date or date.max,
+            item.requirement.title.casefold(),
+            item.requirement.requirement_id,
+        )
+    )
+    return projected
+
+
 def project_my_day(
     work_items: list[WorkItemSnapshot],
     readiness: list[ReadinessSnapshot],
     as_of: date,
     horizon_days: int,
+    requirement_snapshots: list[RequirementAttentionSnapshot] | None = None,
 ) -> MyDayProjection:
     """Classify and order supplied snapshots without I/O or hidden time access."""
     if horizon_days < 1:
@@ -143,6 +227,10 @@ def project_my_day(
         snapshot for snapshot in readiness if snapshot.report.verdict == ReadinessVerdict.HOLD
     ]
     readiness_holds.sort(key=lambda snapshot: (snapshot.bid_name.casefold(), snapshot.bid_id))
+    requirement_attention = _project_requirement_attention(
+        requirement_snapshots or [],
+        as_of,
+    )
 
     return MyDayProjection(
         as_of=as_of,
@@ -154,11 +242,15 @@ def project_my_day(
         upcoming=buckets[MyDayBucket.UPCOMING],
         later_or_unscheduled=buckets[MyDayBucket.LATER_OR_UNSCHEDULED],
         readiness_holds=readiness_holds,
+        requirement_attention=requirement_attention,
         counts=MyDayCounts(
             overdue=sum(item.is_overdue for item in active),
             due_today=sum(item.is_due_today for item in active),
             waiting=len(buckets[MyDayBucket.WAITING]),
             blocked=len(buckets[MyDayBucket.BLOCKED]),
             readiness_holds=len(readiness_holds),
+            requirement_attention=len(requirement_attention),
+            requirement_overdue=sum(item.is_overdue for item in requirement_attention),
+            requirement_due_today=sum(item.is_due_today for item in requirement_attention),
         ),
     )

@@ -43,7 +43,7 @@
   .btn-primary:hover { background: var(--ink-mid); }
   .btn-gold { border-color: var(--gold); background: var(--gold); }
   .btn-small { padding: 5px 9px; font-size: .77rem; }
-  .summary { display: grid; grid-template-columns: repeat(5, minmax(120px,1fr)); gap: 13px; margin-bottom: 28px; }
+  .summary { display: grid; grid-template-columns: repeat(6, minmax(120px,1fr)); gap: 13px; margin-bottom: 28px; }
   .metric { padding: 17px 18px; background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); border-top: 3px solid var(--gold); }
   .metric-value { font: 600 1.8rem/1 var(--serif); }
   .metric-label { margin-top: 5px; color: var(--mist); font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; }
@@ -119,6 +119,7 @@
     <a class="nav-item" href="/">Dashboard</a>
     <a class="nav-item active" href="/my-day" aria-current="page">My Day</a>
     <a class="nav-item" href="/documents">Documents</a>
+    <a class="nav-item" href="/requirements">Requirements</a>
     <div class="nav-label">Reference</div>
     <a class="nav-item" href="/knowledge">Knowledge Base</a>
   </nav>
@@ -137,6 +138,7 @@
       <div class="metric"><div class="metric-value">{{ projection.counts.waiting }}</div><div class="metric-label">Waiting</div></div>
       <div class="metric"><div class="metric-value">{{ projection.counts.blocked }}</div><div class="metric-label">Blocked</div></div>
       <div class="metric"><div class="metric-value">{{ projection.counts.readiness_holds }}</div><div class="metric-label">Readiness holds</div></div>
+      <div class="metric"><div class="metric-value">{{ projection.counts.requirement_attention }}</div><div class="metric-label">Requirement attention</div></div>
     </section>
 
     {% macro work_rows(items, empty_message) %}
@@ -183,6 +185,23 @@
       {{ work_rows(items, empty_message) }}
     </section>
     {% endfor %}
+
+    <section class="section" aria-labelledby="requirements-heading">
+      <div class="section-head"><h2 id="requirements-heading">Requirement attention</h2><span class="section-count">{{ projection.requirement_attention|length }} · authoritative register, no duplicate work items</span></div>
+      <div class="panel">
+      {% if projection.requirement_attention %}{% for projected in projection.requirement_attention %}{% set requirement = projected.requirement %}
+        <a class="work-row" href="/requirements/{{ requirement.requirement_id }}" style="color:inherit;text-decoration:none">
+          <div><div class="item-title">{{ requirement.title }}</div><div class="item-detail">{{ requirement.requirement_id }}</div></div>
+          <div><div class="parent-id">{{ requirement.bid_id }}</div><div class="parent-name">{{ projected.bid_name }}</div></div>
+          <div><div class="meta-label">Significance</div><div class="meta-value">{{ requirement.significance.value }}</div></div>
+          <div><span class="badge priority-HIGH">{{ requirement.disposition.value }}</span></div>
+          <div><span class="badge status-{{ requirement.work_state.value }}">{{ requirement.work_state.value }}</span></div>
+          <div><div class="due-line"><span>{{ requirement.due_date or 'No due date' }}</span>{% if projected.is_overdue %}<span class="badge overdue">OVERDUE</span>{% endif %}{% if projected.is_due_today %}<span class="badge status-WAITING">TODAY</span>{% endif %}</div><div class="context">{{ projected.reasons|join(' · ') }}</div></div>
+          <div class="actions"><span class="btn btn-small">Open requirement</span></div>
+        </a>{% endfor %}
+      {% else %}<div class="empty">No overdue, due-today, or high-attention requirements.</div>{% endif %}
+      </div>
+    </section>
 
     <section class="section" aria-labelledby="readiness-heading">
       <div class="section-head"><h2 id="readiness-heading">Readiness holds</h2><span class="section-count">{{ projection.readiness_holds|length }} · read-only from TASK-06</span></div>

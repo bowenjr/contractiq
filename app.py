@@ -53,6 +53,24 @@ from core.document_repository import (
     StaleDocumentError,
 )
 from core.document_service import DocumentService
+from core.readiness_service import evaluate_readiness
+from core.requirement_repository import (
+    RequirementNotFoundError,
+    RequirementRepository,
+    RequirementSourceError,
+    StaleRequirementError,
+)
+from core.requirement_service import RequirementService
+from core.requirements import (
+    RequirementCategory,
+    RequirementLifecycle,
+    RequirementOrigin,
+    RequirementReviewState,
+    RequirementSignificance,
+    RequirementStage,
+    RequirementWorkState,
+    ResponseDisposition,
+)
 from core.managed_document_storage import (
     EmptyManagedFileError,
     ManagedDocumentStorage,
@@ -114,8 +132,19 @@ db = Database(Path(os.environ.get("CONTRACTIQ_DB_PATH", BASE_DIR / "data" / "con
 bid_repository = BidRepository(db)
 work_item_repository = WorkItemRepository(db)
 work_item_service = WorkItemService(work_item_repository, bid_repository)
-my_day_service = MyDayService(work_item_repository, bid_repository, db)
 document_repository = DocumentRepository(db)
+requirement_repository = RequirementRepository(db)
+requirement_service = RequirementService(
+    requirement_repository,
+    bid_repository,
+    document_repository,
+)
+my_day_service = MyDayService(
+    work_item_repository,
+    bid_repository,
+    db,
+    requirement_repository=requirement_repository,
+)
 managed_document_storage = ManagedDocumentStorage(
     MANAGED_DOCUMENT_ROOT,
     MAX_MANAGED_DOCUMENT_BYTES,
@@ -369,7 +398,14 @@ def _run_analysis_background(doc_id: str) -> None:
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     documents = db.get_all_documents()
-    return render("index.html", contracts=documents)
+    return render(
+        "index.html",
+        contracts=documents,
+        requirement_coverage=requirement_service.coverage(
+            bid_id=None,
+            as_of_date=_working_date(),
+        ),
+    )
 
 
 def _working_date() -> date:
@@ -401,6 +437,12 @@ def _mutation_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, StaleWorkItemError):
         return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, RequirementNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, StaleRequirementError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, RequirementSourceError):
+        return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, (ControlledDocumentNotFoundError, DocumentVersionNotFoundError)):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, (StaleDocumentError, DuplicateDocumentVersionError)):
@@ -506,6 +548,234 @@ async def transition_work_item(work_item_id: str, request: Request) -> JSONRespo
     actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
     try:
         return _json_item(work_item_service.transition_work_item(work_item_id, body, actor))
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/requirements", response_class=HTMLResponse)
+async def requirements_register(
+    request: Request,
+    bid_id: str | None = None,
+    origin: str | None = None,
+    category: str | None = None,
+    significance: str | None = None,
+    lifecycle: str | None = None,
+    disposition: str | None = None,
+    work_state: str | None = None,
+    review_state: str | None = None,
+    owner: str | None = None,
+    due_state: str | None = None,
+    attention: str | None = None,
+    exception: str | None = None,
+    as_of: str | None = None,
+) -> HTMLResponse:
+    projection_date = _parse_as_of(as_of)
+    try:
+        records = requirement_service.list_requirements(
+            bid_id=bid_id or None,
+            origin=RequirementOrigin(origin) if origin else None,
+            category=RequirementCategory(category) if category else None,
+            significance=RequirementSignificance(significance) if significance else None,
+            lifecycle=RequirementLifecycle(lifecycle) if lifecycle else None,
+            disposition=ResponseDisposition(disposition) if disposition else None,
+            work_state=RequirementWorkState(work_state) if work_state else None,
+            review_state=RequirementReviewState(review_state) if review_state else None,
+            owner=owner or None,
+            due_state=due_state or None,
+            attention_only=attention == "1",
+            exception_only=exception == "1",
+            as_of_date=projection_date,
+        )
+        coverage = requirement_service.coverage(
+            bid_id=bid_id or None,
+            as_of_date=projection_date,
+        )
+        sources = (
+            requirement_service.source_choices(bid_id)
+            if bid_id
+            else None
+        )
+        readiness = (
+            evaluate_readiness(bid_repository, db, bid_id)
+            if bid_id
+            else None
+        )
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+    bids = bid_repository.list_bids()
+    bid_names = {bid.bid_id: bid.project_name for bid in bids}
+    return render(
+        "requirements.html",
+        requirements=records,
+        coverage=coverage,
+        readiness=readiness,
+        bids=bids,
+        bid_names=bid_names,
+        sources=sources,
+        origins=list(RequirementOrigin),
+        categories=list(RequirementCategory),
+        significances=list(RequirementSignificance),
+        stages=list(RequirementStage),
+        lifecycles=list(RequirementLifecycle),
+        dispositions=list(ResponseDisposition),
+        work_states=list(RequirementWorkState),
+        review_states=list(RequirementReviewState),
+        selected={
+            "bid_id": bid_id or "",
+            "origin": origin or "",
+            "category": category or "",
+            "significance": significance or "",
+            "lifecycle": lifecycle or "",
+            "disposition": disposition or "",
+            "work_state": work_state or "",
+            "review_state": review_state or "",
+            "owner": owner or "",
+            "due_state": due_state or "",
+            "attention": attention or "",
+            "exception": exception or "",
+            "as_of": projection_date.isoformat(),
+        },
+        as_of_date=projection_date,
+        actor=LOCAL_ACTOR,
+    )
+
+
+@app.get("/requirements/{requirement_id}", response_class=HTMLResponse)
+async def requirement_detail(request: Request, requirement_id: str) -> HTMLResponse:
+    try:
+        detail = requirement_service.detail(requirement_id)
+        history = requirement_service.audit_history(requirement_id)
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+    bid = bid_repository.get_bid(detail.requirement.bid_id)
+    coverage = requirement_service.coverage(
+        bid_id=detail.requirement.bid_id,
+        as_of_date=_working_date(),
+    )
+    readiness = evaluate_readiness(bid_repository, db, detail.requirement.bid_id)
+    return render(
+        "requirement_detail.html",
+        detail=detail,
+        requirement=detail.requirement,
+        bid=bid,
+        coverage=coverage,
+        readiness=readiness,
+        history=history,
+        categories=list(RequirementCategory),
+        significances=list(RequirementSignificance),
+        stages=list(RequirementStage),
+        dispositions=list(ResponseDisposition),
+        work_states=list(RequirementWorkState),
+        review_states=list(RequirementReviewState),
+        actor=LOCAL_ACTOR,
+    )
+
+
+@app.get("/bids/{bid_id}", response_class=HTMLResponse)
+async def bid_detail(request: Request, bid_id: str) -> HTMLResponse:
+    bid = bid_repository.get_bid(bid_id)
+    if bid is None:
+        raise HTTPException(status_code=404, detail=f"Bid not found: {bid_id}")
+    as_of_date = _working_date()
+    requirements = requirement_service.list_requirements(
+        bid_id=bid_id,
+        as_of_date=as_of_date,
+    )
+    return render(
+        "bid_detail.html",
+        bid=bid,
+        requirements=requirements,
+        coverage=requirement_service.coverage(
+            bid_id=bid_id,
+            as_of_date=as_of_date,
+        ),
+        readiness=evaluate_readiness(bid_repository, db, bid_id),
+        documents=document_service.list_register_entries(bid_id=bid_id),
+    )
+
+
+@app.get("/api/requirement-source-choices")
+async def requirement_source_choices(bid_id: str) -> JSONResponse:
+    try:
+        return JSONResponse(jsonable_encoder(requirement_service.source_choices(bid_id)))
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/api/requirements")
+async def list_requirements_api(bid_id: str | None = None) -> JSONResponse:
+    records = requirement_service.list_requirements(
+        bid_id=bid_id,
+        as_of_date=_working_date(),
+    )
+    return JSONResponse(jsonable_encoder(records))
+
+
+@app.get("/api/requirements/{requirement_id}")
+async def get_requirement_api(requirement_id: str) -> JSONResponse:
+    try:
+        return JSONResponse(jsonable_encoder(requirement_service.detail(requirement_id)))
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/requirements")
+async def create_requirement(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        created = requirement_service.create_requirement(body, actor)
+        return JSONResponse(jsonable_encoder(created), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.patch("/api/requirements/{requirement_id}/metadata")
+async def update_requirement_metadata(
+    requirement_id: str,
+    request: Request,
+) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        updated = requirement_service.update_metadata(requirement_id, body, actor)
+        return JSONResponse(jsonable_encoder(updated))
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/requirements/{requirement_id}/workflow")
+async def update_requirement_workflow(
+    requirement_id: str,
+    request: Request,
+) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        updated = requirement_service.update_workflow(requirement_id, body, actor)
+        return JSONResponse(jsonable_encoder(updated))
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/requirements/{requirement_id}/review")
+async def review_requirement(requirement_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        updated = requirement_service.record_review(requirement_id, body, actor)
+        return JSONResponse(jsonable_encoder(updated))
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/requirements/{requirement_id}/withdraw")
+async def withdraw_requirement(requirement_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        updated = requirement_service.withdraw(requirement_id, body, actor)
+        return JSONResponse(jsonable_encoder(updated))
     except (ValidationError, ValueError) as exc:
         raise _mutation_error(exc) from exc
 

@@ -14,11 +14,13 @@ from core.enums import Actor
 from core.my_day import (
     MyDayProjection,
     ReadinessSnapshot,
+    RequirementAttentionSnapshot,
     WorkItemSnapshot,
     project_my_day,
 )
 from core.readiness import ReadinessReport
 from core.readiness_service import evaluate_readiness
+from core.requirement_repository import RequirementRepository
 from core.schemas import AuditEntry, Provenance
 from core.work_item_repository import (
     StaleWorkItemError,
@@ -237,11 +239,13 @@ class MyDayService:
         bid_repository: BidRepository,
         db: Database,
         *,
+        requirement_repository: RequirementRepository | None = None,
         readiness_loader: Callable[[str], ReadinessReport] | None = None,
     ) -> None:
         self.work_repository = work_repository
         self.bid_repository = bid_repository
         self.db = db
+        self.requirement_repository = requirement_repository
         self._readiness_loader = readiness_loader or self._evaluate_readiness
 
     def _evaluate_readiness(self, bid_id: str) -> ReadinessReport:
@@ -271,11 +275,23 @@ class MyDayService:
             )
             for bid in bids
         ]
+        requirement_snapshots = (
+            [
+                RequirementAttentionSnapshot(
+                    requirement=requirement,
+                    bid_name=bid_names.get(requirement.bid_id, requirement.bid_id),
+                )
+                for requirement in self.requirement_repository.list()
+            ]
+            if self.requirement_repository is not None
+            else []
+        )
         return project_my_day(
             work_snapshots,
             readiness_snapshots,
             as_of,
             horizon_days,
+            requirement_snapshots,
         )
 
 

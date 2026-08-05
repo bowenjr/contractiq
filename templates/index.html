@@ -168,7 +168,7 @@
   /* ── Stats Cards ───────────────────────────────────────────────── */
   .stats-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 16px;
     margin-bottom: 28px;
   }
@@ -507,6 +507,7 @@
       My Day
     </a>
     <a class="nav-item" href="/documents">Documents</a>
+    <a class="nav-item" href="/requirements">Requirements</a>
     <div class="nav-section-label">Analysis</div>
     <button class="nav-item" onclick="triggerUpload()">
       <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
@@ -567,6 +568,11 @@
         <div class="stat-value" style="font-size:1rem; padding-top:4px;" id="stat-model">—</div>
         <div class="stat-sub">LM Studio active model</div>
       </div>
+      <a class="stat-card" href="/requirements" style="color:inherit;text-decoration:none">
+        <div class="stat-label">Requirements</div>
+        <div class="stat-value">{{ requirement_coverage.total_active }}</div>
+        <div class="stat-sub">{{ requirement_coverage.high_attention }} high attention · {{ requirement_coverage.exception_total }} exceptions</div>
+      </a>
     </div>
 
     <!-- Upload Zone -->

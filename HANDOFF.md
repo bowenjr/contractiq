@@ -726,3 +726,135 @@ Network/Alice/cloud/production data: unused
 ## Reporting requirements from the task
 - All nine findings have explicit dispositions above; findings 2 and 3 are fixed before any requirements feature may reference document versions.
 - TASK-09 did not start. Its existing specification still names the pre-remediation TASK-08 commit and must be revised to branch from the final TASK-08R commit.
+
+# Handoff — TASK-09
+
+## Status
+COMPLETE
+
+## TASK-08R baseline
+- Authoritative base branch: `task-08-review-remediation` at exact commit `aa4a3359dd7df0aa64fb615d53e1a812cde1c4a6`.
+- After `git fetch --all --prune`, local and remote base refs matched exactly with ahead/behind `0/0`. TASK-09 was created directly from that commit only after confirming no local or remote `task-09-requirements-compliance-register` branch existed.
+- Existing document migration identifier remains `task_08_document_control_v1`. The complete retained TASK-08R section above records dispositions for all nine Claude findings; none was deleted or rewritten by TASK-09.
+- Authorized residual risk is unchanged: Starlette may spool an oversized multipart body before managed-storage limits run. ContractIQ remains restricted to trusted, single-user localhost use until a pure-ASGI total request-size limiter is implemented before non-localhost, multi-user, or untrusted-client deployment. TASK-09 adds no request-size middleware.
+
+## Baseline and scope
+- Revised implementation authority: `/home/bowen/Downloads/ContractIQ_TASK-09_REVISED_Implementation_Instructions.md` (623 lines), read completely. The obsolete TASK-09 authority and obsolete review gate were not used or rerun.
+- No pre-existing authoritative requirement/compliance aggregate was found. Legacy AI-analysis `scope_items`, legacy `obligations`, and TASK-06's coarse `requirements` table-capability check are separate concepts and were not converted, merged, or reused as authoritative manual compliance data.
+- Current migration head is the repository's additive/idempotent code-driven `task_08_document_control_v1`; TASK-09 adds `task_09_requirements_v1` without inventing a migration ledger.
+- Reused seams: canonical `bids(bid_id)` ownership and `audit_log`; TASK-08R controlled `documents`/immutable `document_versions` plus diagnostics; TASK-07 pure My Day projection/composition; TASK-06 `evaluate_readiness` only for adjacent read-only context.
+- No safe typed TASK-06 requirements-capability provider exists. Coverage and exceptions therefore appear adjacent to unchanged TASK-06 readiness on Requirements, requirement detail, and bid context pages. No TASK-09 percentage, response, exception, or work state clears or recalculates a gate.
+- Preserved non-goals: no OCR/parsing/preview/content rendering, AI/Alice/LLM use, cloud, external assets, telemetry, multiple-source graph, Excel/import/export, scope matrix, supplier coverage, addendum-impact automation, supporting uploads, notifications, authentication, scheduler, or analytics dependency.
+- Controlled supersession is reserved in the schema but deliberately not exposed. TASK-09 supports irreversible `ACTIVE` to `WITHDRAWN`; a future explicit supersede-and-recreate operation must enforce same-bid acyclic lineage atomically.
+
+## Files created
+- `core/requirements.py` (454 lines) — Pydantic v2 identity, source, workflow, lifecycle, filter projection, and bounded-input models with closed vocabularies.
+- `core/requirement_coverage.py` (146 lines) — pure fixed-date counts and half-up one-decimal numerator/denominator ratios; empty percentages are `None`, never false 100%.
+- `core/requirement_repository.py` (582 lines) — `task_09_requirements_v1`, SQLite constraints/indexes/triggers, immutable evidence enforcement, optimistic concurrency, operation-specific mutation boundaries, and same-transaction audit writes.
+- `core/requirement_service.py` (637 lines) — source ownership/diagnostic validation, manual creation, metadata/assignment/due date, response/workflow, independent review, withdrawal, filters, detail/history, and coverage APIs.
+- `scripts/validate_task_09.py` (324 lines) — isolated deterministic end-to-end validation with synthetic bytes and no network.
+- `templates/requirements.html` (49 lines) — professional filtered register, coverage cards, exact-version selector, safe degraded-source notice, and explicit/internal creation flow.
+- `templates/requirement_detail.html` (15 lines) — immutable source identity/context, provenance, workflow/review/withdraw forms, optimistic version, and audit history.
+- `templates/bid_detail.html` (4 lines) — canonical bid context with adjacent TASK-06 readiness, requirement coverage/register links, and controlled-document context.
+- `tests/unit/test_requirement_service.py` (315 lines).
+- `tests/unit/test_requirement_repository.py` (172 lines).
+- `tests/unit/test_requirement_coverage.py` (125 lines).
+- `tests/unit/test_requirement_ui.py` (286 lines).
+
+## Files modified
+- `app.py` — initializes the requirement migration/repository/service, extends My Day composition, adds register/detail/bid pages and same-origin JSON mutation/source-choice APIs, maps typed 404/409/422 errors, and adds portfolio coverage to Dashboard.
+- `core/database.py` — adds the denied-by-default, connection-local requirement-update authorization function used by migration triggers.
+- `core/my_day.py` — adds pure, deduplicated requirement attention snapshots/reasons/counts with explicit date and stable ordering.
+- `core/work_item_service.py` — optionally composes authoritative requirements into My Day without creating TASK-07 work-item rows.
+- `pyproject.toml` — adds four production modules plus the validation script to canonical strict-mypy authority; dependencies and quality rules are unchanged.
+- `templates/index.html` — adds Requirements navigation and portfolio requirement/attention/exception context.
+- `templates/my_day.html` — adds distinct requirement attention summary/rows and Requirements navigation.
+- `templates/documents.html`, `templates/document_detail.html`, `templates/knowledge.html`, `templates/contract.html` — add consistent Requirements navigation only.
+- `HANDOFF.md` — appends this TASK-09 evidence while retaining all TASK-06/TASK-07/TASK-08/TASK-08R evidence.
+
+## Implementation evidence
+- Each requirement has a stable `REQ-<uuid>`, existing canonical bid, trimmed title/statement, origin/category/significance/stage/lifecycle, owner/due date, UTC timestamps, version, and mandatory human provenance. Whitespace, invalid enums, oversize text, invalid page ranges, identical interpretation/statement, and invalid workflow combinations fail before persistence where possible.
+- Every explicit source is one exact `document_version_id`; the service derives its `document_id`, verifies controlled identity, same-bid ownership, and absence of any TASK-08R logical/identity/lineage diagnostic. Legacy, missing, cross-bid, and degraded candidates fail without requirement/audit mutation. Source identity, locator, excerpt, creation provenance, bid, and origin are immutable in SQLite triggers and repository operation boundaries.
+- Source choices contain only logical title/lifecycle, exact version ID/label/state, and a 12-character SHA-256 abbreviation. All historical versions remain selectable, including `SUPERSEDED`; withdrawn document context remains readable. Pages and APIs never expose absolute paths, storage keys, or document bytes.
+- Adding `Addendum 1 incorporated` changes the logical document current pointer but leaves existing requirement source ID on `Original`; tests and validation assert this exact invariant.
+- Response disposition, work state, and independent review remain separate. `COMPLETE` requires assessment; review-ready/complete response-required dispositions require text; `NOT_APPLICABLE` requires rationale; `ACCEPTED` requires eligible work, assessment, and named reviewer. `CHANGES_REQUIRED` deterministically returns work to `IN_PROGRESS`. Only `COMPLETE` plus `ACCEPTED` is fully closed. Defining metadata or substantive response changes reset review; owner/due-only edits preserve it.
+- `CLARIFY`, `DEVIATE`, and `EXCLUDE` remain exceptions even when complete/accepted. Active mandatory/disqualifying records not fully closed remain high attention. Active-only assessed/closed/source ratios use deterministic decimal half-up rounding to one decimal and preserve numerator/denominator; an empty denominator returns `percentage=None`.
+- Every create, metadata/assignment/due-date update, response/work update, independent review, and withdrawal writes its authoritative row plus one bounded append-only audit entry in one SQLite transaction. Stale versions and induced audit failure roll back without orphan authoritative/audit state. Hard deletion, silent source reassignment, generic lifecycle editing, and review bypass through metadata/workflow repository operations are blocked.
+- My Day receives requirement snapshots only through its existing pure composition boundary, deduplicates overdue/due-today/high-attention reasons, and does not create work-item rows. Ordering is overdue, due today, significance, due date, title, ID. Requirement rows are visibly distinct from work items and TASK-06 readiness holds.
+
+## Test results
+`uv run pytest -q tests/unit/test_requirement_service.py tests/unit/test_requirement_repository.py tests/unit/test_requirement_coverage.py tests/unit/test_requirement_ui.py` — 16 passed, 0 failed (8 inherited FastAPI `on_event` deprecation warnings).
+
+`uv run pytest -q` — 260 passed, 0 failed (26 inherited FastAPI `on_event` deprecation warnings).
+
+`uv run ruff format --check <11 changed TASK-09 Python files>` — pass; 11 files already formatted.
+
+`uv run ruff check .` — pass; `All checks passed!`.
+
+`uv run mypy` — pass; `Success: no issues found in 22 source files` under canonical strict configuration.
+
+`uv run mypy --strict core/requirements.py core/requirement_coverage.py core/requirement_repository.py core/requirement_service.py scripts/validate_task_09.py` — pass; `Success: no issues found in 5 source files`.
+
+`git diff --check` — pass with no output.
+
+## Validation command output
+```text
+$ uv run python scripts/validate_task_09.py
+TASK-09 validation: PASS
+Migration: task_09_requirements_v1; clean and idempotent
+Sources: exact immutable version retained; cross-bid/legacy rejected
+Workflow: metadata, response, COMPLETE, ACCEPTED, withdrawal audited
+Atomicity: invalid, stale, and induced audit failures left no mutation
+Coverage/My Day/readiness adjacency: deterministic at 2026-08-05
+Documents: rows and synthetic managed byte hashes unchanged by requirements
+Network/Alice/cloud/production data: unused
+```
+
+## Migration verification
+- Clean construction and idempotent re-run are proved in `test_clean_migration_is_idempotent_and_has_expected_constraints` and the validation script. The table, controlled vocabularies, source/bid/version foreign keys, page/source/workflow checks, operation authorization, no-delete trigger, and seven required query/search indexes are inspected.
+- `test_task08r_upgrade_preserves_existing_records` builds a representative TASK-08R database containing a canonical bid, legacy document, controlled document plus immutable version, TASK-07 work item, TASK-06 readiness/gate record, and audit evidence; applies TASK-09 twice; and proves every pre-existing model/row unchanged.
+- Isolated application import succeeded against `/tmp/contractiq-task09-import.db`: `app imports OK; migration task_09_requirements_v1 applied`.
+
+## Runtime and HTTP acceptance evidence
+- Isolated root: `/tmp/contractiq-task09-runtime.8zU4jS`; database and synthetic managed root were selected only through `CONTRACTIQ_DB_PATH` and `CONTRACTIQ_DOCUMENT_ROOT`. Runtime used synthetic bid `B-2026-0999`, synthetic document bytes, exact version `DV-84fd35c5-52f1-4b11-a2c3-909020432125`, and requirement `REQ-67386454-c478-4af4-806c-0af395858c0e`.
+- Uvicorn bound only `127.0.0.1:8768`. Startup completed; all requests were localhost-only; `Ctrl+C` produced `Shutting down`, `Application shutdown complete`, and `Finished server process`.
+- HTTP results: Dashboard `/` = 200/52,867 bytes; selected Requirements = 200/18,785; requirement detail = 200/15,793; Documents = 200/12,287; My Day = 200/23,983; Knowledge = 200/34,471; source-choice API = 200/375.
+- Rendered acceptance showed the requirement in Requirements and My Day; TASK-06 HOLD beside coverage without clearance; controlled logical document/full exact version ID/12-character digest; and audit evidence. Bid-context rendering is additionally covered by the actual route/template UI test.
+- HTTP confidentiality scan found no `/tmp` root, managed root, `versions/` key, `storage_key`, or `managed_documents` string in Requirements, detail, or source-choice output.
+
+## Invariant and failure proofs
+- Validation and tests prove exact source pinning after a successor document version, safe withdrawn/superseded source context, healthy bid-scoped source selection, degraded-source exclusion, no file read/render, and no document/version row or synthetic managed-byte hash mutation from requirement operations.
+- Cross-bid and legacy-source rejection preserve requirement/audit counts. Invalid transition and blank rationale validation preserve state. Stale expected versions return typed conflict and preserve row/audit state. An induced audit primary-key collision rolls back the authoritative update. SQLite rejects direct invalid enums, unauthorized updates, and hard deletion.
+- Fixed-date tests prove empty no-data ratios, half-up percentages, active denominator, fully closed versus assessed separation, accepted exceptions, source coverage, overdue/due-today/ownerless/high-attention counts, repeat equality, My Day boundaries/order, and absence of duplicate TASK-07 work rows.
+- UI/service tests replace Alice health checks with a failure sentinel and prove Dashboard, Requirements, Documents, My Day, and bid/readiness contexts operate without a network/LLM call.
+
+## Scans and preservation evidence
+- Exact new-file and added-line secret/private-key scan: no matches.
+- Exact new-file and added-line external URL/CDN/telemetry/analytics/Sentry/network-client/Alice/Anthropic/OpenAI/cloud scan: no matches. New browser calls are same-origin requirement APIs only.
+- `pyproject.toml` dependency diff: no dependency changes; no pandas, NumPy, DuckDB, Plotly, scikit-learn, cloud SDK, or network client was added.
+- Final status scan found no database, SQLite, PDF, Office, binary, upload, report, managed-document, staging, production-data, or runtime artifact in repository changes.
+- Protected hashes remained exact before and after implementation: `docs/tasks/TASK-06-readiness-engine.md` = `3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa`; `uv.lock` = `4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377`. Both remain byte-for-byte unchanged, untracked, unstaged, and excluded from the commit.
+- `.claude/settings.local.json` remained byte-for-byte at starting SHA-256 `47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d`; it remains a tracked local modification, unstaged and excluded from the commit.
+- No production database, real `managed_documents/`, actual document bytes, secret/environment file, company/customer data, or contract content was accessed. Only isolated temporary databases, managed roots, and synthetic bytes were used.
+- `main`, TASK-06, TASK-07, TASK-08, and TASK-08R were not switched to, modified, merged, rebased, reset, amended, squashed, or rewritten.
+
+## Decisions I made
+- Used one normalized authoritative `requirements` table rather than repurposing AI-analysis `scope_items` or `obligations`, because neither is a manual bid-owned compliance aggregate with immutable controlled-version evidence.
+- Required a locator for every normal explicit requirement; the optional one-item-form exception was not implemented because no existing controlled metadata proves that condition safely.
+- Reserved supersession rather than exposing a partially safe lifecycle operation. Correcting materially wrong source evidence therefore requires a future explicitly authorized supersede-and-recreate operation; TASK-09 never silently reassigns source evidence.
+- Added a minimal canonical bid context page because the baseline had no server-rendered bid detail page on which to place the explicitly required requirement context.
+- Used direct async route invocation in UI tests because the installed Starlette test client requires an unlisted `httpx2` dependency. The real localhost Uvicorn/curl acceptance separately proves actual HTTP behavior without changing dependencies or protected `uv.lock`.
+
+## Deviations from the task spec
+- None.
+
+## Concerns for review
+- TASK-06's pre-existing coarse capability seam detects a table named `requirements`; TASK-09 does not feed coverage or compliance results into gates. Review the adjacent-context decision and unchanged TASK-06 verdict tests closely before authorizing any future typed capability provider.
+- Review the connection-local trigger authorization plus repository operation-specific field checks, especially immutable source/provenance evidence and audit rollback behavior.
+- The inherited FastAPI `on_event` deprecation warnings remain. The authorized multipart-spooling residual risk and trusted-localhost deployment restriction remain unchanged.
+
+## Reporting requirements from the task
+- Task branch: `task-09-requirements-compliance-register`.
+- Migration: `task_09_requirements_v1`.
+- Implementation, tests, validation, migration, runtime, invariant, scan, preservation, decisions, deviations, and residual risks are evidenced above.
+- Commit/push are performed only after this evidence, final diff, exact staged-list, and protected-file checks pass. The final commit hash and remote parity are reported in the final response because a commit cannot contain its own hash.
