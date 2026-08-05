@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Documents — ContractIQ</title>
+<style>
+  :root { --ink:#1a1f2e; --ink2:#2e3548; --gold:#c8a96e; --paper:#f4f1eb; --white:#fff; --mist:#667085; --border:#d4cfc6; --red:#b42318; --green:#237a45; --blue:#175cd3; --radius:7px; --serif:Georgia,'Times New Roman',serif; --sans:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; color:var(--ink); background:var(--paper); font:15px/1.45 var(--sans); }
+  button,input,select,textarea { font:inherit; }
+  :focus-visible { outline:3px solid rgba(23,92,211,.35); outline-offset:2px; }
+  .sidebar { position:fixed; inset:0 auto 0 0; width:250px; display:flex; flex-direction:column; color:white; background:var(--ink); }
+  .brand { padding:27px 24px 22px; border-bottom:1px solid rgba(200,169,110,.22); }
+  .brand-name { font:700 1.6rem/1 var(--serif); } .brand-name span { color:var(--gold); }
+  .brand-sub { margin-top:6px; color:rgba(200,169,110,.75); font-size:.68rem; letter-spacing:.14em; text-transform:uppercase; }
+  nav { padding:20px 0; flex:1; } .nav-label { padding:8px 24px 5px; color:rgba(255,255,255,.33); font-size:.65rem; letter-spacing:.15em; text-transform:uppercase; }
+  .nav-item { display:block; padding:11px 24px; color:rgba(255,255,255,.72); text-decoration:none; border-left:3px solid transparent; }
+  .nav-item:hover,.nav-item.active { color:white; background:rgba(200,169,110,.12); } .nav-item.active { border-left-color:var(--gold); }
+  .offline { padding:16px 24px; border-top:1px solid rgba(255,255,255,.1); color:rgba(255,255,255,.55); font-size:.75rem; } .offline strong { display:block; color:#86efac; }
+  main { margin-left:250px; min-height:100vh; } .topbar { position:sticky; top:0; z-index:10; display:flex; justify-content:space-between; align-items:center; padding:16px 34px; background:white; border-bottom:1px solid var(--border); }
+  h1,h2 { margin:0; font-family:var(--serif); } h1 { font-size:1.5rem; } h2 { font-size:1.15rem; }
+  .sub { color:var(--mist); font-size:.82rem; margin-top:3px; } .content { padding:30px 34px 55px; max-width:1600px; }
+  .panel { background:white; border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 3px 18px rgba(26,31,46,.07); }
+  .filters { display:grid; grid-template-columns:1.5fr 1fr 1fr auto; gap:12px; padding:18px; margin-bottom:22px; align-items:end; }
+  label { display:block; margin-bottom:5px; color:var(--ink2); font-size:.74rem; font-weight:700; } input,select,textarea { width:100%; padding:9px 10px; border:1px solid #b8b2a8; border-radius:5px; background:white; color:var(--ink); } textarea { min-height:78px; resize:vertical; }
+  .btn { display:inline-block; padding:9px 14px; border:1px solid var(--ink); border-radius:5px; color:white; background:var(--ink); font-weight:700; text-decoration:none; cursor:pointer; } .btn:hover { background:var(--ink2); } .btn-secondary { color:var(--ink); background:white; border-color:var(--border); }
+  .layout { display:grid; grid-template-columns:minmax(0,1fr) 390px; gap:22px; align-items:start; }
+  .heading { display:flex; justify-content:space-between; align-items:baseline; padding:17px 18px; border-bottom:1px solid var(--border); } .count { color:var(--mist); font-size:.77rem; }
+  .doc { display:grid; grid-template-columns:minmax(190px,1.4fr) minmax(150px,1fr) 125px minmax(145px,1fr) 130px; gap:15px; align-items:center; padding:16px 18px; border-bottom:1px solid var(--border); text-decoration:none; color:inherit; }
+  .doc:last-child { border-bottom:0; } .doc:hover { background:#fbfaf7; } .title { font-weight:750; } .muted,.label { color:var(--mist); font-size:.73rem; } .label { text-transform:uppercase; letter-spacing:.07em; } .value { margin-top:2px; font-size:.81rem; font-weight:600; overflow-wrap:anywhere; }
+  .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:.67rem; font-weight:750; } .ACTIVE,.CURRENT { color:var(--green); background:#dcfae6; } .WITHDRAWN { color:var(--red); background:#fee4e2; } .category { color:var(--blue); background:#eaf2ff; }
+  .integrity { margin-top:6px; color:var(--mist); font-size:.7rem; } .hash { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+  .register { position:sticky; top:88px; padding:20px; } .register h2 { margin-bottom:4px; } .field { margin-top:13px; } .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .full { grid-column:1/-1; } .required { color:var(--red); }
+  .error { display:none; margin:12px 0; padding:10px 12px; color:var(--red); background:#fef3f2; border:1px solid #fecdca; border-radius:5px; font-size:.8rem; } .error.show { display:block; }
+  .empty { padding:50px 25px; text-align:center; color:var(--mist); } .empty strong { display:block; color:var(--ink); font:600 1.1rem var(--serif); margin-bottom:5px; }
+  @media(max-width:1100px){.sidebar{position:static;width:100%;}.sidebar nav{display:flex;padding:0 10px 10px}.nav-label,.offline{display:none}.nav-item{border-left:0;border-bottom:3px solid transparent}.nav-item.active{border-bottom-color:var(--gold)}main{margin-left:0}.layout{grid-template-columns:1fr}.register{position:static}.doc{grid-template-columns:1.4fr 1fr 1fr}.doc .optional{display:none}}
+  @media(max-width:650px){.content{padding:20px 14px}.topbar{padding:14px}.filters{grid-template-columns:1fr}.doc{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><div class="brand-name">Contract<span>IQ</span></div><div class="brand-sub">Bids &amp; Contracts Manager</div></div>
+  <nav aria-label="Primary navigation">
+    <div class="nav-label">Workspace</div>
+    <a class="nav-item" href="/">Dashboard</a><a class="nav-item" href="/my-day">My Day</a><a class="nav-item active" href="/documents" aria-current="page">Documents</a>
+    <div class="nav-label">Reference</div><a class="nav-item" href="/knowledge">Knowledge Base</a>
+  </nav>
+  <div class="offline"><strong>Local evidence ready</strong>Managed documents remain on this computer. No Alice or cloud service is required.</div>
+</aside>
+<main>
+  <header class="topbar"><div><h1>Controlled Documents</h1><div class="sub">Immutable local versions with SHA-256 evidence and audit history</div></div></header>
+  <div class="content">
+    <form class="panel filters" method="get" action="/documents" aria-label="Document filters">
+      <div><label for="filter-bid">Bid / opportunity</label><select id="filter-bid" name="bid_id"><option value="">All bids</option>{% for bid in bids %}<option value="{{ bid.bid_id }}"{% if selected_bid == bid.bid_id %} selected{% endif %}>{{ bid.bid_id }} — {{ bid.project_name }}</option>{% endfor %}</select></div>
+      <div><label for="filter-category">Category</label><select id="filter-category" name="category"><option value="">All categories</option>{% for value in categories %}<option value="{{ value.value }}"{% if selected_category == value.value %} selected{% endif %}>{{ value.value }}</option>{% endfor %}</select></div>
+      <div><label for="filter-state">Lifecycle</label><select id="filter-state" name="lifecycle"><option value="">All states</option>{% for value in lifecycles %}<option value="{{ value.value }}"{% if selected_lifecycle == value.value %} selected{% endif %}>{{ value.value }}</option>{% endfor %}</select></div>
+      <button class="btn btn-secondary" type="submit">Apply filters</button>
+    </form>
+    <div class="layout">
+      <section class="panel" aria-labelledby="register-heading">
+        <div class="heading"><h2 id="register-heading">Document register</h2><span class="count">{{ documents|length }} controlled document{% if documents|length != 1 %}s{% endif %}</span></div>
+        {% if documents %}{% for document in documents %}{% set version = current_versions[document.document_id] %}
+        <a class="doc" href="/documents/{{ document.document_id }}">
+          <div><div class="title">{{ document.title }}</div><div class="muted">{{ document.document_number or 'No document number' }}</div><div class="integrity">Integrity: not checked in this view</div></div>
+          <div><div class="label">Bid / opportunity</div><div class="value">{{ bid_names.get(document.bid_id, document.bid_id) }}</div><div class="muted">{{ document.bid_id }}</div></div>
+          <div><span class="badge category">{{ document.category.value }}</span><div class="value">{{ document.issuer or 'Issuer not recorded' }}</div></div>
+          <div class="optional"><div class="label">Current version</div><div class="value">{{ version.version_label }}{% if version.issued_date %} · {{ version.issued_date }}{% endif %}</div><div class="muted">{{ version.original_filename }} · {{ version.byte_size }} bytes</div></div>
+          <div><span class="badge {{ document.lifecycle_state.value }}">{{ document.lifecycle_state.value }}</span><div class="value hash">{{ version.sha256_digest[:12] }}…</div></div>
+        </a>{% endfor %}{% else %}<div class="empty"><strong>No controlled documents yet</strong>Select an existing bid and register its first immutable file version.</div>{% endif %}
+      </section>
+      <section class="panel register" aria-labelledby="new-heading">
+        <h2 id="new-heading">Register a document</h2><div class="sub">A logical record is created only after its first file is safely stored.</div>
+        <div id="register-error" class="error" role="alert"></div>
+        <form id="register-form" enctype="multipart/form-data">
+          <input type="hidden" name="actor" value="{{ actor }}">
+          <div class="field"><label for="bid_id">Bid / opportunity <span class="required">*</span></label><select id="bid_id" name="bid_id" required><option value="">Select a bid</option>{% for bid in bids %}<option value="{{ bid.bid_id }}">{{ bid.bid_id }} — {{ bid.project_name }}</option>{% endfor %}</select></div>
+          <div class="field"><label for="title">Title <span class="required">*</span></label><input id="title" name="title" maxlength="300" required></div>
+          <div class="grid"><div class="field"><label for="document_number">Document number</label><input id="document_number" name="document_number" maxlength="200"></div><div class="field"><label for="category">Category <span class="required">*</span></label><select id="category" name="category" required>{% for value in categories %}<option value="{{ value.value }}">{{ value.value }}</option>{% endfor %}</select></div></div>
+          <div class="field"><label for="issuer">Issuer / source party</label><input id="issuer" name="issuer" maxlength="500"></div>
+          <div class="grid"><div class="field"><label for="version_label">Version label <span class="required">*</span></label><input id="version_label" name="version_label" value="Original" maxlength="200" required></div><div class="field"><label for="issued_date">Issued date</label><input id="issued_date" name="issued_date" type="date"></div></div>
+          <div class="field"><label for="file">Local file <span class="required">*</span></label><input id="file" name="file" type="file" required><div class="muted">Stored as untrusted bytes; ContractIQ does not parse or render this file.</div></div>
+          <div class="field"><label for="notes">Notes</label><textarea id="notes" name="notes" maxlength="10000"></textarea></div>
+          <button class="btn" type="submit">Register controlled document</button>
+        </form>
+      </section>
+    </div>
+  </div>
+</main>
+<script>
+const form=document.getElementById('register-form'), errorBox=document.getElementById('register-error');
+form.addEventListener('submit',async(event)=>{event.preventDefault();errorBox.classList.remove('show');const button=form.querySelector('button[type=submit]');button.disabled=true;
+  try{const response=await fetch('/api/controlled-documents',{method:'POST',body:new FormData(form)});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Registration failed');window.location.href='/documents/'+data.document.document_id;}
+  catch(error){errorBox.textContent=error.message;errorBox.classList.add('show');button.disabled=false;}
+});
+</script>
+</body>
+</html>

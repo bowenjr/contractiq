@@ -8,12 +8,13 @@ import os
 import uuid
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, BackgroundTasks
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 import uvicorn
@@ -37,6 +38,20 @@ from core.work_item_repository import (
 from core.work_item_service import MyDayService, WorkItemService, validation_error_message
 from core.my_day import WorkItemSnapshot
 from core.work_items import WorkItem, WorkItemKind, WorkItemPriority, WorkItemStatus
+from core.document_control import DocumentCategory, DocumentLifecycle
+from core.document_repository import (
+    ControlledDocumentNotFoundError,
+    DocumentRepository,
+    DocumentVersionNotFoundError,
+    DuplicateDocumentVersionError,
+    StaleDocumentError,
+)
+from core.document_service import DocumentService
+from core.managed_document_storage import (
+    EmptyManagedFileError,
+    ManagedDocumentStorage,
+    ManagedFileTooLargeError,
+)
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -52,6 +67,23 @@ except ZoneInfoNotFoundError as exc:
 LOCAL_ACTOR = str(APP_CONFIG.get("local_actor", "local_user"))
 UPLOADS_DIR = BASE_DIR / "uploads"
 REPORTS_DIR = BASE_DIR / "reports"
+_managed_root_setting = Path(
+    os.environ.get(
+        "CONTRACTIQ_DOCUMENT_ROOT",
+        str(APP_CONFIG.get("managed_document_root", "managed_documents")),
+    )
+)
+MANAGED_DOCUMENT_ROOT = (
+    _managed_root_setting
+    if _managed_root_setting.is_absolute()
+    else BASE_DIR / _managed_root_setting
+)
+MAX_MANAGED_DOCUMENT_BYTES = int(
+    os.environ.get(
+        "CONTRACTIQ_MAX_DOCUMENT_BYTES",
+        str(APP_CONFIG.get("max_managed_document_bytes", 52_428_800)),
+    )
+)
 UPLOADS_DIR.mkdir(exist_ok=True)
 REPORTS_DIR.mkdir(exist_ok=True)
 
@@ -76,6 +108,16 @@ bid_repository = BidRepository(db)
 work_item_repository = WorkItemRepository(db)
 work_item_service = WorkItemService(work_item_repository, bid_repository)
 my_day_service = MyDayService(work_item_repository, bid_repository, db)
+document_repository = DocumentRepository(db)
+managed_document_storage = ManagedDocumentStorage(
+    MANAGED_DOCUMENT_ROOT,
+    MAX_MANAGED_DOCUMENT_BYTES,
+)
+document_service = DocumentService(
+    document_repository,
+    bid_repository,
+    managed_document_storage,
+)
 doc_processor = DocumentProcessor()
 llm_client = LMStudioClient()
 analysis_engine = AnalysisEngine(llm_client, db)
@@ -352,6 +394,14 @@ def _mutation_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, StaleWorkItemError):
         return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, (ControlledDocumentNotFoundError, DocumentVersionNotFoundError)):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, (StaleDocumentError, DuplicateDocumentVersionError)):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, ManagedFileTooLargeError):
+        return HTTPException(status_code=413, detail=str(exc))
+    if isinstance(exc, EmptyManagedFileError):
+        return HTTPException(status_code=422, detail=str(exc))
     return HTTPException(status_code=422, detail=str(exc))
 
 
@@ -429,6 +479,204 @@ async def transition_work_item(work_item_id: str, request: Request) -> JSONRespo
         return _json_item(work_item_service.transition_work_item(work_item_id, body, actor))
     except (ValidationError, ValueError) as exc:
         raise _mutation_error(exc) from exc
+
+
+@app.get("/documents", response_class=HTMLResponse)
+async def controlled_documents(
+    request: Request,
+    bid_id: str | None = None,
+    category: str | None = None,
+    lifecycle: str | None = None,
+) -> HTMLResponse:
+    try:
+        typed_category = DocumentCategory(category) if category else None
+        typed_lifecycle = DocumentLifecycle(lifecycle) if lifecycle else None
+        documents = document_service.list_documents(
+            bid_id=bid_id or None,
+            category=typed_category,
+            lifecycle=typed_lifecycle,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    bids = bid_repository.list_bids()
+    bid_names = {bid.bid_id: bid.project_name for bid in bids}
+    current_versions = {
+        document.document_id: document_service.get_version(document.current_version_id)
+        for document in documents
+    }
+    return render(
+        "documents.html",
+        documents=documents,
+        current_versions=current_versions,
+        bids=bids,
+        bid_names=bid_names,
+        categories=list(DocumentCategory),
+        lifecycles=list(DocumentLifecycle),
+        selected_bid=bid_id or "",
+        selected_category=category or "",
+        selected_lifecycle=lifecycle or "",
+        actor=LOCAL_ACTOR,
+    )
+
+
+@app.get("/documents/{document_id}", response_class=HTMLResponse)
+async def controlled_document_detail(
+    request: Request,
+    document_id: str,
+    verify_version_id: str | None = None,
+) -> HTMLResponse:
+    try:
+        document = document_service.get_document(document_id)
+        versions = document_service.list_versions(document_id)
+        integrity_result = None
+        if verify_version_id is not None:
+            if verify_version_id not in {
+                version.document_version_id for version in versions
+            }:
+                raise DocumentVersionNotFoundError(
+                    f"Document version not found in {document_id}: {verify_version_id}"
+                )
+            integrity_result = document_service.verify_integrity(verify_version_id)
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+    bid = bid_repository.get_bid(document.bid_id)
+    return render(
+        "document_detail.html",
+        document=document,
+        versions=versions,
+        bid=bid,
+        integrity_result=integrity_result,
+        categories=list(DocumentCategory),
+        actor=LOCAL_ACTOR,
+    )
+
+
+@app.post("/api/controlled-documents")
+async def register_controlled_document(
+    file: UploadFile = File(...),
+    bid_id: str = Form(...),
+    title: str = Form(...),
+    category: str = Form(...),
+    version_label: str = Form(...),
+    document_number: str | None = Form(None),
+    issuer: str | None = Form(None),
+    notes: str | None = Form(None),
+    issued_date: str | None = Form(None),
+    received_at: str | None = Form(None),
+    actor: str = Form(LOCAL_ACTOR),
+) -> JSONResponse:
+    try:
+        document, version = document_service.register_document(
+            {
+                "bid_id": bid_id,
+                "title": title,
+                "document_number": document_number,
+                "category": category,
+                "issuer": issuer,
+                "notes": notes,
+                "version_label": version_label,
+                "issued_date": issued_date or None,
+                "received_at": received_at or None,
+            },
+            file.file,
+            file.filename or "document.bin",
+            file.content_type,
+            actor,
+        )
+        return JSONResponse(
+            jsonable_encoder({"document": document, "version": version}),
+            status_code=201,
+        )
+    except (ValidationError, ValueError, OSError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/controlled-documents/{document_id}/versions")
+async def add_controlled_document_version(
+    document_id: str,
+    file: UploadFile = File(...),
+    version_label: str = Form(...),
+    expected_document_version: int = Form(...),
+    expected_current_version_id: str = Form(...),
+    issued_date: str | None = Form(None),
+    received_at: str | None = Form(None),
+    actor: str = Form(LOCAL_ACTOR),
+) -> JSONResponse:
+    try:
+        document, version = document_service.add_version(
+            document_id,
+            {
+                "version_label": version_label,
+                "expected_document_version": expected_document_version,
+                "expected_current_version_id": expected_current_version_id,
+                "issued_date": issued_date or None,
+                "received_at": received_at or None,
+            },
+            file.file,
+            file.filename or "document.bin",
+            file.content_type,
+            actor,
+        )
+        return JSONResponse(jsonable_encoder({"document": document, "version": version}))
+    except (ValidationError, ValueError, OSError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.patch("/api/controlled-documents/{document_id}")
+async def edit_controlled_document(document_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        updated = document_service.update_metadata(document_id, body, actor)
+        return JSONResponse(jsonable_encoder(updated))
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/controlled-documents/{document_id}/withdraw")
+async def withdraw_controlled_document(document_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR)) if isinstance(body, dict) else LOCAL_ACTOR
+    try:
+        expected_version = int(body["expected_version"])
+        updated = document_service.withdraw(document_id, expected_version, actor)
+        return JSONResponse(jsonable_encoder(updated))
+    except (KeyError, TypeError, ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/api/controlled-document-versions/{document_version_id}/integrity")
+async def verify_controlled_document_version(document_version_id: str) -> JSONResponse:
+    try:
+        return JSONResponse(
+            jsonable_encoder(document_service.verify_integrity(document_version_id))
+        )
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/api/controlled-document-versions/{document_version_id}/download")
+async def download_controlled_document_version(
+    document_version_id: str,
+) -> StreamingResponse:
+    try:
+        version, stream = document_service.open_download(document_version_id)
+    except (ValueError, OSError) as exc:
+        raise _mutation_error(exc) from exc
+
+    def chunks():
+        try:
+            while chunk := stream.read(1024 * 1024):
+                yield chunk
+        finally:
+            stream.close()
+
+    encoded_name = quote(version.original_filename, safe="")
+    return StreamingResponse(
+        chunks(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"},
+    )
 
 
 @app.get("/contract/{doc_id}", response_class=HTMLResponse)
@@ -623,6 +871,11 @@ async def delete_document(doc_id: str):
             raise HTTPException(
                 status_code=404,
                 detail=f"Document {doc_id} not found",
+            )
+        if document.get("control_managed") == 1:
+            raise HTTPException(
+                status_code=405,
+                detail="Controlled documents cannot be hard deleted; withdraw them instead",
             )
         # Delete associated files — each is optional so guard against None
         if document.get("file_path"):

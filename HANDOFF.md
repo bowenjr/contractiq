@@ -1,3 +1,161 @@
+# Handoff — TASK-08
+
+## Status
+COMPLETE
+
+## Baseline and scope
+- Base branch: `task-07-operational-work-register`.
+- Exact base commit: `941a88809e7696b4e6a00288b4eb70e44f8bed6a`.
+- Task branch: `task-08-controlled-document-register`.
+- `git fetch --all --prune` was run before branch creation. Local and remote TASK-07 both resolved to the exact required full commit with `0 0` ahead/behind, and no local or remote TASK-08 branch existed.
+- Pre-edit status contained no tracked changes and only the two authorized untracked files. Their hashes are recorded under workspace state below.
+- Current migration head before TASK-08 was `task_07_work_items_v1`; TASK-08 adds `task_08_document_control_v1` through the repository's established additive, idempotent code-driven migration convention.
+- Existing behavior inspected: `documents` is the preliminary physical analysis-upload table used by `Database`, `/api/upload`, `/contract/{id}`, legacy analysis findings, reports, and `BidRepository`'s nullable bid attachment. Legacy uploads use generated filenames under `uploads/`, can invoke parsing/analysis later, and historically support hard deletion.
+- Forward-compatible extension: the same authoritative `documents` table now has nullable/defaulted `control_*` columns and an explicit `control_managed` discriminator, so legacy analysis rows remain valid and no competing logical-document subsystem was created. Controlled rows use the existing `documents.id` identity and required canonical `bids(bid_id)` ownership; immutable evidence is normalized into `document_versions`. The legacy delete route returns 405 for controlled rows.
+- Verified assumptions: foreign-key-enabled `Database._conn()` supports atomic metadata/audit transactions; `audit_log` is the append-only audit seam; Pydantic v2/prefixed UUID/UTC conventions are established; FastAPI/Jinja/multipart are already installed; the UI requires no second framework.
+- Storage configuration: `config.json` uses repository-relative `managed_documents` and a 52,428,800-byte local limit. `CONTRACTIQ_DOCUMENT_ROOT` and `CONTRACTIQ_MAX_DOCUMENT_BYTES` are isolated-runtime overrides. Relative configuration resolves from the repository root; SQLite stores only opaque relative keys. `managed_documents/`, including `.staging`, is protected by `.gitignore` alongside existing runtime-data ignores.
+- Preserved non-goals: no parsing, OCR, previews, content indexing, Alice calls, AI, cloud storage, external assets, telemetry, export, backup automation, requirements registers, comparison, malware execution, background work, or frontend/dependency expansion was added.
+
+## Implementation evidence
+
+### Files created
+- `core/document_control.py` (194 lines) — Pydantic v2 logical-document/version inputs, closed vocabularies, immutable evidence, integrity, and diagnostic result models.
+- `core/document_repository.py` (514 lines) — migration, constrained persistence, deterministic queries, optimistic updates, lineage transition, and same-transaction audit writes.
+- `core/document_service.py` (405 lines) — validated create/add/edit/withdraw/query/download/verify/diagnostic application boundary with compensating cleanup.
+- `core/managed_document_storage.py` (235 lines) — bounded streaming stage/hash, exclusive opaque-key reservation, same-filesystem atomic placement, safe resolution, download, integrity verification, and orphan diagnostics.
+- `scripts/validate_task_08.py` (263 lines) — temporary-database/root deterministic acceptance and failure-compensation proof.
+- `templates/documents.html` (98 lines) — professional filtered register and first-version multipart flow.
+- `templates/document_detail.html` (23 lines) — logical metadata, immutable history, add-version, safe download, explicit integrity, edit, and withdrawal flow.
+- `tests/unit/test_document_control.py` (113 lines).
+- `tests/unit/test_document_repository.py` (299 lines).
+- `tests/unit/test_document_service.py` (350 lines).
+- `tests/unit/test_document_ui.py` (231 lines).
+- `tests/unit/test_managed_document_storage.py` (159 lines).
+
+### Files modified
+- `.gitignore` — excludes the configured production managed-document root and staging descendants.
+- `app.py` — loads isolated/configured storage settings; initializes TASK-08 repository/storage/service; adds Documents HTML and controlled-document multipart/JSON/download/integrity routes; blocks legacy hard deletion of controlled records.
+- `config.json` — adds only relative managed-root and maximum-byte settings.
+- `pyproject.toml` — adds all four new production modules to canonical strict-mypy scope; no dependency or quality rule was weakened.
+- `templates/index.html`, `templates/my_day.html`, `templates/knowledge.html`, `templates/contract.html` — add consistent Documents navigation.
+- `HANDOFF.md` — adds TASK-08 evidence above the complete retained TASK-07/TASK-06 evidence.
+
+### Migration, invariants, audit, and file consistency
+- Migration identifier: `task_08_document_control_v1`.
+- Controlled document fields enforce existing-bid ownership, trimmed typed inputs, ACTIVE/WITHDRAWN lifecycle, a stable current pointer, UTC timestamps, provenance, and optimistic `control_version`. The supported repository/service exposes no hard delete and prevents the legacy route from deleting controlled rows.
+- `document_versions` constrains required labels/filenames, positive size, lowercase hexadecimal SHA-256, relative non-traversing unique storage keys, CURRENT/SUPERSEDED state, document/hash uniqueness, predecessor foreign key, provenance, and indexes. A partial unique index enforces at most one CURRENT row; create/add repository invariants ensure at least one and exact pointer agreement.
+- Adding a version checks both expected logical version and expected current-version ID, requires the prior current from the same logical document as predecessor, supersedes exactly that row, inserts one CURRENT successor, updates the pointer/version, and appends audit evidence in one SQLite transaction. Same-document duplicate bytes are rejected; equal bytes across different documents remain valid.
+- Audit actions are `controlled_document_created`, `controlled_document_metadata_changed`, `controlled_document_version_added`, and `controlled_document_withdrawn`. Payloads contain only IDs, states, labels, filenames, byte size, digest, and logical before/after metadata—not contents or absolute paths. Read-only integrity checks follow the existing policy and do not add audit events.
+- Handled-failure protocol: validate parent/metadata; stream to same-filesystem staging while hashing/limiting; exclusively reserve and atomically replace an opaque final key; verify placed evidence; then run document/version/audit SQLite transaction. Placement failure creates no rows. Database/audit failure rolls back all rows/audit and compensates the newly placed file. Duplicate, empty, oversized, invalid, and stale failures remove staging and create no authoritative mutation.
+- Integrity precedence is deterministic: `MISSING`, `UNREADABLE` (including unsafe key/root escape), `SIZE_MISMATCH`, `HASH_MISMATCH`, `OK`. Verification only streams and compares; it never repairs, blesses, rewrites, changes current state, audits, or contacts a network.
+- `diagnose_storage()` reports committed-file integrity separately from sorted unreferenced managed keys; it never deletes or repairs either class.
+
+## Verification evidence
+
+### Test and quality results
+`uv run pytest -q tests/unit/test_document_control.py tests/unit/test_document_repository.py tests/unit/test_managed_document_storage.py tests/unit/test_document_service.py tests/unit/test_document_ui.py` — 39 passed, 0 failed (8 inherited FastAPI `on_event` deprecation warnings).
+
+`uv run pytest -q` — 233 passed, 0 failed (194 TASK-07 baseline + 39 TASK-08; 16 inherited FastAPI `on_event` warnings across existing/new UI module tests).
+
+`uv run ruff format --check <all 10 TASK-08 Python files>` — pass; 10 files already formatted.
+
+`uv run ruff check .` — pass; `All checks passed!`.
+
+`uv run mypy` — pass; `Success: no issues found in 17 source files` under the canonical strict configuration (13 retained + 4 new production modules).
+
+`uv run mypy --strict core/document_control.py core/document_repository.py core/managed_document_storage.py core/document_service.py scripts/validate_task_08.py` — pass; `Success: no issues found in 5 source files`.
+
+`git diff --check` — pass with no output.
+
+### Validation command output
+```text
+$ uv run python scripts/validate_task_08.py
+TASK-08 validation: PASS
+Migration: task_08_document_control_v1 (clean database)
+Synthetic versions: 2; exactly one CURRENT; predecessor lineage verified
+SHA-256/download/integrity: exact bytes, OK -> HASH_MISMATCH -> OK
+Failures: duplicate, empty, traversal, invalid title, database cleanup verified
+Network/Alice/cloud: unused
+```
+
+### Migration verification
+- `test_migration_succeeds_on_new_database` proves clean migration columns, version table, current-version unique index, and document/predecessor foreign keys.
+- `test_task07_upgrade_preserves_bid_legacy_document_work_item_and_audit` constructs representative exact-TASK-07 bid, legacy document, readiness override/gate, work item, and audit evidence; applies the TASK-08 migration twice; and proves all data unchanged and migration idempotent.
+
+### Real application and isolated HTTP runtime
+```text
+$ CONTRACTIQ_DB_PATH=/tmp/contractiq-task08-runtime.WZVh1q/runtime.db \
+  CONTRACTIQ_DOCUMENT_ROOT=/tmp/contractiq-task08-runtime.WZVh1q/managed python app.py
+ContractIQ starting on http://localhost:8000
+Uvicorn running on http://0.0.0.0:8000
+Started reloader process
+Started server process
+Recovery check complete
+Application startup complete
+
+GET /documents                                                200 (11429 bytes)
+POST /api/controlled-documents                                201
+POST /api/controlled-documents/{document_id}/versions          200
+GET /api/controlled-document-versions/{version_id}/download    200; cmp exact
+GET /api/controlled-document-versions/{version_id}/integrity   200; OK
+GET /documents/{document_id}?verify_version_id={version_id}     200 (11979 bytes)
+duplicate POST /versions                                       409
+GET /                                                          200 (52542 bytes)
+GET /my-day?as_of=2026-08-05                                  200 (22639 bytes)
+
+^C
+Shutting down
+Waiting for application shutdown.
+Application shutdown complete.
+Finished server process
+Stopping reloader process
+```
+- Reloader/server clean-shutdown exit code: 0. The runtime database, uploaded bytes, downloaded comparison, rendered HTML, and managed root were all beneath the isolated `/tmp` runtime directory, never production paths.
+- Runtime evidence after duplicate rejection: version states were `[('CURRENT', 1), ('SUPERSEDED', 1)]`; current-per-document was exactly 1; audit actions were one create plus one add-version; managed files were exactly the two committed opaque keys; `.staging` was empty.
+
+### Secret, dependency, asset, and network scans
+- Secret/private-key pattern scan over every new TASK-08 production, script, template, test, configuration, and quality file returned no matches.
+- New-file and added-line scans returned no external HTTP(S) assets/endpoints, CDN, telemetry, analytics, Anthropic/OpenAI/request-client/socket code, cloud SDK, or new network dependency. Existing LM Studio URLs in `config.json` are unchanged TASK-07 baseline settings; TASK-08 neither calls nor changes them.
+- The four new browser `fetch` calls are same-origin controlled-document API paths. New pages use only local HTML/CSS/system fonts; there are no external script/style tags.
+- `pyproject.toml` dependency list is unchanged. No document extension, managed byte, database, staging file, runtime artifact, or synthetic download is in the scoped source list.
+- The UI test replaces `llm_client.health_check` with a failure sentinel and proves Documents, Dashboard, and My Day render without contacting Alice. Validation and runtime succeeded while Alice/cloud were unused.
+
+## Acceptance evidence
+- The validation and HTTP runtime both create an existing canonical synthetic bid, register `Synthetic RFP`/`SOLICITATION`/`Original`, and prove title/bid context, exact size, abbreviated SHA-256 UI, filename-only display, and no absolute-root exposure.
+- Exact first/second SHA-256 values are computed from streamed bytes. Safe download is byte-equal. Explicit integrity is `OK`; same-length external alteration returns `HASH_MISMATCH` without metadata/audit mutation; test-fixture restoration returns `OK`.
+- Adding `Addendum 1 incorporated` leaves Original `SUPERSEDED`, successor `CURRENT`, predecessor equal to the former current version, pointer agreement, and exactly one current row. Both remain downloadable.
+- Duplicate successor bytes return deterministic 409/typed error with unchanged document/version/audit counts, two managed files only, and no staging residue.
+- Repository tests induce audit collisions on create and add-version: SQLite document/version/current transitions roll back, no orphan audit remains, and the service removes the newly placed owned file. Separate induced placement/database tests prove the opposite failure directions.
+- Empty, oversized, invalid-title/category/state, traversal key, unsafe filename, stale concurrency, cross-document lineage, missing file, unreadable seam, size mismatch, hash mismatch, storage collision, withdrawal/history retention, and no-hard-delete behavior have focused automated coverage.
+- Dashboard, My Day, readiness representative data, navigation, application import/startup, and legacy document migration behavior remain operational with no Alice/cloud dependency.
+
+## Deviations and workspace state
+- Specification deviations: None.
+- Unavoidable consistency limitation: SQLite and the filesystem are not one ACID resource. A process/host crash after final file placement (or exclusive reservation) but before SQLite commit/compensation can leave an unreferenced managed file, including a zero-byte reserved key. Placement always precedes metadata commit, so an ordinary handled placement failure cannot commit a missing-file pointer. Later external deletion/modification remains possible and is detected by integrity verification.
+- Safe forward path: `diagnose_storage()` separately reports unreferenced keys and integrity state of every committed version. TASK-08 intentionally performs no automatic delete, repair, metadata rewrite, or content blessing; a reviewed future repair/reconciliation task can consume this evidence.
+- Remaining risks for review: the existing application still emits its inherited FastAPI `on_event` deprecation warning; the legacy analysis-upload table retains its existing generic hard-delete method for legacy rows, while controlled deletion is blocked at the TASK-08 route/repository/service interfaces. Neither is expanded in TASK-08.
+- Final implementation status before commit: scoped TASK-08 files only plus the two protected untracked files. Staging is performed explicitly after this evidence is written; no broad add is used.
+- Protected file hashes remained byte-for-byte unchanged: `3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa` (`docs/tasks/TASK-06-readiness-engine.md`) and `4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377` (`uv.lock`). Both remain untracked and unstaged.
+- `main`, `task-06-readiness-engine`, and `task-07-operational-work-register` were not switched to after TASK-08 branch creation, modified, rebased, reset, amended, squashed, or merged. No released history was rewritten.
+
+## Decisions I made
+- Extended the existing `documents` authority with a discriminator and controlled fields rather than creating a competing table. This is the smallest additive migration that preserves every legacy FK/public interface while separating logical identity from immutable version evidence.
+- Reused legacy `documents.notes` for controlled notes and populated its required `filename`/existing status/upload fields for schema compatibility; `document_versions` remains authoritative for all controlled file evidence.
+- Reserved destination keys exclusively before `os.replace` to retain same-filesystem atomic placement without silently overwriting a concurrent/equal key.
+- Kept integrity read-only and unaudited because the established audit policy records authoritative writes, not ordinary reads.
+
+## Concerns for review
+- Review the additive `documents` discriminator/current-pointer migration and the documented cross-resource crash window closely.
+- Review the exclusive-reservation plus compensating-delete protocol and diagnostic output before a later repair feature is authorized.
+
+## Reporting requirements from the task
+- All five required TASK-08 evidence sections are above: baseline/scope, implementation, verification, acceptance, and deviations/workspace state.
+- The complete TASK-07 and TASK-06 handoff evidence follows unchanged below.
+
+---
+
+# Retained TASK-07 and TASK-06 evidence (unchanged)
+
 # Handoff — TASK-07
 
 ## Status

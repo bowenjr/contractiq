@@ -9,5 +9,7 @@
   "max_chars_classification": 2000,
   "max_chars_parties": 5000,
   "max_chars_dates": 20000,
-  "working_timezone": "America/Toronto"
+  "working_timezone": "America/Toronto",
+  "managed_document_root": "managed_documents",
+  "max_managed_document_bytes": 52428800
 }

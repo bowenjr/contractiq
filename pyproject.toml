@@ -66,6 +66,10 @@ files = [
     "core/work_item_repository.py",
     "core/my_day.py",
     "core/work_item_service.py",
+    "core/document_control.py",
+    "core/document_repository.py",
+    "core/managed_document_storage.py",
+    "core/document_service.py",
 ]
 
 [[tool.mypy.overrides]]
@@ -92,6 +96,10 @@ module = [
     "core.work_item_repository",
     "core.my_day",
     "core.work_item_service",
+    "core.document_control",
+    "core.document_repository",
+    "core.managed_document_storage",
+    "core.document_service",
 ]
 ignore_errors = false
 

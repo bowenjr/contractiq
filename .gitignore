@@ -14,6 +14,7 @@ __pycache__/
 # ContractIQ runtime data (not source code)
 data/
 uploads/
+managed_documents/
 reports/
 outputs/
 *.db
