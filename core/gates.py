@@ -141,10 +141,11 @@ def evaluate_g0(ctx: GateContext) -> GateResult:
 
 
 def evaluate_g1(ctx: GateContext) -> GateResult:
+    approval_required = ctx.bid.classification != BidLevel.LEVEL_0
     condition = _condition(
         "g1.bid_no_bid_approved",
         "Bid/no-bid approval has been obtained.",
-        _has_obtained_approval(ctx, ApprovalType.BID_NO_BID),
+        not approval_required or _has_obtained_approval(ctx, ApprovalType.BID_NO_BID),
         "BID_NO_BID approval has not been obtained.",
     )
     return _gate_result(Gate.G1, [condition])
