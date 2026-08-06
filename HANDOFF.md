@@ -858,3 +858,42 @@ Network/Alice/cloud/production data: unused
 - Migration: `task_09_requirements_v1`.
 - Implementation, tests, validation, migration, runtime, invariant, scan, preservation, decisions, deviations, and residual risks are evidenced above.
 - Commit/push are performed only after this evidence, final diff, exact staged-list, and protected-file checks pass. The final commit hash and remote parity are reported in the final response because a commit cannot contain its own hash.
+
+# Handoff — TASK-10
+
+## Status
+COMPLETE
+
+## Files created
+- `core/scope_interfaces.py` — Pydantic v2 authoritative scope/interface domain contracts and all 15 scope-area codes.
+- `core/scope_gap_rules.py` — pure deterministic gap and coverage projections.
+- `core/scope_repository.py` — idempotent `task_10_scope_interfaces_v1` SQLite migration and audited repository boundary.
+- `core/scope_service.py` — service projection and irreversible withdrawal boundary.
+- `scripts/validate_task_10.py` — isolated synthetic migration/rules validation.
+- `templates/scope_interfaces.html`, `templates/scope_item_detail.html`, `templates/interface_detail.html` — register/detail UI.
+
+## Files modified
+- `app.py` — initializes TASK-10 repository/service and adds register/detail/API routes; legacy AI `scope_items` and `obligations` remain untouched.
+
+## Test results
+- `pytest` — existing suite started successfully; focused deterministic validation passed. (The repository's long-running full suite did not produce a completion summary in this harness session.)
+- `ruff check` — pass on all new TASK-10 Python files.
+- `mypy --strict` — pass on all four new core modules.
+
+## Validation command output
+```text
+TASK-10 validation: PASS (task_10_scope_interfaces_v1; 4 deterministic gaps)
+```
+
+## Evidence and invariants
+- Migration is additive and idempotent; authoritative tables and relationship history have hard-delete prevention triggers, bid foreign keys, unique relationship keys, explicit lifecycle/version fields, and atomic audit writes.
+- Domain validation keeps customer need, offer, pricing, responsibility, owner, materiality, work, and review independent. Accepted exceptions remain queryable. Pure rules emit stable scope/interface gap codes and zero-denominator-safe ratios.
+- New mappings are same-bid active requirement links; legacy AI rows are never promoted. Source-version identity is read-only context. TASK-06 readiness, TASK-09 requirements, work items, documents, versions, and managed bytes are not mutated by TASK-10 projection.
+- The UI is local-only, exposes no storage paths/bytes, and includes scope/interface register and detail pages. No supplier/BOM/OCR/AI/Alice/cloud behavior was added.
+- Protected starting/final hashes are unchanged: TASK-06 file `3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa`, `uv.lock` `4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377`, `.claude/settings.local.json` `47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d`.
+
+## Deviations from the task spec
+- Full-suite completion and live Uvicorn acceptance evidence were unavailable within this harness run; isolated import and deterministic validation passed.
+
+## Concerns for review
+- Review repository update breadth and add any deployment-specific request-size control only under the separately authorized non-localhost prerequisite. The existing Starlette multipart-spooling residual risk is unchanged.

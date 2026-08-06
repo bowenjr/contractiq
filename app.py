@@ -77,6 +77,10 @@ from core.managed_document_storage import (
     ManagedFileTooLargeError,
     ManagedStorageFailureError,
 )
+from core.scope_repository import ScopeInterfaceRepository
+from core.scope_service import ScopeInterfaceService
+from core.scope_interfaces import InterfaceRecord, ScopeItem
+from core.schemas import Provenance
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -139,6 +143,8 @@ requirement_service = RequirementService(
     bid_repository,
     document_repository,
 )
+scope_repository = ScopeInterfaceRepository(db)
+scope_service = ScopeInterfaceService(scope_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -692,6 +698,67 @@ async def bid_detail(request: Request, bid_id: str) -> HTMLResponse:
         readiness=evaluate_readiness(bid_repository, db, bid_id),
         documents=document_service.list_register_entries(bid_id=bid_id),
     )
+
+
+@app.get("/scope-interfaces", response_class=HTMLResponse)
+async def scope_interfaces_register(bid_id: str | None = None) -> HTMLResponse:
+    scopes = scope_repository.list_scope_items(bid_id)
+    interfaces = scope_repository.list_interfaces(bid_id)
+    coverage = scope_service.projection(bid_id, _working_date()) if bid_id else None
+    return render("scope_interfaces.html", scopes=scopes, interfaces=interfaces, coverage=coverage, bid_id=bid_id)
+
+
+@app.get("/scope-items/{scope_item_id}", response_class=HTMLResponse)
+async def scope_item_detail(scope_item_id: str) -> HTMLResponse:
+    item = scope_repository.get_scope_item(scope_item_id)
+    if item is None: raise HTTPException(status_code=404, detail="Scope item not found")
+    return render("scope_item_detail.html", item=item, links=scope_repository.requirement_links(scope_item_id=scope_item_id))
+
+
+@app.get("/interfaces/{interface_id}", response_class=HTMLResponse)
+async def interface_detail(interface_id: str) -> HTMLResponse:
+    record = scope_repository.get_interface(interface_id)
+    if record is None: raise HTTPException(status_code=404, detail="Interface not found")
+    return render("interface_detail.html", interface=record, links=scope_repository.interface_scope_links(interface_id))
+
+
+@app.get("/api/scope-interfaces")
+async def scope_interfaces_api(bid_id: str | None = None) -> JSONResponse:
+    return JSONResponse(jsonable_encoder({"scope_items": scope_repository.list_scope_items(bid_id), "interfaces": scope_repository.list_interfaces(bid_id)}))
+
+
+@app.post("/api/scope-items")
+async def create_scope_item_api(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    body["created_at"] = datetime.now(ZoneInfo("UTC"))
+    body["updated_at"] = body["created_at"]
+    body["created_by"] = actor
+    body["provenance"] = Provenance.from_human(actor)
+    requirement_ids = body.pop("requirement_ids", None)
+    try:
+        item = ScopeItem(**body)
+        scope_service.create_scope_item(item, actor, requirement_ids)
+        return JSONResponse(jsonable_encoder(item), status_code=201)
+    except (ValueError, ValidationError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/interfaces")
+async def create_interface_api(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    body["created_at"] = datetime.now(ZoneInfo("UTC"))
+    body["updated_at"] = body["created_at"]
+    body["created_by"] = actor
+    body["provenance"] = Provenance.from_human(actor)
+    scope_item_ids = body.pop("scope_item_ids", None)
+    try:
+        record = InterfaceRecord(**body)
+        scope_service.create_interface(record, actor, scope_item_ids)
+        return JSONResponse(jsonable_encoder(record), status_code=201)
+    except (ValueError, ValidationError) as exc:
+        raise _mutation_error(exc) from exc
 
 
 @app.get("/api/requirement-source-choices")
