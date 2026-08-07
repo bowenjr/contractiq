@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from core.bid_repository import BidRepository
 from core.database import Database
+from core.deliverable_rules import calculate_deliverable_gaps
 from core.enums import Actor
 from core.my_day import (
     MyDayProjection,
@@ -288,6 +289,7 @@ class MyDayService:
             else []
         )
         supplier_attention: list[dict[str, str]] = []
+        deliverable_attention: list[dict[str, str]] = []
         with self.db._conn() as conn:
             supplier_tables_ready = (
                 conn.execute(
@@ -334,6 +336,73 @@ class MyDayService:
                         requests, items, responses, coverage, as_of_date=as_of
                     )
                 )
+            deliverable_ready = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='deliverable_items'"
+                ).fetchone()
+                is not None
+            )
+            if deliverable_ready:
+                for bid in bids:
+                    rows = [
+                        dict(row)
+                        for row in conn.execute(
+                            "SELECT * FROM deliverable_items WHERE bid_id=?", (bid.bid_id,)
+                        ).fetchall()
+                    ]
+                    ids = [row["deliverable_id"] for row in rows]
+                    gaps = calculate_deliverable_gaps(
+                        rows,
+                        as_of=as_of,
+                        links={
+                            key: [
+                                dict(r)
+                                for r in conn.execute(
+                                    "SELECT * FROM deliverable_links WHERE deliverable_id=?", (key,)
+                                ).fetchall()
+                            ]
+                            for key in ids
+                        },
+                        commitments={
+                            key: [
+                                dict(r)
+                                for r in conn.execute(
+                                    "SELECT * FROM supplier_commitments WHERE deliverable_id=?",
+                                    (key,),
+                                ).fetchall()
+                            ]
+                            for key in ids
+                        },
+                        submissions={
+                            key: [
+                                dict(r)
+                                for r in conn.execute(
+                                    "SELECT * FROM deliverable_submissions WHERE deliverable_id=?",
+                                    (key,),
+                                ).fetchall()
+                            ]
+                            for key in ids
+                        },
+                        reviews={
+                            key: [
+                                dict(r)
+                                for r in conn.execute(
+                                    "SELECT * FROM deliverable_reviews WHERE deliverable_id=?",
+                                    (key,),
+                                ).fetchall()
+                            ]
+                            for key in ids
+                        },
+                    )
+                    deliverable_attention.extend(
+                        {
+                            "bid_id": gap.bid_id,
+                            "entity_id": gap.deliverable_id,
+                            "code": gap.code,
+                            "severity": gap.severity,
+                        }
+                        for gap in gaps
+                    )
         return project_my_day(
             work_snapshots,
             readiness_snapshots,
@@ -341,6 +410,7 @@ class MyDayService:
             horizon_days,
             requirement_snapshots,
             supplier_attention=supplier_attention,
+            deliverable_attention=deliverable_attention,
         )
 
 

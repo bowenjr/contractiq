@@ -1094,3 +1094,76 @@ Protected hashes remain exact and states unchanged:
 ## Conclusion
 
 TASK-11 is fully accepted and safe as TASK-12's base. The only autonomous remediation was the inherited local-streaming/threadpool defect and the missing supplier-table guard in My Day; both were corrected and covered by passing regression/full-suite evidence. Residual risks remain the previously documented trusted-localhost deployment boundary and Starlette multipart spooling behavior.
+
+# TASK-12 Vendor Data and Deliverable Controls
+
+## Status
+COMPLETE
+
+## Base and migration
+
+- Base branch: `task-11-completion` at `134c1fa3f741563084afd986585723fda3a2dbf0`, parity 0/0.
+- Task branch: `task-12-vendor-data-control`.
+- Additive migration: `task_12_vendor_data_control_v1`, parent `task_11_supplier_assurance_completion_v1`.
+- The migration is transactional, idempotent, and records its identifier in `deliverable_schema_migrations`.
+
+## Files created
+
+- `core/deliverables.py` — Pydantic authoritative deliverable, link, commitment, immutable submission, review, and gap models.
+- `core/deliverable_repository.py` — SQLite migration, atomic writes, audit rows, same-bid checks, optimistic activation, immutable submission triggers, and hard-delete protection.
+- `core/deliverable_rules.py` — deterministic gap-code and metric projection.
+- `core/deliverable_service.py` — workflow orchestration and read projections.
+- `templates/deliverables.html`, `templates/deliverable_detail.html`, `templates/deliverable_history.html` — escaped register/detail/history UI.
+- `scripts/validate_task_12.py` — isolated deterministic validation oracle.
+- `scripts/asgi_acceptance_task12.py` — dependency-free lifespan and HTTP acceptance oracle.
+- `tests/unit/test_deliverables.py` — deterministic gap projection regression tests.
+
+## Files modified
+
+- `app.py` — initialized the register and added deliverable pages plus JSON workflow endpoints.
+- `core/my_day.py` — added deliverable attention as a read-only projection and count.
+- `core/work_item_service.py` — guarded deliverable attention reads and never creates TASK-07 work items.
+
+## Behavior and invariants
+
+- Deliverables are bid-scoped and retain explicit criticality, materiality, lifecycle phase, direction, owner, recipient, due basis, and workflow state.
+- Links support requirements, scope items, interfaces, supplier request items/response versions, and controlled document versions; every new link is same-bid and draft-only.
+- Supplier commitments require an accepted same-bid TASK-11 response version.
+- Submission versions are append-only and independently reviewed; latest and review history remain separate.
+- SQLite triggers reject submission mutation and deliverable hard deletes; writes and audit rows share one transaction.
+- Deterministic gaps include required-source/owner/performer/recipient/schedule, supplier commitment currentness/expiry/degradation/late, overdue/due-soon, review/rejection/revision, accepted-not-latest, evidence, and flow-down mismatch codes.
+- G3/G5 and My Day integration are read-only adapters; TASK-06 readiness and TASK-07 work-item authority are unchanged.
+
+## Test and validation evidence
+
+- Focused TASK-12 tests: `2 passed`.
+- Unrestricted suite: `269 passed, 26 warnings`.
+- `uv run python scripts/validate_task_12.py`: `TASK-12 validation: PASS`.
+- `uv run python scripts/asgi_acceptance_task12.py`: `TASK-12 ASGI acceptance: PASS`.
+- Ruff format over all TASK-12 changed production/validation files: pass.
+- Canonical `uv run ruff check .`: `All checks passed!`.
+- Canonical and explicit strict mypy over TASK-12 plus integration files: pass.
+- Clean and idempotent migration smoke: pass.
+- Isolated application import and dependency-free ASGI lifespan: pass.
+- `git diff --check`: pass.
+
+## Isolation and protected files
+
+No production database, real managed document bytes, secrets, environment files, company data, external assets, telemetry, network service, Alice/cloud service, or deferred commercial/future-task behavior was accessed. No dependency or `uv.lock` change was made.
+
+Protected hashes and states remain exact, untracked/unstaged where required:
+
+```text
+3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa  docs/tasks/TASK-06-readiness-engine.md
+4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377  uv.lock
+47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d  .claude/settings.local.json
+```
+
+## Deviations and residual risks
+
+- Live loopback sockets were not required; the dependency-free in-process ASGI oracle passed the complete supported workflow. The application remains trusted single-user localhost as inherited.
+- No TASK-13, commercial modelling, pricing, approvals, integrations, AI/OCR/Alice, or other deferred behavior was implemented.
+
+## Conclusion
+
+TASK-12 is fully accepted and safe as the next task's base after the required commit and remote parity verification.

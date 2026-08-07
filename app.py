@@ -5,6 +5,7 @@ ContractIQ - Personal Contract & Bid Analysis System
 
 import json
 import os
+import sqlite3
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -92,6 +93,15 @@ from core.supplier_assurance import (
     Supplier,
     SupplierRequest,
 )
+from core.deliverable_repository import DeliverableRepository
+from core.deliverable_service import DeliverableService
+from core.deliverables import (
+    Deliverable,
+    DeliverableLink,
+    ReviewDecisionRecord,
+    SubmissionVersion,
+    SupplierCommitment,
+)
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -158,6 +168,8 @@ scope_repository = ScopeInterfaceRepository(db)
 scope_service = ScopeInterfaceService(scope_repository)
 supplier_repository = SupplierRepository(db)
 supplier_service = SupplierService(db, supplier_repository)
+deliverable_repository = DeliverableRepository(db)
+deliverable_service = DeliverableService(deliverable_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -737,6 +749,133 @@ async def scope_interfaces_register(bid_id: str | None = None) -> HTMLResponse:
         coverage=coverage,
         bid_id=bid_id,
     )
+
+
+@app.get("/deliverables", response_class=HTMLResponse)
+async def deliverables_register(
+    bid_id: str | None = None, as_of: str | None = None
+) -> HTMLResponse:
+    projection_date = _parse_as_of(as_of)
+    rows = deliverable_service.list(bid_id)
+    return render(
+        "deliverables.html",
+        deliverables=rows,
+        bids=bid_repository.list_bids(),
+        bid_id=bid_id or "",
+        metrics=deliverable_service.metrics(bid_id, projection_date),
+        gaps=deliverable_service.gaps(bid_id, projection_date),
+    )
+
+
+@app.get("/deliverables/{deliverable_id}", response_class=HTMLResponse)
+async def deliverable_detail(deliverable_id: str) -> HTMLResponse:
+    try:
+        detail = deliverable_service.detail(deliverable_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("deliverable_detail.html", **detail)
+
+
+@app.get("/deliverables/{deliverable_id}/history", response_class=HTMLResponse)
+async def deliverable_history(deliverable_id: str) -> HTMLResponse:
+    try:
+        history = deliverable_service.history(deliverable_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("deliverable_history.html", history=history, deliverable_id=deliverable_id)
+
+
+@app.get("/api/deliverables")
+async def deliverables_api(bid_id: str | None = None, as_of: str | None = None) -> JSONResponse:
+    projection_date = _parse_as_of(as_of)
+    return JSONResponse(
+        {
+            "deliverables": deliverable_service.list(bid_id),
+            "gaps": [
+                gap.model_dump(mode="json")
+                for gap in deliverable_service.gaps(bid_id, projection_date)
+            ],
+            "metrics": deliverable_service.metrics(bid_id, projection_date),
+        }
+    )
+
+
+@app.get("/api/deliverables/{deliverable_id}")
+async def deliverable_api(deliverable_id: str) -> JSONResponse:
+    try:
+        return JSONResponse(deliverable_service.detail(deliverable_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/deliverables")
+async def create_deliverable_api(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        item = deliverable_service.create(Deliverable.model_validate(body), actor)
+        return JSONResponse(item.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/deliverables/{deliverable_id}/links")
+async def add_deliverable_link(deliverable_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["deliverable_id"] = deliverable_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        link = deliverable_service.add_link(DeliverableLink.model_validate(body), actor)
+        return JSONResponse(link.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/deliverables/{deliverable_id}/activate")
+async def activate_deliverable(deliverable_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.get("actor", LOCAL_ACTOR))
+    try:
+        deliverable_service.activate(deliverable_id, int(body.get("expected_version", 1)), actor)
+        return JSONResponse({"deliverable_id": deliverable_id, "activated": True})
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/deliverables/{deliverable_id}/commitments")
+async def add_deliverable_commitment(deliverable_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["deliverable_id"] = deliverable_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = deliverable_service.add_commitment(SupplierCommitment.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/deliverables/{deliverable_id}/submissions")
+async def add_deliverable_submission(deliverable_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["deliverable_id"] = deliverable_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = deliverable_service.submit(SubmissionVersion.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/deliverable-submissions/{submission_id}/review")
+async def review_deliverable_submission(submission_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["submission_id"] = submission_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = deliverable_service.review(ReviewDecisionRecord.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
 
 
 @app.get("/suppliers", response_class=HTMLResponse)
