@@ -1284,7 +1284,7 @@ async def download_controlled_document_version(
     except (ValueError, OSError, ManagedStorageFailureError) as exc:
         raise _mutation_error(exc) from exc
 
-    def chunks():
+    async def chunks():
         try:
             while chunk := stream.read(1024 * 1024):
                 yield chunk

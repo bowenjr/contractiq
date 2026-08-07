@@ -1039,3 +1039,58 @@ Protected hashes remain exact:
 ## Conclusion
 
 TASK-11C implementation work is committed on the completion branch, but TASK-11 is not claimed as fully accepted because the complete deterministic 20-step validation, unrestricted full-suite completion, and HTTP acceptance evidence remain incomplete.
+
+# TASK-11F Final Acceptance
+
+## Status
+COMPLETE
+
+TASK-11F supersedes the earlier TASK-11 and TASK-11C `PARTIAL` status.
+
+## Checkpoint and final history
+
+- TASK-11C checkpoint: `316b1c47d48c477f5b667cbc0d519533cf79ca44`.
+- Final commit: recorded after this section is committed.
+- Branch: `task-11-completion`.
+- Migration head: `task_11_supplier_assurance_completion_v1`.
+
+## Hanging-suite diagnosis and correction
+
+- Exact hanging node: `tests/unit/test_document_ui.py::test_ui_registers_displays_versions_downloads_and_verifies`, while iterating `StreamingResponse.body_iterator`.
+- Exact stack: the test awaited `_stream_bytes`; Starlette's synchronous-generator `iterate_in_threadpool` stalled on the Python 3.14/AnyIO worker path.
+- Baseline comparison: the exact node reproduced the same stall in a temporary worktree at accepted TASK-10V commit `bbbd9c3d06223f7d953fdcd4efd7d8ab9c070a5f`, proving inheritance.
+- Correction: `app.py` now returns an async streaming generator that reads and closes the bounded local managed stream directly, avoiding the defective synchronous-generator threadpool adapter. The existing document UI test is the regression proof.
+- Result: the formerly hanging node passes; the unrestricted suite terminates normally.
+
+## Final acceptance evidence
+
+- Focused TASK-11/TASK-11C tests: `8 passed`.
+- Unrestricted suite: `267 passed, 26 warnings in 6.98s`.
+- Deterministic validation: exact output `TASK-11 validation: PASS`.
+- TASK-11 changed-file Ruff format corpus: `11 files already formatted`.
+- Canonical Ruff: `All checks passed!`.
+- Canonical mypy: `Success: no issues found in 22 source files`.
+- Explicit strict mypy over TASK-11 production/integration files: pass; ASGI helper strict check with `--follow-imports=skip`: pass.
+- Clean, idempotent, TASK-10V-to-TASK-11, and partial-TASK-11-to-completion migration smoke: pass.
+- Isolated import/startup/lifespan: pass.
+- Live socket: sandbox denied connection with `curl: (7) failed to open socket: Operation not permitted`; Uvicorn startup and graceful shutdown passed.
+- In-process dependency-free ASGI HTTP oracle: `TASK-11F ASGI acceptance: PASS`. It exercised lifespan, dashboard/bid/register pages, requirements, scope/interfaces, My Day, documents, knowledge, supplier creation, draft request, explicit flow-down, issue, API responses, and safe route responses.
+- Direct SQL, immutable rows, same-bid flow-down, silent coverage, review, audit, and stale-path focused evidence: pass.
+- No-mutation/protected-file checks: pass.
+- `git diff --check`: pass.
+
+## Dependency and isolation disposition
+
+No dependency was added. The untracked operator `uv.lock` was not edited or staged. No production database, managed bytes, secrets, external assets, non-loopback service, telemetry, Alice/cloud service, commercial data, or future-task behavior was accessed.
+
+Protected hashes remain exact and states unchanged:
+
+```text
+3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa  docs/tasks/TASK-06-readiness-engine.md
+4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377  uv.lock
+47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d  .claude/settings.local.json
+```
+
+## Conclusion
+
+TASK-11 is fully accepted and safe as TASK-12's base. The only autonomous remediation was the inherited local-streaming/threadpool defect and the missing supplier-table guard in My Day; both were corrected and covered by passing regression/full-suite evidence. Residual risks remain the previously documented trusted-localhost deployment boundary and Starlette multipart spooling behavior.

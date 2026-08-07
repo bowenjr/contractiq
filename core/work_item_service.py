@@ -289,7 +289,13 @@ class MyDayService:
         )
         supplier_attention: list[dict[str, str]] = []
         with self.db._conn() as conn:
-            for bid in bids:
+            supplier_tables_ready = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='supplier_requests'"
+                ).fetchone()
+                is not None
+            )
+            for bid in bids if supplier_tables_ready else []:
                 requests = [
                     dict(row)
                     for row in conn.execute(
