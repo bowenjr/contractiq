@@ -102,6 +102,9 @@ from core.deliverables import (
     SubmissionVersion,
     SupplierCommitment,
 )
+from core.commercial import AssessmentVersion, CommercialItem, CommercialLink, CommercialReview
+from core.commercial_repository import CommercialRepository
+from core.commercial_service import CommercialService
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -170,6 +173,8 @@ supplier_repository = SupplierRepository(db)
 supplier_service = SupplierService(db, supplier_repository)
 deliverable_repository = DeliverableRepository(db)
 deliverable_service = DeliverableService(deliverable_repository)
+commercial_repository = CommercialRepository(db)
+commercial_service = CommercialService(commercial_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -873,6 +878,127 @@ async def review_deliverable_submission(submission_id: str, request: Request) ->
     actor = str(body.pop("actor", LOCAL_ACTOR))
     try:
         value = deliverable_service.review(ReviewDecisionRecord.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/commercial", response_class=HTMLResponse)
+async def commercial_register(bid_id: str | None = None, as_of: str | None = None) -> HTMLResponse:
+    projection_date = _parse_as_of(as_of)
+    scope_rows = [
+        dict(row)
+        for row in scope_repository._conn()
+        .execute(
+            "SELECT * FROM scope_interface_items WHERE (? IS NULL OR bid_id=?)", (bid_id, bid_id)
+        )
+        .fetchall()
+    ]
+    return render(
+        "commercial.html",
+        commercial_items=commercial_service.list(bid_id),
+        bids=bid_repository.list_bids(),
+        bid_id=bid_id or "",
+        gaps=commercial_service.gaps(bid_id, projection_date, scope_rows),
+        metrics=commercial_service.metrics(bid_id, projection_date, scope_rows),
+    )
+
+
+@app.get("/commercial/{commercial_item_id}", response_class=HTMLResponse)
+async def commercial_detail(commercial_item_id: str) -> HTMLResponse:
+    try:
+        detail = commercial_service.detail(commercial_item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("commercial_detail.html", **detail)
+
+
+@app.get("/api/commercial")
+async def commercial_api(bid_id: str | None = None, as_of: str | None = None) -> JSONResponse:
+    projection_date = _parse_as_of(as_of)
+    return JSONResponse(
+        {
+            "items": commercial_service.list(bid_id),
+            "gaps": [
+                gap.model_dump(mode="json")
+                for gap in commercial_service.gaps(bid_id, projection_date)
+            ],
+            "metrics": commercial_service.metrics(bid_id, projection_date),
+        }
+    )
+
+
+@app.post("/api/commercial/initialize")
+async def initialize_commercial(request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        return JSONResponse(
+            {
+                "created": commercial_service.initialize_standard(
+                    str(body["bid_id"]), str(body.get("actor", LOCAL_ACTOR))
+                )
+            }
+        )
+    except (KeyError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial")
+async def create_commercial(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = commercial_service.create(CommercialItem.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial/{commercial_item_id}/links")
+async def link_commercial(commercial_item_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["commercial_item_id"] = commercial_item_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = commercial_service.add_link(CommercialLink.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial/{commercial_item_id}/activate")
+async def activate_commercial(commercial_item_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        commercial_service.activate(
+            commercial_item_id,
+            int(body.get("expected_version", 1)),
+            str(body.get("actor", LOCAL_ACTOR)),
+        )
+        return JSONResponse({"commercial_item_id": commercial_item_id, "activated": True})
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial/{commercial_item_id}/assessments")
+async def assess_commercial(commercial_item_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["commercial_item_id"] = commercial_item_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = commercial_service.add_assessment(AssessmentVersion.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial/{commercial_item_id}/reviews")
+async def review_commercial(commercial_item_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["commercial_item_id"] = commercial_item_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = commercial_service.review(CommercialReview.model_validate(body), actor)
         return JSONResponse(value.model_dump(mode="json"), status_code=201)
     except (ValidationError, ValueError) as exc:
         raise _mutation_error(exc) from exc

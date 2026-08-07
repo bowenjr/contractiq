@@ -1167,3 +1167,61 @@ Protected hashes and states remain exact, untracked/unstaged where required:
 ## Conclusion
 
 TASK-12 is fully accepted and safe as the next task's base after the required commit and remote parity verification.
+
+# TASK-13 Commercial Completeness
+
+## Status
+COMPLETE
+
+## Base, branch, and migration
+
+- Accepted base: `task-12-vendor-data-control` at `06df13b917c2992f2229da465eff814792cd7d6f`, local/remote parity 0/0.
+- Branch: `task-13-commercial-completeness`.
+- Additive migration: `task_13_commercial_completeness_v1`, parent `task_12_vendor_data_control_v1`.
+
+## Preflight inventory and protected state
+
+Existing legacy commercial concepts were advisory only: bid currency/margin metadata, knowledge-base commercial terms, report text extraction, and TASK-10 `pricing_state`. No authoritative commercial completeness register existed. TASK-10 pricing remains authoritative and is reconciled read-only. TASK-11 responses remain evidence only when explicitly linked and accepted; TASK-12 deliverables remain independently authoritative. TASK-08R controlled document/version identity remains the evidence authority. TASK-06 gate policy and TASK-07 work-item authority remain unchanged.
+
+Protected files were preserved untracked/unstaged or modified/unstaged as required:
+
+```text
+3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa  docs/tasks/TASK-06-readiness-engine.md
+4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377  uv.lock
+47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d  .claude/settings.local.json
+```
+
+## Implementation
+
+- `core/commercial.py` defines category, basis-role, applicability, treatment, evidence, lifecycle, link, assessment, and review vocabularies with exact Decimal validation.
+- `core/commercial_repository.py` provides the additive migration, standard-factor initialization, same-bid links, immutable assessment/review rows, optimistic activation, audit transactions, and SQLite hard-delete/immutability triggers.
+- `core/commercial_service.py` exposes deterministic workflow operations and read projections.
+- `core/commercial_rules.py` provides stable gap codes, scope-pricing reconciliation, included-elsewhere diagnostics, and explicit zero-population metrics.
+- `app.py`, `templates/commercial.html`, and `templates/commercial_detail.html` provide register/detail/API workflows and explicitly show G4 as not approved.
+- `core/my_day.py` and `core/work_item_service.py` project commercial attention without creating TASK-07 work items.
+- `scripts/validate_task_13.py`, `scripts/asgi_acceptance_task13.py`, and `tests/unit/test_commercial.py` provide deterministic and runtime evidence.
+
+Standard-factor initialization creates exactly the 14 required factor categories, only missing draft rows, is audited, and is idempotent. Missing factors are reported before initialization. Assessment versions are immutable and monotonically numbered; latest and accepted/review state remain distinct. Independent review rejects self-acceptance. Money is stored as lossless decimal text with explicit uppercase currency; no FX conversion or cross-currency aggregation exists. `INCLUDED_ELSEWHERE` requires exact same-bid lineage and rejects self-cycles. G4 is never passed, approved, overridden, or represented as complete.
+
+## Acceptance evidence
+
+- Focused TASK-13 tests: `2 passed`; combined commercial/deliverable focused tests: `4 passed`.
+- Unrestricted suite: `271 passed, 26 warnings`, normal completion.
+- `uv run python scripts/validate_task_13.py`: `TASK-13 validation: PASS`.
+- `uv run python scripts/asgi_acceptance_task13.py`: `TASK-13 ASGI acceptance: PASS`.
+- Ruff format/check: pass; canonical `uv run ruff check .`: pass.
+- Canonical and explicit strict mypy over changed TASK-13/integration modules: pass.
+- Clean and idempotent migration smoke: pass; isolated application import: `app imports OK`.
+- In-process ASGI covered dashboard, bid, My Day, documents, requirements, scope/interfaces, suppliers, deliverables, commercial register/API, and idempotent standard initialization with synthetic data.
+- Exact decimal round-trip, self-review rejection, immutable assessment direct-SQL rejection, standard-factor gaps, and no-charge/price treatment validation are covered by validation/tests.
+- `git diff --check`: pass.
+
+No production data, real prices, company thresholds, managed bytes, secrets, external assets, telemetry, non-loopback network, dependencies, generated runtime files, or deferred Phase-3 behavior was accessed. One live loopback attempt is not required for acceptance in this trusted-localhost sandbox; the dependency-free ASGI oracle passed.
+
+## Deviations and residual risks
+
+G2/G5 readiness and My Day integration use read-only capability/attention adapters; pure TASK-06 policy is unchanged. G4 remains not assessable pending later contract-risk, margin, finance, legal, and delegation controls. No commercial modelling, margin, FX, quote comparison, supplier selection, approval routing, proposal, or TASK-14 behavior was implemented.
+
+## Conclusion
+
+TASK-13 is fully accepted and safe as the next task's base after commit and remote parity verification.

@@ -1,4 +1,5 @@
 """Application services for validated, audited operational work management."""
+# ruff: noqa: E501
 
 import json
 from collections.abc import Callable, Mapping
@@ -9,6 +10,7 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 
 from core.bid_repository import BidRepository
+from core.commercial_rules import calculate_commercial_gaps
 from core.database import Database
 from core.deliverable_rules import calculate_deliverable_gaps
 from core.enums import Actor
@@ -290,6 +292,7 @@ class MyDayService:
         )
         supplier_attention: list[dict[str, str]] = []
         deliverable_attention: list[dict[str, str]] = []
+        commercial_attention: list[dict[str, str]] = []
         with self.db._conn() as conn:
             supplier_tables_ready = (
                 conn.execute(
@@ -403,6 +406,65 @@ class MyDayService:
                         }
                         for gap in gaps
                     )
+            commercial_ready = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='commercial_items'"
+                ).fetchone()
+                is not None
+            )
+            if commercial_ready:
+                for bid in bids:
+                    rows = [
+                        dict(row)
+                        for row in conn.execute(
+                            "SELECT * FROM commercial_items WHERE bid_id=?", (bid.bid_id,)
+                        ).fetchall()
+                    ]
+                    ids = [row["commercial_item_id"] for row in rows]
+                    commercial_gaps = calculate_commercial_gaps(
+                        rows,
+                        as_of=as_of,
+                        expected_bid_id=bid.bid_id,
+                        links={
+                            key: [
+                                dict(r)
+                                for r in conn.execute(
+                                    "SELECT * FROM commercial_links WHERE commercial_item_id=?",
+                                    (key,),
+                                ).fetchall()
+                            ]
+                            for key in ids
+                        },
+                        assessments={
+                            key: [
+                                dict(r)
+                                for r in conn.execute(
+                                    "SELECT * FROM commercial_assessments WHERE commercial_item_id=? ORDER BY version_number",
+                                    (key,),
+                                ).fetchall()
+                            ]
+                            for key in ids
+                        },
+                        reviews={
+                            key: [
+                                dict(r)
+                                for r in conn.execute(
+                                    "SELECT * FROM commercial_reviews WHERE commercial_item_id=? ORDER BY reviewed_at",
+                                    (key,),
+                                ).fetchall()
+                            ]
+                            for key in ids
+                        },
+                    )
+                    commercial_attention.extend(
+                        {
+                            "bid_id": gap.bid_id,
+                            "entity_id": gap.commercial_item_id or gap.target_id or "",
+                            "code": gap.code,
+                            "severity": gap.severity,
+                        }
+                        for gap in commercial_gaps
+                    )
         return project_my_day(
             work_snapshots,
             readiness_snapshots,
@@ -411,6 +473,7 @@ class MyDayService:
             requirement_snapshots,
             supplier_attention=supplier_attention,
             deliverable_attention=deliverable_attention,
+            commercial_attention=commercial_attention,
         )
 
 
