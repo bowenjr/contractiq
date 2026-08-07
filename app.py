@@ -81,6 +81,8 @@ from core.scope_repository import ScopeInterfaceRepository
 from core.scope_service import ScopeInterfaceService
 from core.scope_interfaces import InterfaceRecord, ScopeItem
 from core.schemas import Provenance
+from core.supplier_repository import SupplierRepository
+from core.supplier_service import SupplierService
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -145,6 +147,8 @@ requirement_service = RequirementService(
 )
 scope_repository = ScopeInterfaceRepository(db)
 scope_service = ScopeInterfaceService(scope_repository)
+supplier_repository = SupplierRepository(db)
+supplier_service = SupplierService(db, supplier_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -723,6 +727,40 @@ async def scope_interfaces_register(bid_id: str | None = None) -> HTMLResponse:
         interfaces=interfaces,
         coverage=coverage,
         bid_id=bid_id,
+    )
+
+
+@app.get("/suppliers", response_class=HTMLResponse)
+async def suppliers_register(bid_id: str | None = None) -> HTMLResponse:
+    """Render the authoritative, bid-scoped supplier assurance register."""
+    return render(
+        "suppliers.html",
+        suppliers=supplier_service.suppliers(bid_id),
+        requests=supplier_service.requests(bid_id),
+        bid_id=bid_id,
+    )
+
+
+@app.get("/supplier-detail/{supplier_id}", response_class=HTMLResponse)
+async def supplier_detail(supplier_id: str) -> HTMLResponse:
+    suppliers = [row for row in supplier_service.suppliers() if row["supplier_id"] == supplier_id]
+    if not suppliers:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    supplier = suppliers[0]
+    return render(
+        "supplier_detail.html",
+        supplier=supplier,
+        requests=[row for row in supplier_service.requests() if row["supplier_id"] == supplier_id],
+    )
+
+
+@app.get("/api/suppliers")
+async def suppliers_api(bid_id: str | None = None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "suppliers": supplier_service.suppliers(bid_id),
+            "requests": supplier_service.requests(bid_id),
+        }
     )
 
 

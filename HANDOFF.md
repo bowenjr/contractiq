@@ -935,3 +935,45 @@ COMPLETE
 - Authorized tracked changes are `app.py` (whole-file Ruff formatting only) and this `HANDOFF.md`; TASK-10 implementation files remain from the base commit. Protected files remain untracked/unstaged or known local modification and excluded.
 - No TASK-10 production/test correction beyond authorized `app.py` formatting was required. The inherited repository-wide Ruff formatting debt remains a documented hygiene item; it does not affect the TASK-10 changed-file format gate.
 - After commit and push, this branch is the candidate TASK-11 base. TASK-10 is fully accepted and safe to use as TASK-11's base, subject to the existing trusted-localhost and Starlette multipart-spooling residual risk.
+
+# Handoff — TASK-11
+
+## Status
+PARTIAL
+
+## Files created
+- `core/supplier_assurance.py` — supplier/request/response/coverage Pydantic contracts and deterministic projection.
+- `core/supplier_assurance_rules.py` — pure stable gap rules.
+- `core/supplier_repository.py` — SQLite migration `task_11_supplier_assurance_v1`, atomic audit writes, and hard-delete triggers.
+- `core/supplier_service.py` — request/response/review services with optimistic version checks.
+- `scripts/validate_task_11.py` — isolated migration validation.
+- `templates/suppliers.html`, `templates/supplier_detail.html` — Suppliers register/detail views.
+- `tests/unit/test_supplier_assurance.py` — deterministic gap coverage.
+
+## Files modified
+- `app.py` — initialized supplier services and added `/suppliers`, supplier detail, and `/api/suppliers` routes.
+
+## Test results
+- Focused supplier tests: `2 passed`.
+- Existing test suite was started and produced passing tests before the harness stopped returning completion output; no failure was observed.
+- `ruff check` — pass on all new TASK-11 Python files.
+- strict mypy — pass on all five new Python production/validation files.
+
+## Validation command output
+`uv run python scripts/validate_task_11.py`
+`TASK-11 validation: PASS (task_11_supplier_assurance_v1)`
+
+Application import with isolated DB/root: `app imports OK`.
+
+## Decisions I made
+- Kept supplier identities bid-scoped and separate from legacy knowledge/AI supplier intelligence.
+- Used immutable response-version rows and one atomic coverage submission per issued request item.
+- Used manual evidence notes as the bounded non-document evidence path; controlled-document health checks remain the next integration hardening point.
+
+## Deviations from the task spec
+- This implementation is partial: full flow-down links to TASK-09/TASK-10, readiness/My Day adapters, complete metrics/gap matrix, and full UI/API write workflows remain to be completed.
+- Remote push and final acceptance gates were not claimed in this handoff.
+
+## Concerns for review
+- The existing repository has inherited Ruff lint debt in `app.py`; TASK-11 additions themselves pass Ruff.
+- The final acceptance should add representative controlled-document, cross-bid, stale-review, and direct-SQL invariant tests before declaring TASK-11 complete.
