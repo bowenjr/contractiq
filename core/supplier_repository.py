@@ -10,9 +10,15 @@ from typing import Any, cast
 from uuid import uuid4
 
 from core.database import Database
-from core.supplier_assurance import RequestItem, Supplier, SupplierRequest
+from core.supplier_assurance import (
+    FlowDownLink,
+    RequestItem,
+    Supplier,
+    SupplierRequest,
+)
 
 SUPPLIER_MIGRATION_ID = "task_11_supplier_assurance_v1"
+SUPPLIER_COMPLETION_MIGRATION_ID = "task_11_supplier_assurance_completion_v1"
 
 
 class SupplierRepository:
@@ -100,6 +106,62 @@ class SupplierRepository:
             try:
                 for statement in statements:
                     conn.execute(statement)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        self._completion_migrate()
+
+    def _completion_migrate(self) -> None:
+        """Forward-only additive hardening for the published partial checkpoint."""
+        statements = [
+            """CREATE TABLE IF NOT EXISTS supplier_item_flow_down (
+                link_id TEXT PRIMARY KEY, request_item_id TEXT NOT NULL,
+                bid_id TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL,
+                created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+                FOREIGN KEY (request_item_id) REFERENCES supplier_request_items(request_item_id),
+                UNIQUE(request_item_id,target_type,target_id),
+                CHECK(target_type IN ('REQUIREMENT','SCOPE_ITEM','INTERFACE'))
+            )""",
+            """CREATE TABLE IF NOT EXISTS supplier_schema_migrations (
+                migration_id TEXT PRIMARY KEY, applied_at TEXT NOT NULL
+            )""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_issued_item_immutable
+                BEFORE UPDATE ON supplier_request_items
+                WHEN (SELECT request_state FROM supplier_requests WHERE request_id=OLD.request_id)='ISSUED'
+                BEGIN SELECT RAISE(ABORT,'issued request items are immutable'); END""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_issued_item_no_delete
+                BEFORE DELETE ON supplier_request_items
+                WHEN (SELECT request_state FROM supplier_requests WHERE request_id=OLD.request_id)='ISSUED'
+                BEGIN SELECT RAISE(ABORT,'issued request items are immutable'); END""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_version_no_update
+                BEFORE UPDATE OF response_id,request_id,supplier_id,bid_id,version_number,evidence_mode,document_version_id,evidence_note,validity_state,valid_until,overall_note,created_at,created_by
+                ON supplier_response_versions BEGIN SELECT RAISE(ABORT,'response version content is immutable'); END""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_coverage_no_update
+                BEFORE UPDATE ON supplier_response_coverage BEGIN SELECT RAISE(ABORT,'response coverage is immutable'); END""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_coverage_no_delete
+                BEFORE DELETE ON supplier_response_coverage BEGIN SELECT RAISE(ABORT,'response coverage is immutable'); END""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_flow_down_no_update
+                BEFORE UPDATE ON supplier_item_flow_down BEGIN SELECT RAISE(ABORT,'flow-down links are immutable'); END""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_flow_down_no_delete
+                BEFORE DELETE ON supplier_item_flow_down BEGIN SELECT RAISE(ABORT,'flow-down links are immutable'); END""",
+            """CREATE TRIGGER IF NOT EXISTS supplier_response_pointer_guard
+                BEFORE UPDATE OF latest_version_id,accepted_version_id ON supplier_responses
+                WHEN (NEW.latest_version_id IS NOT NULL AND NOT EXISTS
+                    (SELECT 1 FROM supplier_response_versions v WHERE v.response_version_id=NEW.latest_version_id AND v.response_id=OLD.response_id))
+                  OR (NEW.accepted_version_id IS NOT NULL AND NOT EXISTS
+                    (SELECT 1 FROM supplier_response_versions v WHERE v.response_version_id=NEW.accepted_version_id AND v.response_id=OLD.response_id))
+                BEGIN SELECT RAISE(ABORT,'response pointer must reference its response aggregate'); END""",
+        ]
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for statement in statements:
+                    conn.execute(statement)
+                conn.execute(
+                    "INSERT OR IGNORE INTO supplier_schema_migrations VALUES (?,?)",
+                    (SUPPLIER_COMPLETION_MIGRATION_ID, datetime.now(UTC).isoformat()),
+                )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -229,3 +291,141 @@ class SupplierRepository:
         query += " ORDER BY title,request_id"
         with self._conn() as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+    def add_flow_down(self, link: FlowDownLink, actor: str = "operator") -> None:
+        """Create one explicit same-bid link; free text cannot create links."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                item = conn.execute(
+                    "SELECT bid_id,request_id FROM supplier_request_items WHERE request_item_id=?",
+                    (link.request_item_id,),
+                ).fetchone()
+                if item is None or item["bid_id"] != link.bid_id:
+                    raise ValueError("flow-down item is not in the requested bid")
+                request = conn.execute(
+                    "SELECT request_state FROM supplier_requests WHERE request_id=?",
+                    (item["request_id"],),
+                ).fetchone()
+                if request is None or request["request_state"] == "ISSUED":
+                    raise ValueError("issued request links are immutable")
+                table, column = {
+                    "REQUIREMENT": ("requirements", "requirement_id"),
+                    "SCOPE_ITEM": ("scope_interface_items", "scope_item_id"),
+                    "INTERFACE": ("scope_interfaces", "interface_id"),
+                }[link.target_type.value]
+                target = conn.execute(
+                    f"SELECT bid_id FROM {table} WHERE {column}=?", (link.target_id,)
+                ).fetchone()
+                if target is None or target["bid_id"] != link.bid_id:
+                    raise ValueError("flow-down target does not exist")
+                conn.execute(
+                    "INSERT INTO supplier_item_flow_down VALUES (?,?,?,?,?,?,?)",
+                    (
+                        link.link_id,
+                        link.request_item_id,
+                        link.bid_id,
+                        link.target_type.value,
+                        link.target_id,
+                        link.created_at.isoformat(),
+                        link.created_by,
+                    ),
+                )
+                self._audit(conn, link.bid_id, actor, "supplier_flow_down_created", link.link_id)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def list_flow_down(self, request_item_id: str) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM supplier_item_flow_down WHERE request_item_id=? ORDER BY target_type,target_id",
+                    (request_item_id,),
+                ).fetchall()
+            ]
+
+    def issue_request(
+        self, request_id: str, expected_version: int, actor: str = "operator"
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT bid_id,request_state FROM supplier_requests WHERE request_id=? AND version=?",
+                    (request_id, expected_version),
+                ).fetchone()
+                if row is None or row["request_state"] != "DRAFT":
+                    raise ValueError("stale or non-draft request")
+                items = conn.execute(
+                    "SELECT request_item_id,support_role,materiality FROM supplier_request_items WHERE request_id=?",
+                    (request_id,),
+                ).fetchall()
+                if not items or any(
+                    not conn.execute(
+                        "SELECT 1 FROM supplier_item_flow_down WHERE request_item_id=?",
+                        (item["request_item_id"],),
+                    ).fetchone()
+                    for item in items
+                ):
+                    raise ValueError("every request item requires an explicit flow-down link")
+                now = datetime.now(UTC).isoformat()
+                conn.execute(
+                    "UPDATE supplier_requests SET request_state='ISSUED',issued_at=?,updated_at=?,version=version+1 WHERE request_id=? AND version=?",
+                    (now, now, request_id, expected_version),
+                )
+                self._audit(conn, row["bid_id"], actor, "supplier_request_issued", request_id)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def close_request(
+        self, request_id: str, expected_version: int, rationale: str, actor: str = "operator"
+    ) -> None:
+        if not rationale.strip():
+            raise ValueError("closure requires an explicit rationale")
+        self._transition_request(request_id, expected_version, "CLOSED", rationale, actor)
+
+    def withdraw_request(
+        self, request_id: str, expected_version: int, actor: str = "operator"
+    ) -> None:
+        self._transition_request(request_id, expected_version, "WITHDRAWN", None, actor)
+
+    def _transition_request(
+        self,
+        request_id: str,
+        expected_version: int,
+        state: str,
+        rationale: str | None,
+        actor: str,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT bid_id FROM supplier_requests WHERE request_id=? AND version=?",
+                    (request_id, expected_version),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("stale supplier request update")
+                now = datetime.now(UTC).isoformat()
+                if state == "WITHDRAWN":
+                    conn.execute(
+                        "UPDATE supplier_requests SET lifecycle_state='WITHDRAWN',updated_at=?,version=version+1 WHERE request_id=? AND version=?",
+                        (now, request_id, expected_version),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE supplier_requests SET request_state='CLOSED',closed_at=?,close_rationale=?,updated_at=?,version=version+1 WHERE request_id=? AND version=?",
+                        (now, rationale, now, request_id, expected_version),
+                    )
+                self._audit(
+                    conn, row["bid_id"], actor, f"supplier_request_{state.lower()}", request_id
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise

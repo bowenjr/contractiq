@@ -22,6 +22,7 @@ from core.readiness import ReadinessReport
 from core.readiness_service import evaluate_readiness
 from core.requirement_repository import RequirementRepository
 from core.schemas import AuditEntry, Provenance
+from core.supplier_assurance_rules import calculate_gaps
 from core.work_item_repository import (
     StaleWorkItemError,
     WorkItemNotFoundError,
@@ -286,12 +287,54 @@ class MyDayService:
             if self.requirement_repository is not None
             else []
         )
+        supplier_attention: list[dict[str, str]] = []
+        with self.db._conn() as conn:
+            for bid in bids:
+                requests = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT * FROM supplier_requests WHERE bid_id=?", (bid.bid_id,)
+                    ).fetchall()
+                ]
+                items = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT * FROM supplier_request_items WHERE bid_id=?", (bid.bid_id,)
+                    ).fetchall()
+                ]
+                responses = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT * FROM supplier_response_versions WHERE bid_id=?", (bid.bid_id,)
+                    ).fetchall()
+                ]
+                coverage = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT c.* FROM supplier_response_coverage c "
+                        "JOIN supplier_response_versions v USING(response_version_id) "
+                        "WHERE v.bid_id=?",
+                        (bid.bid_id,),
+                    ).fetchall()
+                ]
+                supplier_attention.extend(
+                    {
+                        "bid_id": bid.bid_id,
+                        "entity_id": gap.entity_id,
+                        "code": gap.code,
+                        "severity": gap.severity,
+                    }
+                    for gap in calculate_gaps(
+                        requests, items, responses, coverage, as_of_date=as_of
+                    )
+                )
         return project_my_day(
             work_snapshots,
             readiness_snapshots,
             as_of,
             horizon_days,
             requirement_snapshots,
+            supplier_attention=supplier_attention,
         )
 
 

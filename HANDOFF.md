@@ -977,3 +977,65 @@ Application import with isolated DB/root: `app imports OK`.
 ## Concerns for review
 - The existing repository has inherited Ruff lint debt in `app.py`; TASK-11 additions themselves pass Ruff.
 - The final acceptance should add representative controlled-document, cross-bid, stale-review, and direct-SQL invariant tests before declaring TASK-11 complete.
+
+# Handoff — TASK-11C Completion
+
+## Status
+PARTIAL — implementation completion is present, but the unrestricted suite and HTTP acceptance could not be fully evidenced in this sandbox.
+
+## Authoritative traceability matrix
+
+| Requirement | Status after TASK-11C | Evidence / correction |
+|---|---|---|
+| Bid-scoped suppliers and lifecycle | IMPLEMENTED_AND_PROVEN | `Supplier`, `bid_suppliers`, synthetic repository tests |
+| Draft/issue/close/withdraw workflow | IMPLEMENTED_NOT_PROVEN | service/repository transitions and API routes; close/withdraw focused acceptance remains incomplete |
+| Checklist roles and issue boundary | IMPLEMENTED_AND_PROVEN | `RequestItem`, issue gate, SQLite issued-item trigger |
+| TASK-09/TASK-10 explicit flow-down | IMPLEMENTED_AND_PROVEN | `FlowDownLink`, `supplier_item_flow_down`, same-bid target test |
+| Logical responses and immutable versions | IMPLEMENTED_AND_PROVEN | response transaction, version ownership, immutable SQL triggers |
+| Latest versus accepted pointers | IMPLEMENTED_NOT_PROVEN | creation/review code present; full newer-version scenario not completed |
+| Complete coverage and SILENT omission | IMPLEMENTED_AND_PROVEN | omitted items are synthesized as `SILENT`; focused test |
+| Typed exceptions/confirmation/N/A | IMPLEMENTED_AND_PROVEN | Pydantic `Coverage` validator and focused exception test |
+| Manual/controlled evidence | PARTIAL | manual note validation exists; controlled-document health/link validation remains incomplete |
+| Independent review/concurrency | IMPLEMENTED_NOT_PROVEN | audited review and expected-version path present; stale rollback matrix incomplete |
+| Validity/expiry/evidence/target health | PARTIAL | date rules and target same-bid checks exist; diagnostic-health integration incomplete |
+| Stable gap codes | PARTIAL | pure rules cover request, review, validity, silence, exception, mismatch; full original code matrix incomplete |
+| Required metrics/currentness | PARTIAL | issued/confirmed/percentage/attention metrics exist; complete denominator set incomplete |
+| Repository/SQLite/audit/atomicity/hard-delete | IMPLEMENTED_NOT_PROVEN | additive triggers and transactions present; complete induced audit-failure proof incomplete |
+| Safe service/HTTP errors | IMPLEMENTED_NOT_PROVEN | JSON mutation routes map validation/stale errors; complete HTTP oracle unavailable |
+| TASK-06 G3 provider integration | IMPLEMENTED_NOT_PROVEN | `gate_service._supplier_assurance_clear` uses existing capability field; full G3 scenario incomplete |
+| TASK-07 My Day composition | IMPLEMENTED_NOT_PROVEN | deterministic supplier attention projection added without work-item writes; full scenario incomplete |
+| Server-rendered UI/context panels | PARTIAL | register, supplier, request, response templates/routes added; complete mutation/history UI incomplete |
+| Deterministic validation script | IMPLEMENTED_NOT_PROVEN | migration/invariant script prints exact `TASK-11 validation: PASS`; full 20-step scenario not yet encoded |
+| Focused/full/runtime/scans/no-mutation acceptance | PARTIAL | focused tests, Ruff, mypy, migration, import pass; full suite was interrupted at an inherited document-stream test and live socket was policy-blocked |
+
+## TASK-11C corrections
+
+- Added additive migration `task_11_supplier_assurance_completion_v1` rather than editing the published partial migration.
+- Added explicit flow-down links, same-bid target checks, issue locking, immutable link/version/coverage triggers, and request close/withdraw service boundaries.
+- Added omitted-item `SILENT` synthesis, review routes, supplier response/request detail pages, G3 capability adaptation, and My Day supplier-attention rows.
+- No dependencies, `uv.lock`, protected files, prior branches, main, production data, managed bytes, or external services were modified.
+
+## Verification evidence
+
+- Focused supplier tests: `3 passed`.
+- `uv run python scripts/validate_task_11.py`: `TASK-11 validation: PASS`.
+- Canonical Ruff: `All checks passed!`.
+- TASK-11 changed-file format corpus: `11 files already formatted`.
+- Canonical mypy: `Success: no issues found in 22 source files`.
+- Explicit strict mypy over TASK-11 and integration files: pass.
+- Clean/idempotent migration and additive upgrade smoke: pass.
+- Isolated application import: `app imports OK`.
+- Live runtime attempt: `curl` failed with `Operation not permitted` while Uvicorn startup/shutdown completed cleanly; `httpx`/Starlette in-process client is unavailable in the environment and adding a dependency is prohibited.
+- Unrestricted pytest collection: `267 tests collected`; the full run did not return a completion summary in the harness and stopped while an inherited document UI stream test was waiting.
+
+Protected hashes remain exact:
+
+```text
+3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa  docs/tasks/TASK-06-readiness-engine.md
+4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377  uv.lock
+47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d  .claude/settings.local.json
+```
+
+## Conclusion
+
+TASK-11C implementation work is committed on the completion branch, but TASK-11 is not claimed as fully accepted because the complete deterministic 20-step validation, unrestricted full-suite completion, and HTTP acceptance evidence remain incomplete.

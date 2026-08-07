@@ -139,6 +139,7 @@
       <div class="metric"><div class="metric-value">{{ projection.counts.blocked }}</div><div class="metric-label">Blocked</div></div>
       <div class="metric"><div class="metric-value">{{ projection.counts.readiness_holds }}</div><div class="metric-label">Readiness holds</div></div>
       <div class="metric"><div class="metric-value">{{ projection.counts.requirement_attention }}</div><div class="metric-label">Requirement attention</div></div>
+      <div class="metric"><div class="metric-value">{{ projection.counts.supplier_attention }}</div><div class="metric-label">Supplier attention</div></div>
     </section>
 
     {% macro work_rows(items, empty_message) %}
@@ -201,6 +202,11 @@
         </a>{% endfor %}
       {% else %}<div class="empty">No overdue, due-today, or high-attention requirements.</div>{% endif %}
       </div>
+    </section>
+
+    <section class="section" aria-labelledby="supplier-heading">
+      <div class="section-head"><h2 id="supplier-heading">Supplier assurance attention</h2><span class="section-count">{{ projection.supplier_attention|length }} · read-only register projection</span></div>
+      <div class="panel">{% if projection.supplier_attention %}{% for row in projection.supplier_attention %}<a class="work-row" href="/suppliers?bid_id={{ row.bid_id }}" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code }}</div><div class="item-detail">{{ row.entity_id }}</div></div><div><span class="badge status-{{ row.severity }}">{{ row.severity }}</span></div></a>{% endfor %}{% else %}<div class="empty">No supplier assurance attention.</div>{% endif %}</div>
     </section>
 
     <section class="section" aria-labelledby="readiness-heading">

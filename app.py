@@ -83,6 +83,15 @@ from core.scope_interfaces import InterfaceRecord, ScopeItem
 from core.schemas import Provenance
 from core.supplier_repository import SupplierRepository
 from core.supplier_service import SupplierService
+from core.supplier_assurance import (
+    Coverage,
+    FlowDownLink,
+    RequestItem,
+    ResponseVersion,
+    ReviewState,
+    Supplier,
+    SupplierRequest,
+)
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -762,6 +771,157 @@ async def suppliers_api(bid_id: str | None = None) -> JSONResponse:
             "requests": supplier_service.requests(bid_id),
         }
     )
+
+
+@app.get("/supplier-requests/{request_id}", response_class=HTMLResponse)
+async def supplier_request_detail(request_id: str) -> HTMLResponse:
+    rows = [row for row in supplier_service.requests() if row["request_id"] == request_id]
+    if not rows:
+        raise HTTPException(status_code=404, detail="Supplier request not found")
+    with supplier_service.db._conn() as conn:
+        items = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM supplier_request_items WHERE request_id=? ORDER BY sequence",
+                (request_id,),
+            ).fetchall()
+        ]
+        links = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM supplier_item_flow_down WHERE request_item_id IN (SELECT request_item_id FROM supplier_request_items WHERE request_id=?) ORDER BY request_item_id",
+                (request_id,),
+            ).fetchall()
+        ]
+    return render("supplier_request_detail.html", request=rows[0], items=items, links=links)
+
+
+@app.get("/supplier-responses/{response_version_id}", response_class=HTMLResponse)
+async def supplier_response_detail(response_version_id: str) -> HTMLResponse:
+    with supplier_service.db._conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM supplier_response_versions WHERE response_version_id=?",
+            (response_version_id,),
+        ).fetchone()
+        coverage = [
+            dict(item)
+            for item in conn.execute(
+                "SELECT * FROM supplier_response_coverage WHERE response_version_id=? ORDER BY request_item_id",
+                (response_version_id,),
+            ).fetchall()
+        ]
+    if row is None:
+        raise HTTPException(status_code=404, detail="Supplier response version not found")
+    return render("supplier_response_detail.html", response=dict(row), coverage=coverage)
+
+
+@app.post("/api/suppliers")
+async def create_supplier_api(request: Request) -> JSONResponse:
+    try:
+        supplier = Supplier.model_validate(await request.json())
+        supplier_service.create_supplier(supplier, LOCAL_ACTOR)
+        return JSONResponse(jsonable_encoder(supplier.model_dump()), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/supplier-requests")
+async def create_supplier_request_api(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        items = [RequestItem.model_validate(item) for item in body.pop("items", [])]
+        supplier_request = SupplierRequest.model_validate(body)
+        supplier_service.create_request(supplier_request, items, LOCAL_ACTOR)
+        return JSONResponse(jsonable_encoder(supplier_request.model_dump()), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/supplier-flow-down")
+async def create_supplier_flow_down_api(request: Request) -> JSONResponse:
+    try:
+        link = FlowDownLink.model_validate(await request.json())
+        supplier_service.add_flow_down(link, LOCAL_ACTOR)
+        return JSONResponse(jsonable_encoder(link.model_dump()), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/supplier-requests/{request_id}/issue")
+async def issue_supplier_request_api(request_id: str, request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        supplier_service.issue_request(
+            request_id, int(body.get("expected_version", 1)), LOCAL_ACTOR
+        )
+        return JSONResponse({"request_id": request_id, "state": "ISSUED"})
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409 if "stale" in str(exc) else 422, detail=str(exc)
+        ) from exc
+
+
+@app.post("/api/supplier-requests/{request_id}/close")
+async def close_supplier_request_api(request_id: str, request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        supplier_service.close_request(
+            request_id,
+            int(body.get("expected_version", 1)),
+            str(body.get("rationale", "")),
+            LOCAL_ACTOR,
+        )
+        return JSONResponse({"request_id": request_id, "state": "CLOSED"})
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409 if "stale" in str(exc) else 422, detail=str(exc)
+        ) from exc
+
+
+@app.post("/api/supplier-requests/{request_id}/withdraw")
+async def withdraw_supplier_request_api(request_id: str, request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        supplier_service.withdraw_request(
+            request_id, int(body.get("expected_version", 1)), LOCAL_ACTOR
+        )
+        return JSONResponse({"request_id": request_id, "state": "WITHDRAWN"})
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409 if "stale" in str(exc) else 422, detail=str(exc)
+        ) from exc
+
+
+@app.post("/api/supplier-responses")
+async def create_supplier_response_api(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        coverage = [Coverage.model_validate(item) for item in body.pop("coverage", [])]
+        response = ResponseVersion.model_validate(body)
+        supplier_service.create_response(response, coverage, LOCAL_ACTOR)
+        return JSONResponse(jsonable_encoder(response.model_dump()), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/supplier-responses/{response_version_id}/review")
+async def review_supplier_response_api(response_version_id: str, request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        supplier_service.review_response(
+            response_version_id,
+            str(body.get("reviewer", LOCAL_ACTOR)),
+            ReviewState(str(body.get("state"))),
+            body.get("note"),
+            body.get("expected_version"),
+        )
+        return JSONResponse(
+            {"response_version_id": response_version_id, "state": body.get("state")}
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409 if "stale" in str(exc) else 422, detail=str(exc)
+        ) from exc
 
 
 @app.get("/scope-items/{scope_item_id}", response_class=HTMLResponse)

@@ -62,6 +62,12 @@ class RequestMateriality(str, Enum):
     UNASSESSED = "UNASSESSED"
 
 
+class FlowDownTargetType(str, Enum):
+    REQUIREMENT = "REQUIREMENT"
+    SCOPE_ITEM = "SCOPE_ITEM"
+    INTERFACE = "INTERFACE"
+
+
 class EvidenceMode(str, Enum):
     MANUAL_RECORD = "MANUAL_RECORD"
     CONTROLLED_DOCUMENT_VERSION = "CONTROLLED_DOCUMENT_VERSION"
@@ -155,6 +161,18 @@ class SupplierRequest(BaseModel):
     created_at: datetime
     updated_at: datetime
     version: int = Field(default=1, ge=1)
+    created_by: str
+
+
+class FlowDownLink(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    link_id: str = Field(default_factory=lambda: f"SFL-{uuid4().hex}")
+    request_item_id: str
+    bid_id: str
+    target_type: FlowDownTargetType
+    target_id: str = Field(min_length=1, max_length=200)
+    created_at: datetime
     created_by: str
 
 

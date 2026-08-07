@@ -70,6 +70,10 @@ def calculate_gaps(
             add("LATEST_RESPONSE_UNREVIEWED", entity, bid, "BLOCKING_ATTENTION")
         if response.get("review_state") == "CHANGES_REQUIRED":
             add("SUPPLIER_RESPONSE_CHANGES_REQUIRED", entity, bid, "BLOCKING_ATTENTION")
+        if response.get("accepted_version_id") and response.get(
+            "accepted_version_id"
+        ) != response.get("response_version_id"):
+            add("LATEST_RESPONSE_UNREVIEWED", entity, bid, "BLOCKING_ATTENTION")
         state = str(response.get("validity_state", "NOT_PROVIDED"))
         if state == "NOT_PROVIDED":
             add("SUPPLIER_RESPONSE_VALIDITY_NOT_PROVIDED", entity, bid, "ADVISORY")
@@ -96,4 +100,31 @@ def calculate_gaps(
                 and item.get("scope_offer_position") == "INCLUDED"
             ):
                 add("SUPPLIER_EXCLUDED_CUSTOMER_INCLUDED", item_id, bid, "BLOCKING_ATTENTION")
+        role = str(item.get("support_role", ""))
+        if role == "REQUIRED_SUPPORT" and row.get("state") != "CONFIRMED":
+            if item.get("customer_need") == "REQUIRED":
+                add("SUPPLIER_REQUIRED_SCOPE_UNCONFIRMED", item_id, bid, "BLOCKING_ATTENTION")
+            if item.get("requirement_significance") in {"MANDATORY", "DISQUALIFYING"}:
+                add(
+                    "SUPPLIER_MANDATORY_REQUIREMENT_UNCONFIRMED", item_id, bid, "BLOCKING_ATTENTION"
+                )
+            if item.get("interface_materiality") in {"MATERIAL", "UNASSESSED"}:
+                add("SUPPLIER_MATERIAL_INTERFACE_UNCONFIRMED", item_id, bid, "BLOCKING_ATTENTION")
+        if item.get("target_health") in {"INACTIVE", "DEGRADED"}:
+            add(
+                "SUPPLIER_TARGET_INACTIVE_OR_DEGRADED",
+                item_id,
+                bid,
+                "BLOCKING_ATTENTION" if role == "REQUIRED_SUPPORT" else "ADVISORY",
+            )
+        if (
+            response_for_request.get(str(item.get("request_id")), {}).get("evidence_health")
+            == "DEGRADED"
+        ):
+            add(
+                "SUPPLIER_RESPONSE_EVIDENCE_DEGRADED",
+                item_id,
+                bid,
+                "BLOCKING_ATTENTION" if role == "REQUIRED_SUPPORT" else "ADVISORY",
+            )
     return tuple(sorted(gaps.values(), key=lambda gap: (gap.bid_id, gap.entity_id, gap.code)))

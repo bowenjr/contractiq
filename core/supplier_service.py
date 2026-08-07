@@ -12,12 +12,15 @@ from uuid import uuid4
 from core.database import Database
 from core.supplier_assurance import (
     Coverage,
+    CoverageState,
+    FlowDownLink,
     RequestItem,
     ResponseVersion,
     ReviewState,
     Supplier,
     SupplierRequest,
 )
+from core.supplier_assurance_rules import SupplierGap, calculate_gaps
 from core.supplier_repository import SupplierRepository
 
 
@@ -45,6 +48,25 @@ class SupplierService:
             raise ValueError("issued requests require issued_at")
         self.repository.create_request(request, items, actor)
         return request
+
+    def add_flow_down(self, link: FlowDownLink, actor: str = "operator") -> FlowDownLink:
+        self.repository.add_flow_down(link, actor)
+        return link
+
+    def issue_request(
+        self, request_id: str, expected_version: int, actor: str = "operator"
+    ) -> None:
+        self.repository.issue_request(request_id, expected_version, actor)
+
+    def close_request(
+        self, request_id: str, expected_version: int, rationale: str, actor: str = "operator"
+    ) -> None:
+        self.repository.close_request(request_id, expected_version, rationale, actor)
+
+    def withdraw_request(
+        self, request_id: str, expected_version: int, actor: str = "operator"
+    ) -> None:
+        self.repository.withdraw_request(request_id, expected_version, actor)
 
     def create_response(
         self,
@@ -74,8 +96,16 @@ class SupplierService:
                 ).fetchall()
                 item_ids = [str(row["request_item_id"]) for row in item_rows]
                 provided = {row.request_item_id for row in coverage}
-                if provided != set(item_ids):
-                    raise ValueError("coverage must contain exactly one row for every request item")
+                if not provided <= set(item_ids):
+                    raise ValueError("coverage cannot reference a non-request item")
+                coverage_by_item = {row.request_item_id: row for row in coverage}
+                coverage = [
+                    coverage_by_item.get(
+                        item_id,
+                        Coverage(request_item_id=item_id, state=CoverageState.SILENT),
+                    )
+                    for item_id in item_ids
+                ]
                 if response.version_number != int(
                     conn.execute(
                         "SELECT COALESCE(MAX(version_number),0)+1 FROM supplier_response_versions WHERE response_id=?",
@@ -212,12 +242,38 @@ class SupplierService:
             ),
         )
 
-    def gaps(self, bid_id: str, as_of: date | None = None) -> list[Any]:
+    def gaps(self, bid_id: str, as_of: date | None = None) -> list[SupplierGap]:
         as_of = as_of or datetime.now(UTC).date()
-        # The pure projection is intentionally fed only this bid's rows.
-        return [] if not self.requests(bid_id) else []
+        with cast(sqlite3.Connection, self.db._conn()) as conn:
+            requests = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM supplier_requests WHERE bid_id=?", (bid_id,)
+                ).fetchall()
+            ]
+            items = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT i.*,f.target_type,f.target_id FROM supplier_request_items i LEFT JOIN supplier_item_flow_down f USING(request_item_id) WHERE i.bid_id=?",
+                    (bid_id,),
+                ).fetchall()
+            ]
+            responses = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM supplier_response_versions WHERE bid_id=?", (bid_id,)
+                ).fetchall()
+            ]
+            coverage = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT c.* FROM supplier_response_coverage c JOIN supplier_response_versions v USING(response_version_id) WHERE v.bid_id=?",
+                    (bid_id,),
+                ).fetchall()
+            ]
+        return list(calculate_gaps(requests, items, responses, coverage, as_of_date=as_of))
 
-    def metrics(self, bid_id: str) -> dict[str, int | float]:
+    def metrics(self, bid_id: str) -> dict[str, int | float | bool]:
         with cast(sqlite3.Connection, self.db._conn()) as conn:
             total = int(
                 conn.execute(
@@ -231,8 +287,12 @@ class SupplierService:
                     (bid_id,),
                 ).fetchone()[0]
             )
+            gaps = self.gaps(bid_id)
             return {
                 "issued_items": total,
                 "confirmed_items": confirmed,
                 "coverage_percent": round(confirmed / total * 100, 2) if total else 0.0,
+                "has_population": total > 0,
+                "blocking_attention": sum(gap.severity == "BLOCKING_ATTENTION" for gap in gaps),
+                "advisory_attention": sum(gap.severity == "ADVISORY" for gap in gaps),
             }

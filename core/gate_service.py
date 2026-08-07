@@ -43,6 +43,30 @@ def _table_has_bid_row(db: Database, table_name: str, bid_id: str) -> bool:
     return row is not None
 
 
+def _supplier_assurance_clear(db: Database, bid_id: str) -> bool:
+    """Adapt supplier assurance facts into TASK-06's existing capability seam."""
+    if not _table_exists(db, "supplier_response_versions"):
+        return False
+    with _conn(db) as conn:
+        versions = conn.execute(
+            "SELECT response_version_id,review_state FROM supplier_response_versions "
+            "WHERE bid_id=?",
+            (bid_id,),
+        ).fetchall()
+        if not versions:
+            return False
+        for version in versions:
+            if version["review_state"] != "ACCEPTED":
+                return False
+            rows = conn.execute(
+                "SELECT state FROM supplier_response_coverage WHERE response_version_id=?",
+                (version["response_version_id"],),
+            ).fetchall()
+            if any(row["state"] != "CONFIRMED" for row in rows):
+                return False
+    return True
+
+
 def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateContext:
     """Load all currently available register data needed by the pure gate rules."""
     bid = repo.get_bid(bid_id)
@@ -80,7 +104,7 @@ def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateCo
         unconfirmed_counts=unconfirmed_counts,
         prior_gate_results={},
         has_compliance_matrix=_table_exists(db, "requirements"),
-        has_supplier_register=_table_has_bid_row(db, "supplier_responses", bid_id),
+        has_supplier_register=_supplier_assurance_clear(db, bid_id),
         has_concession_log=_table_exists(db, "concession_log"),
         has_reconciliation=_table_exists(db, "reconciliation"),
         has_strategy_record=_table_has_bid_row(db, "bid_strategy", bid_id),

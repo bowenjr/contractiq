@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from core.database import Database
-from core.supplier_repository import SUPPLIER_MIGRATION_ID, SupplierRepository
+from core.supplier_repository import SupplierRepository
 
 
 def main() -> int:
@@ -30,11 +30,13 @@ def main() -> int:
             "supplier_response_coverage",
             "supplier_no_delete",
             "supplier_version_no_delete",
+            "supplier_item_flow_down",
+            "supplier_schema_migrations",
         }
         if not required <= names:
             missing = ", ".join(sorted(required - names))
             raise SystemExit(f"missing TASK-11 schema objects: {missing}")
-    print(f"TASK-11 validation: PASS ({SUPPLIER_MIGRATION_ID})")
+    print("TASK-11 validation: PASS")
     return 0
 
 

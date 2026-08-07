@@ -3,7 +3,7 @@
 from datetime import date, timedelta
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.readiness import ReadinessReport, ReadinessVerdict
 from core.requirements import (
@@ -88,6 +88,7 @@ class MyDayCounts(BaseModel):
     requirement_attention: int
     requirement_overdue: int
     requirement_due_today: int
+    supplier_attention: int = 0
 
 
 class MyDayProjection(BaseModel):
@@ -105,6 +106,7 @@ class MyDayProjection(BaseModel):
     later_or_unscheduled: list[ProjectedWorkItem]
     readiness_holds: list[ReadinessSnapshot]
     requirement_attention: list[ProjectedRequirementAttention]
+    supplier_attention: list[dict[str, str]] = Field(default_factory=list)
     counts: MyDayCounts
 
 
@@ -199,6 +201,7 @@ def project_my_day(
     as_of: date,
     horizon_days: int,
     requirement_snapshots: list[RequirementAttentionSnapshot] | None = None,
+    supplier_attention: list[dict[str, str]] | None = None,
 ) -> MyDayProjection:
     """Classify and order supplied snapshots without I/O or hidden time access."""
     if horizon_days < 1:
@@ -243,6 +246,7 @@ def project_my_day(
         later_or_unscheduled=buckets[MyDayBucket.LATER_OR_UNSCHEDULED],
         readiness_holds=readiness_holds,
         requirement_attention=requirement_attention,
+        supplier_attention=supplier_attention or [],
         counts=MyDayCounts(
             overdue=sum(item.is_overdue for item in active),
             due_today=sum(item.is_due_today for item in active),
@@ -252,5 +256,6 @@ def project_my_day(
             requirement_attention=len(requirement_attention),
             requirement_overdue=sum(item.is_overdue for item in requirement_attention),
             requirement_due_today=sum(item.is_due_today for item in requirement_attention),
+            supplier_attention=len(supplier_attention or []),
         ),
     )
