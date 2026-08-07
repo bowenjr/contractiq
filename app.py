@@ -169,17 +169,21 @@ excel_generator = ExcelGenerator(REPORTS_DIR)
 
 # ── Startup recovery ─────────────────────────────────────────────────────────
 
+
 def recover_stuck_documents() -> None:
     """Reset any documents left in 'processing' state from a previous server session."""
     stuck = db.get_documents_by_status("processing")
     for doc in stuck:
-        db.update_document(doc["id"], {
-            "status": "interrupted",
-            "error_message": (
-                "Analysis was interrupted — server restarted or connection lost. "
-                "Click Analyse to retry."
-            ),
-        })
+        db.update_document(
+            doc["id"],
+            {
+                "status": "interrupted",
+                "error_message": (
+                    "Analysis was interrupted — server restarted or connection lost. "
+                    "Click Analyse to retry."
+                ),
+            },
+        )
         print(f"  Recovered stuck document: {doc['filename']}")
 
 
@@ -224,23 +228,25 @@ def _run_analysis_background(doc_id: str) -> None:
     document = db.get_document(doc_id)
     if not document:
         progress_store[doc_id] = {
-            "step_num": 0, "total_steps": 6, "step_name": "Error",
-            "message": "Document not found", "percent": 0,
-            "completed_steps": [], "error": "Document not found", "review_priority": None,
+            "step_num": 0,
+            "total_steps": 6,
+            "step_name": "Error",
+            "message": "Document not found",
+            "percent": 0,
+            "completed_steps": [],
+            "error": "Document not found",
+            "review_priority": None,
         }
         return
 
     seen_steps: dict = {}  # step_num → step_name
 
     def _progress_cb(
-        step_num: int, total_steps: int, step_name: str,
-        message: str, percent: int
+        step_num: int, total_steps: int, step_name: str, message: str, percent: int
     ) -> None:
         seen_steps[step_num] = step_name
         completed = [
-            {"step_num": k, "step_name": v}
-            for k, v in sorted(seen_steps.items())
-            if k < step_num
+            {"step_num": k, "step_name": v} for k, v in sorted(seen_steps.items()) if k < step_num
         ]
         progress_store[doc_id] = {
             "step_num": step_num,
@@ -257,7 +263,7 @@ def _run_analysis_background(doc_id: str) -> None:
         return doc_id in cancel_requests
 
     try:
-        raw_text      = document["raw_text"]
+        raw_text = document["raw_text"]
         doc_type_hint = document.get("doc_type", "General Contract")
 
         # ── Stage 1: Pure-Python pre-processing (no LLM, instant) ────────────
@@ -266,24 +272,29 @@ def _run_analysis_background(doc_id: str) -> None:
             document["filename"],
             doc_type=doc_type_hint,
         )
-        structured_md     = pre["structured_markdown"]
-        contractual_items = pre["contractual_items"]   # always []
-        section_count     = pre["section_count"]
-        noise_pct         = pre["noise_removed_pct"]
-        word_count        = pre["word_count"]
+        structured_md = pre["structured_markdown"]
+        contractual_items = pre["contractual_items"]  # always []
+        section_count = pre["section_count"]
+        noise_pct = pre["noise_removed_pct"]
+        word_count = pre["word_count"]
 
         # Persist markdown immediately so /api/document/{id}/markdown works
-        db.update_document(doc_id, {
-            "structured_markdown":   structured_md,
-            "contractual_items_json": json.dumps(contractual_items),
-        })
+        db.update_document(
+            doc_id,
+            {
+                "structured_markdown": structured_md,
+                "contractual_items_json": json.dumps(contractual_items),
+            },
+        )
 
         print(
             f"  Pre-processing complete: {section_count} sections | "
             f"{word_count:,} words | {noise_pct}% noise removed"
         )
         _progress_cb(
-            1, 6, "Pre-processing",
+            1,
+            6,
+            "Pre-processing",
             f"Pre-processing complete — {section_count} sections detected, "
             f"{noise_pct}% noise removed, {word_count:,} words",
             5,
@@ -312,9 +323,7 @@ def _run_analysis_background(doc_id: str) -> None:
         print("  Pre-processing: Generating tracker sheet...")
         tracker_filename = f"tracker_{doc_id}.xlsx"
         tracker_path = REPORTS_DIR / tracker_filename
-        preprocessor.generate_tracker_sheet(
-            document, contractual_items, results, tracker_path
-        )
+        preprocessor.generate_tracker_sheet(document, contractual_items, results, tracker_path)
 
         # Save structured findings to relational tables
         pillar_results = results.get("pillars", [])
@@ -327,37 +336,36 @@ def _run_analysis_background(doc_id: str) -> None:
             db.save_obligations(doc_id, obligations)
 
         # Save report package record
-        db.save_report_package(doc_id, pdf_filename, xlsx_filename,
-                               datetime.now().isoformat())
+        db.save_report_package(doc_id, pdf_filename, xlsx_filename, datetime.now().isoformat())
 
         # Update document record
         rp = results.get("review_priority", {})
-        db.update_document(doc_id, {
-            "status": "complete",
-            "analysis_date": datetime.now().isoformat(),
-            "analysis_json": json.dumps(results),
-            "pdf_report_path": pdf_filename,
-            "excel_report_path": xlsx_filename,
-            "review_priority": rp.get("review_priority", "Unknown"),
-            "critical_flag_count": rp.get("critical_flag_count", 0),
-            "high_flag_count": rp.get("high_flag_count", 0),
-            "negotiation_points_count": rp.get("negotiation_points_count", 0),
-            "doc_type": results.get("doc_type", "General Contract"),
-            "doc_type_confidence": results.get("doc_type_confidence", "Low"),
-            "executive_summary": results.get("executive_summary", ""),
-            "key_subject": results.get("key_subject", ""),
-            "contract_value": results.get("contract_value", ""),
-            "contract_duration": results.get("contract_duration", ""),
-            "governing_law": results.get("governing_law", ""),
-            "counterparty": results.get("counterparty", ""),
-            "tracker_path": tracker_filename,
-        })
+        db.update_document(
+            doc_id,
+            {
+                "status": "complete",
+                "analysis_date": datetime.now().isoformat(),
+                "analysis_json": json.dumps(results),
+                "pdf_report_path": pdf_filename,
+                "excel_report_path": xlsx_filename,
+                "review_priority": rp.get("review_priority", "Unknown"),
+                "critical_flag_count": rp.get("critical_flag_count", 0),
+                "high_flag_count": rp.get("high_flag_count", 0),
+                "negotiation_points_count": rp.get("negotiation_points_count", 0),
+                "doc_type": results.get("doc_type", "General Contract"),
+                "doc_type_confidence": results.get("doc_type_confidence", "Low"),
+                "executive_summary": results.get("executive_summary", ""),
+                "key_subject": results.get("key_subject", ""),
+                "contract_value": results.get("contract_value", ""),
+                "contract_duration": results.get("contract_duration", ""),
+                "governing_law": results.get("governing_law", ""),
+                "counterparty": results.get("counterparty", ""),
+                "tracker_path": tracker_filename,
+            },
+        )
 
         # Build completed_steps from all 6 steps
-        all_completed = [
-            {"step_num": k, "step_name": v}
-            for k, v in sorted(seen_steps.items())
-        ]
+        all_completed = [{"step_num": k, "step_name": v} for k, v in sorted(seen_steps.items())]
         progress_store[doc_id] = {
             "step_num": 7,
             "total_steps": 6,
@@ -372,34 +380,46 @@ def _run_analysis_background(doc_id: str) -> None:
     except InterruptedError:
         cancel_requests.discard(doc_id)
         completed = [{"step_num": k, "step_name": v} for k, v in sorted(seen_steps.items())]
-        db.update_document(doc_id, {
-            "status": "cancelled",
-            "error_message": "Analysis cancelled by user",
-        })
+        db.update_document(
+            doc_id,
+            {
+                "status": "cancelled",
+                "error_message": "Analysis cancelled by user",
+            },
+        )
         progress_store[doc_id] = {
-            "step_num": 0, "total_steps": 6, "step_name": "Cancelled",
-            "message": "Analysis cancelled by user", "percent": 0,
+            "step_num": 0,
+            "total_steps": 6,
+            "step_name": "Cancelled",
+            "message": "Analysis cancelled by user",
+            "percent": 0,
             "completed_steps": completed,
-            "error": "Analysis cancelled by user", "review_priority": None,
+            "error": "Analysis cancelled by user",
+            "review_priority": None,
         }
 
     except Exception as e:
         import traceback
+
         print(f"[ERROR] Analysis failed for {doc_id}: {e}")
         traceback.print_exc()
         db.update_document(doc_id, {"status": "error", "error_message": str(e)})
         progress_store[doc_id] = {
-            "step_num": 0, "total_steps": 6, "step_name": "Error",
-            "message": str(e), "percent": 0,
+            "step_num": 0,
+            "total_steps": 6,
+            "step_name": "Error",
+            "message": str(e),
+            "percent": 0,
             "completed_steps": [
-                {"step_num": k, "step_name": v}
-                for k, v in sorted(seen_steps.items())
+                {"step_num": k, "step_name": v} for k, v in sorted(seen_steps.items())
             ],
-            "error": str(e), "review_priority": None,
+            "error": str(e),
+            "review_priority": None,
         }
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -596,16 +616,8 @@ async def requirements_register(
             bid_id=bid_id or None,
             as_of_date=projection_date,
         )
-        sources = (
-            requirement_service.source_choices(bid_id)
-            if bid_id
-            else None
-        )
-        readiness = (
-            evaluate_readiness(bid_repository, db, bid_id)
-            if bid_id
-            else None
-        )
+        sources = requirement_service.source_choices(bid_id) if bid_id else None
+        readiness = evaluate_readiness(bid_repository, db, bid_id) if bid_id else None
     except ValueError as exc:
         raise _mutation_error(exc) from exc
     bids = bid_repository.list_bids()
@@ -705,26 +717,49 @@ async def scope_interfaces_register(bid_id: str | None = None) -> HTMLResponse:
     scopes = scope_repository.list_scope_items(bid_id)
     interfaces = scope_repository.list_interfaces(bid_id)
     coverage = scope_service.projection(bid_id, _working_date()) if bid_id else None
-    return render("scope_interfaces.html", scopes=scopes, interfaces=interfaces, coverage=coverage, bid_id=bid_id)
+    return render(
+        "scope_interfaces.html",
+        scopes=scopes,
+        interfaces=interfaces,
+        coverage=coverage,
+        bid_id=bid_id,
+    )
 
 
 @app.get("/scope-items/{scope_item_id}", response_class=HTMLResponse)
 async def scope_item_detail(scope_item_id: str) -> HTMLResponse:
     item = scope_repository.get_scope_item(scope_item_id)
-    if item is None: raise HTTPException(status_code=404, detail="Scope item not found")
-    return render("scope_item_detail.html", item=item, links=scope_repository.requirement_links(scope_item_id=scope_item_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Scope item not found")
+    return render(
+        "scope_item_detail.html",
+        item=item,
+        links=scope_repository.requirement_links(scope_item_id=scope_item_id),
+    )
 
 
 @app.get("/interfaces/{interface_id}", response_class=HTMLResponse)
 async def interface_detail(interface_id: str) -> HTMLResponse:
     record = scope_repository.get_interface(interface_id)
-    if record is None: raise HTTPException(status_code=404, detail="Interface not found")
-    return render("interface_detail.html", interface=record, links=scope_repository.interface_scope_links(interface_id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Interface not found")
+    return render(
+        "interface_detail.html",
+        interface=record,
+        links=scope_repository.interface_scope_links(interface_id),
+    )
 
 
 @app.get("/api/scope-interfaces")
 async def scope_interfaces_api(bid_id: str | None = None) -> JSONResponse:
-    return JSONResponse(jsonable_encoder({"scope_items": scope_repository.list_scope_items(bid_id), "interfaces": scope_repository.list_interfaces(bid_id)}))
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "scope_items": scope_repository.list_scope_items(bid_id),
+                "interfaces": scope_repository.list_interfaces(bid_id),
+            }
+        )
+    )
 
 
 @app.post("/api/scope-items")
@@ -891,9 +926,7 @@ async def controlled_document_detail(
         versions = document_service.list_versions(document_id)
         integrity_result = None
         if verify_version_id is not None:
-            if verify_version_id not in {
-                version.document_version_id for version in versions
-            }:
+            if verify_version_id not in {version.document_version_id for version in versions}:
                 raise DocumentVersionNotFoundError(
                     f"Document version not found in {document_id}: {verify_version_id}"
                 )
@@ -1084,10 +1117,7 @@ async def upload_document(
     allowed = {".pdf", ".docx", ".doc", ".txt"}
     suffix = Path(file.filename).suffix.lower()
     if suffix not in allowed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type {suffix} not supported."
-        )
+        raise HTTPException(status_code=400, detail=f"File type {suffix} not supported.")
 
     doc_id = str(uuid.uuid4())
     file_path = UPLOADS_DIR / f"{doc_id}{suffix}"
@@ -1098,10 +1128,7 @@ async def upload_document(
         extracted = doc_processor.process(file_path)
     except Exception as e:
         file_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=422,
-            detail=f"Could not extract text: {str(e)}"
-        )
+        raise HTTPException(status_code=422, detail=f"Could not extract text: {str(e)}")
 
     # Check for scanned PDF pages
     scan_warning = None
@@ -1121,18 +1148,20 @@ async def upload_document(
                 f"Some content may not be extracted."
             )
 
-    db.create_document({
-        "id": doc_id,
-        "filename": file.filename,
-        "file_path": str(file_path),
-        "status": "uploaded",
-        "upload_date": datetime.now().isoformat(),
-        "word_count": extracted["word_count"],
-        "page_count": extracted["page_count"],
-        "raw_text": extracted["text"],
-        "doc_type": doc_type_hint or "General Contract",
-        **({"error_message": scan_warning} if scan_warning else {}),
-    })
+    db.create_document(
+        {
+            "id": doc_id,
+            "filename": file.filename,
+            "file_path": str(file_path),
+            "status": "uploaded",
+            "upload_date": datetime.now().isoformat(),
+            "word_count": extracted["word_count"],
+            "page_count": extracted["page_count"],
+            "raw_text": extracted["text"],
+            "doc_type": doc_type_hint or "General Contract",
+            **({"error_message": scan_warning} if scan_warning else {}),
+        }
+    )
 
     # Run pre-processing immediately — pure Python, no LLM, completes in <1s
     try:
@@ -1141,13 +1170,16 @@ async def upload_document(
             file.filename,
             doc_type_hint or "General Contract",
         )
-        db.update_document(doc_id, {
-            "structured_markdown":   pre["structured_markdown"],
-            "contractual_items_json": json.dumps(pre.get("contractual_items", [])),
-        })
-        has_markdown  = True
+        db.update_document(
+            doc_id,
+            {
+                "structured_markdown": pre["structured_markdown"],
+                "contractual_items_json": json.dumps(pre.get("contractual_items", [])),
+            },
+        )
+        has_markdown = True
         section_count = pre.get("section_count", 0)
-        noise_pct     = pre.get("noise_removed_pct", 0)
+        noise_pct = pre.get("noise_removed_pct", 0)
         print(
             f"  Pre-processed: {section_count} sections, "
             f"{noise_pct:.1f}% noise removed, "
@@ -1155,22 +1187,24 @@ async def upload_document(
         )
     except Exception as e:
         print(f"  Pre-processing warning: {e}")
-        has_markdown  = False
+        has_markdown = False
         section_count = 0
-        noise_pct     = 0
+        noise_pct = 0
 
-    return JSONResponse({
-        "doc_id": doc_id,
-        "contract_id": doc_id,  # backward-compat alias
-        "filename": file.filename,
-        "word_count": extracted["word_count"],
-        "page_count": extracted["page_count"],
-        "status": "uploaded",
-        "has_markdown": has_markdown,
-        "section_count": section_count,
-        "noise_removed_pct": noise_pct,
-        "scan_warning": scan_warning,
-    })
+    return JSONResponse(
+        {
+            "doc_id": doc_id,
+            "contract_id": doc_id,  # backward-compat alias
+            "filename": file.filename,
+            "word_count": extracted["word_count"],
+            "page_count": extracted["page_count"],
+            "status": "uploaded",
+            "has_markdown": has_markdown,
+            "section_count": section_count,
+            "noise_removed_pct": noise_pct,
+            "scan_warning": scan_warning,
+        }
+    )
 
 
 @app.post("/api/analyse/{doc_id}")
@@ -1197,9 +1231,14 @@ async def analyse_document(doc_id: str, background_tasks: BackgroundTasks):
     )
     db.update_document(doc_id, {"status": "processing"})
     progress_store[doc_id] = {
-        "step_num": 0, "total_steps": 6, "step_name": "Starting",
-        "message": "Analysis queued...", "percent": 0,
-        "completed_steps": [], "error": None, "review_priority": None,
+        "step_num": 0,
+        "total_steps": 6,
+        "step_name": "Starting",
+        "message": "Analysis queued...",
+        "percent": 0,
+        "completed_steps": [],
+        "error": None,
+        "review_priority": None,
     }
     background_tasks.add_task(_run_analysis_background, doc_id)
     return JSONResponse({"status": "processing", "doc_id": doc_id})
@@ -1217,27 +1256,48 @@ async def get_progress(doc_id: str):
 
     status = document.get("status", "")
     if status == "complete":
-        return JSONResponse({
-            "step_num": 7, "total_steps": 6, "step_name": "Complete",
-            "message": "Analysis complete", "percent": 100,
-            "completed_steps": [], "error": None,
-            "review_priority": document.get("review_priority"),
-        })
+        return JSONResponse(
+            {
+                "step_num": 7,
+                "total_steps": 6,
+                "step_name": "Complete",
+                "message": "Analysis complete",
+                "percent": 100,
+                "completed_steps": [],
+                "error": None,
+                "review_priority": document.get("review_priority"),
+            }
+        )
     if status in ("processing", "interrupted"):
-        msg = document.get("error_message") or "Server was restarted during analysis — please re-analyse"
-        return JSONResponse({
-            "step_num": 0, "total_steps": 6, "step_name": "Interrupted",
-            "message": msg, "percent": 0, "completed_steps": [],
-            "error": msg, "review_priority": None,
-        })
+        msg = (
+            document.get("error_message")
+            or "Server was restarted during analysis — please re-analyse"
+        )
+        return JSONResponse(
+            {
+                "step_num": 0,
+                "total_steps": 6,
+                "step_name": "Interrupted",
+                "message": msg,
+                "percent": 0,
+                "completed_steps": [],
+                "error": msg,
+                "review_priority": None,
+            }
+        )
     if status == "error":
-        return JSONResponse({
-            "step_num": 0, "total_steps": 6, "step_name": "Error",
-            "message": document.get("error_message", "Analysis failed"),
-            "percent": 0, "completed_steps": [],
-            "error": document.get("error_message", "Analysis failed"),
-            "review_priority": None,
-        })
+        return JSONResponse(
+            {
+                "step_num": 0,
+                "total_steps": 6,
+                "step_name": "Error",
+                "message": document.get("error_message", "Analysis failed"),
+                "percent": 0,
+                "completed_steps": [],
+                "error": document.get("error_message", "Analysis failed"),
+                "review_priority": None,
+            }
+        )
     # uploaded / unknown — no progress to report yet
     raise HTTPException(status_code=404, detail="No progress data for this document")
 
@@ -1284,6 +1344,7 @@ async def delete_document(doc_id: str):
         raise
     except Exception as e:
         import traceback
+
         print(f"[ERROR] Delete failed for {doc_id}: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
@@ -1345,6 +1406,7 @@ async def download_markdown(doc_id: str):
     """Download structured markdown as a .md file attachment."""
     import re
     from fastapi.responses import Response as FastAPIResponse
+
     document = db.get_document(doc_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -1368,6 +1430,7 @@ async def download_markdown(doc_id: str):
 async def view_markdown(doc_id: str):
     """View structured markdown as plain text (no download prompt)."""
     from fastapi.responses import Response as FastAPIResponse
+
     document = db.get_document(doc_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -1389,13 +1452,14 @@ async def get_tracker(doc_id: str):
     if not tracker:
         raise HTTPException(status_code=404, detail="Tracker sheet not yet generated")
     from fastapi.responses import FileResponse
+
     path = REPORTS_DIR / tracker
     if not path.exists():
         raise HTTPException(status_code=404, detail="Tracker file not found on disk")
     return FileResponse(
         str(path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"tracker_{document.get('filename','document')}.xlsx",
+        filename=f"tracker_{document.get('filename', 'document')}.xlsx",
     )
 
 
@@ -1423,7 +1487,7 @@ async def regenerate_reports(doc_id: str):
         raise HTTPException(status_code=422, detail="Analysis data is corrupted")
 
     try:
-        pdf_filename  = f"report_{doc_id}.pdf"
+        pdf_filename = f"report_{doc_id}.pdf"
         xlsx_filename = f"report_{doc_id}.xlsx"
         tracker_filename = f"tracker_{doc_id}.xlsx"
 
@@ -1440,19 +1504,25 @@ async def regenerate_reports(doc_id: str):
             document, contractual_items, results, REPORTS_DIR / tracker_filename
         )
 
-        db.update_document(doc_id, {
-            "pdf_report_path":   pdf_filename,
-            "excel_report_path": xlsx_filename,
-            "tracker_path":      tracker_filename,
-        })
-        return JSONResponse({
-            "status":  "complete",
-            "pdf":     pdf_filename,
-            "excel":   xlsx_filename,
-            "tracker": tracker_filename,
-        })
+        db.update_document(
+            doc_id,
+            {
+                "pdf_report_path": pdf_filename,
+                "excel_report_path": xlsx_filename,
+                "tracker_path": tracker_filename,
+            },
+        )
+        return JSONResponse(
+            {
+                "status": "complete",
+                "pdf": pdf_filename,
+                "excel": xlsx_filename,
+                "tracker": tracker_filename,
+            }
+        )
     except Exception as e:
         import traceback
+
         print(f"[ERROR] Report regeneration failed for {doc_id}: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
@@ -1464,10 +1534,13 @@ async def cancel_analysis(doc_id: str):
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     cancel_requests.add(doc_id)
-    db.update_document(doc_id, {
-        "status": "cancelled",
-        "error_message": "Analysis cancelled by user",
-    })
+    db.update_document(
+        doc_id,
+        {
+            "status": "cancelled",
+            "error_message": "Analysis cancelled by user",
+        },
+    )
     if doc_id in progress_store:
         progress_store[doc_id] = {
             **progress_store[doc_id],
@@ -1485,7 +1558,14 @@ async def update_document_context(doc_id: str, request: Request):
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     body = await request.json()
-    allowed = {"business_role", "delivery_model", "product_families_json", "review_notes", "jurisdiction", "doc_type"}
+    allowed = {
+        "business_role",
+        "delivery_model",
+        "product_families_json",
+        "review_notes",
+        "jurisdiction",
+        "doc_type",
+    }
     updates = {k: v for k, v in body.items() if k in allowed}
     if "product_families" in body:
         updates["product_families_json"] = json.dumps(body["product_families"])
@@ -1497,19 +1577,84 @@ async def update_document_context(doc_id: str, request: Request):
 # ── Knowledge Management API ──────────────────────────────────────────────────
 
 _KNOWLEDGE_TABLES = {
-    "company_positions":    ("get_all_company_positions",    "create_company_position",    "update_company_position",    "deactivate_company_position"),
-    "insurance_positions":  ("get_all_insurance_positions",  "create_insurance_position",  "update_insurance_position",  "deactivate_insurance_position"),
-    "escalation_rules":     ("get_all_escalation_rules",     "create_escalation_rule",     "update_escalation_rule",     "deactivate_escalation_rule"),
-    "product_risk_profiles":("get_all_product_risk_profiles","create_product_risk_profile","update_product_risk_profile","deactivate_product_risk_profile"),
-    "commercial_term_library": ("get_all_commercial_terms",  "create_commercial_term",     "update_commercial_term",     "deactivate_commercial_term"),
-    "product_term_risk_map":("get_all_product_term_maps",    "create_product_term_map",    "update_product_term_map",    "deactivate_product_term_map"),
-    "deliverable_templates":("get_all_deliverable_templates","create_deliverable_template","update_deliverable_template","deactivate_deliverable_template"),
-    "clause_playbooks":     ("get_all_clause_playbooks",     "create_clause_playbook",     "update_clause_playbook",     "deactivate_clause_playbook"),
-    "review_routing_rules": ("get_all_routing_rules",        "create_routing_rule",        "update_routing_rule",        "deactivate_routing_rule"),
-    "negotiation_history":  ("get_all_negotiation_history",  "create_negotiation_record",  "update_negotiation_record",  None),
-    "supplier_intelligence":("get_all_supplier_intelligence","create_supplier_intel",      "update_supplier_intel",      "deactivate_supplier_intel"),
-    "project_type_profiles":("get_all_project_type_profiles","create_project_type_profile","update_project_type_profile","deactivate_project_type_profile"),
-    "jurisdiction_rules":   ("get_all_jurisdiction_rules",   "create_jurisdiction_rule",   "update_jurisdiction_rule",   "deactivate_jurisdiction_rule"),
+    "company_positions": (
+        "get_all_company_positions",
+        "create_company_position",
+        "update_company_position",
+        "deactivate_company_position",
+    ),
+    "insurance_positions": (
+        "get_all_insurance_positions",
+        "create_insurance_position",
+        "update_insurance_position",
+        "deactivate_insurance_position",
+    ),
+    "escalation_rules": (
+        "get_all_escalation_rules",
+        "create_escalation_rule",
+        "update_escalation_rule",
+        "deactivate_escalation_rule",
+    ),
+    "product_risk_profiles": (
+        "get_all_product_risk_profiles",
+        "create_product_risk_profile",
+        "update_product_risk_profile",
+        "deactivate_product_risk_profile",
+    ),
+    "commercial_term_library": (
+        "get_all_commercial_terms",
+        "create_commercial_term",
+        "update_commercial_term",
+        "deactivate_commercial_term",
+    ),
+    "product_term_risk_map": (
+        "get_all_product_term_maps",
+        "create_product_term_map",
+        "update_product_term_map",
+        "deactivate_product_term_map",
+    ),
+    "deliverable_templates": (
+        "get_all_deliverable_templates",
+        "create_deliverable_template",
+        "update_deliverable_template",
+        "deactivate_deliverable_template",
+    ),
+    "clause_playbooks": (
+        "get_all_clause_playbooks",
+        "create_clause_playbook",
+        "update_clause_playbook",
+        "deactivate_clause_playbook",
+    ),
+    "review_routing_rules": (
+        "get_all_routing_rules",
+        "create_routing_rule",
+        "update_routing_rule",
+        "deactivate_routing_rule",
+    ),
+    "negotiation_history": (
+        "get_all_negotiation_history",
+        "create_negotiation_record",
+        "update_negotiation_record",
+        None,
+    ),
+    "supplier_intelligence": (
+        "get_all_supplier_intelligence",
+        "create_supplier_intel",
+        "update_supplier_intel",
+        "deactivate_supplier_intel",
+    ),
+    "project_type_profiles": (
+        "get_all_project_type_profiles",
+        "create_project_type_profile",
+        "update_project_type_profile",
+        "deactivate_project_type_profile",
+    ),
+    "jurisdiction_rules": (
+        "get_all_jurisdiction_rules",
+        "create_jurisdiction_rule",
+        "update_jurisdiction_rule",
+        "deactivate_jurisdiction_rule",
+    ),
 }
 
 
@@ -1574,6 +1719,7 @@ async def export_knowledge_table(table_name: str):
     _resolve_table(table_name)  # validate
     import tempfile
     from fastapi.responses import FileResponse
+
     kio = KnowledgeIO(db)
     tmp = Path(tempfile.mktemp(suffix=".xlsx"))
     success = kio.export_table_to_excel(table_name, tmp)
@@ -1590,6 +1736,7 @@ async def export_knowledge_table(table_name: str):
 async def import_knowledge_table(table_name: str, file: UploadFile = File(...)):
     _resolve_table(table_name)  # validate
     import tempfile
+
     kio = KnowledgeIO(db)
     tmp = Path(tempfile.mktemp(suffix=".xlsx"))
     tmp.write_bytes(await file.read())
@@ -1604,6 +1751,7 @@ async def import_knowledge_table(table_name: str, file: UploadFile = File(...)):
 async def export_all_knowledge():
     import tempfile
     from fastapi.responses import FileResponse
+
     kio = KnowledgeIO(db)
     tmp = Path(tempfile.mktemp(suffix=".xlsx"))
     kio.export_all_knowledge(tmp)
@@ -1631,6 +1779,7 @@ async def llm_status():
 @app.get("/api/llm-test")
 async def llm_test():
     import time
+
     if not llm_client.health_check():
         raise HTTPException(
             status_code=503,
@@ -1653,19 +1802,21 @@ async def llm_test():
         status = "error"
         response_text = str(e)
     elapsed = round(time.time() - start, 2)
-    return JSONResponse({
-        "response":         response_text,
-        "elapsed_seconds":  elapsed,
-        "model_url":        llm_client.base_url,
-        "status":           status,
-    })
+    return JSONResponse(
+        {
+            "response": response_text,
+            "elapsed_seconds": elapsed,
+            "model_url": llm_client.base_url,
+            "status": status,
+        }
+    )
 
 
 if __name__ == "__main__":
     _timeout = APP_CONFIG.get("lm_studio_timeout", 600)
     _max_chars = APP_CONFIG.get("max_document_chars", 80000)
     _connect_timeout = APP_CONFIG.get("lm_studio_connect_timeout", 30)
-    _read_timeout    = APP_CONFIG.get("lm_studio_read_timeout", 3600)
+    _read_timeout = APP_CONFIG.get("lm_studio_read_timeout", 3600)
     print(
         f"\n  ContractIQ starting on http://localhost:8000\n"
         f"  LM Studio: {llm_client.base_url} | "

@@ -897,3 +897,41 @@ TASK-10 validation: PASS (task_10_scope_interfaces_v1; 4 deterministic gaps)
 
 ## Concerns for review
 - Review repository update breadth and add any deployment-specific request-size control only under the separately authorized non-localhost prerequisite. The existing Starlette multipart-spooling residual risk is unchanged.
+
+# Handoff — TASK-10V Final Acceptance
+
+## Status
+COMPLETE
+
+## Starting state
+- TASK-10 base branch/commit: `task-10-scope-interface-matrix` / `ec5917823a77415e33b12b4e1c28722b61f80893`; migration `task_10_scope_interfaces_v1`; base parity `0/0`.
+- Acceptance branch started at the same commit with no upstream and no remote branch. No prior task history was rewritten.
+- Protected starting/final hashes remained exact: TASK-06 file `3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa`, `uv.lock` `4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377`, `.claude/settings.local.json` `47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d`.
+
+## Ruff remediation evidence
+- Historical broad `uv run ruff format --check .` failed only on `docs/SALVAGE.md`, `docs/tasks/TASK-01-schemas-and-harness.md`, and protected untracked TASK-06 documentation; those files were not changed.
+- First baseline-aware 81-file corpus exposed inherited `app.py`, `core/analysis_engine.py`, `core/database.py`, `core/document_preprocessor.py`, and `core/report_generator.py` formatting debt. The six inherited tracked failures were proven unchanged from TASK-09 to TASK-10.
+- The differential checker found four TASK-10 route overlaps at raw `app.py` lines `708`, `714–715`, `721–722`, and `727`. Final authority explicitly authorized whole-file `uv run ruff format -- app.py`.
+- Before app format SHA-256: `2076fe37f7dd4c2c614296f9a0a85f8c9b0554a05674ead596f5b1fc7aa5362d`; after SHA-256: `f0b6b004f7b2b6d0c35754825ba8c466f05400360eedff7a2aa44c0fb2f01eab`.
+- Both versions compiled successfully; AST SHA-256 was identical: `2d81447f13bab8f9ea5ddc81820d07786183c064cdfe118ca136b937e3fbfddf` before and after. `app.py` is formatted, `git diff --check -- app.py` passes, and the complete app diff is formatting-only by AST equivalence.
+- Final TASK-10 changed Ruff corpus: 8 files; all formatted. Canonical `uv run ruff check .`: `All checks passed!`. Repository-wide format debt outside TASK-10 remains documented and unresolved.
+
+## Acceptance gates
+- Focused `uv run pytest -q tests/unit/test_scope_interfaces.py`: 4 passed.
+- `uv run python scripts/validate_task_10.py`: `TASK-10 validation: PASS (task_10_scope_interfaces_v1; 4 deterministic gaps)`.
+- Full `uv run pytest -q`: 264 passed, 26 inherited FastAPI `on_event` deprecation warnings, 6.61 seconds.
+- Canonical `uv run mypy`: success, 22 source files. Explicit `uv run mypy --strict core/scope_interfaces.py core/scope_gap_rules.py core/scope_repository.py core/scope_service.py scripts/validate_task_10.py`: success, 5 files.
+- Clean/idempotent migration smoke created `task_10_scope_interfaces_v1` tables twice in a temporary SQLite database. TASK-07/TASK-08/TASK-09 synthetic validations all passed, preserving their documented identities and evidence.
+- Isolated import/migration smoke passed with temporary database and managed root.
+- Isolated Uvicorn bound only to `127.0.0.1` on port `18770`; synthetic bid/scope/interface fixture was used. Dashboard, bid detail, Scope & Interfaces, scope detail, interface detail, Requirements, Documents, My Day, Knowledge, and bid-scoped scope API all returned HTTP 200. SIGINT shutdown returned exit code 0 with no orphan process.
+- Direct-SQL/cross-bid/hard-delete smoke passed: cross-bid interface link rejected, authoritative hard delete rejected by SQLite trigger, and no relationship mutation occurred.
+
+## Security and isolation
+- No production database or real managed document was used for acceptance fixtures. Temporary databases, roots, and synthetic records/bytes were used for migration/runtime checks.
+- No dependency or `uv.lock` change; no external assets, telemetry, cloud/Alice calls, remote network client, supplier inference, or future-task capability was added. `git diff --check` passed.
+- Legacy AI `scope_items`/`obligations` remain separate; TASK-09 requirements, document versions, readiness, work items, and managed evidence were not mutated by TASK-10 projection or validation.
+
+## Final state and conclusion
+- Authorized tracked changes are `app.py` (whole-file Ruff formatting only) and this `HANDOFF.md`; TASK-10 implementation files remain from the base commit. Protected files remain untracked/unstaged or known local modification and excluded.
+- No TASK-10 production/test correction beyond authorized `app.py` formatting was required. The inherited repository-wide Ruff formatting debt remains a documented hygiene item; it does not affect the TASK-10 changed-file format gate.
+- After commit and push, this branch is the candidate TASK-11 base. TASK-10 is fully accepted and safe to use as TASK-11's base, subject to the existing trusted-localhost and Starlette multipart-spooling residual risk.
