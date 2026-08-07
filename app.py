@@ -105,6 +105,9 @@ from core.deliverables import (
 from core.commercial import AssessmentVersion, CommercialItem, CommercialLink, CommercialReview
 from core.commercial_repository import CommercialRepository
 from core.commercial_service import CommercialService
+from core.contract_risk import ContractIssue, RiskAssessment, RiskLink, RiskReview, RiskSource
+from core.contract_risk_repository import ContractRiskRepository
+from core.contract_risk_service import ContractRiskService
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -175,6 +178,8 @@ deliverable_repository = DeliverableRepository(db)
 deliverable_service = DeliverableService(deliverable_repository)
 commercial_repository = CommercialRepository(db)
 commercial_service = CommercialService(commercial_repository)
+contract_risk_repository = ContractRiskRepository(db)
+contract_risk_service = ContractRiskService(contract_risk_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -999,6 +1004,116 @@ async def review_commercial(commercial_item_id: str, request: Request) -> JSONRe
     actor = str(body.pop("actor", LOCAL_ACTOR))
     try:
         value = commercial_service.review(CommercialReview.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/contract-risks", response_class=HTMLResponse)
+async def contract_risks_register(
+    bid_id: str | None = None, as_of: str | None = None
+) -> HTMLResponse:
+    projection_date = _parse_as_of(as_of)
+    return render(
+        "contract_risks.html",
+        issues=contract_risk_service.list(bid_id),
+        bids=bid_repository.list_bids(),
+        bid_id=bid_id or "",
+        gaps=contract_risk_service.gaps(bid_id, projection_date),
+        metrics=contract_risk_service.metrics(bid_id, projection_date),
+    )
+
+
+@app.get("/contract-risks/{issue_id}", response_class=HTMLResponse)
+async def contract_risk_detail(issue_id: str) -> HTMLResponse:
+    try:
+        detail = contract_risk_service.detail(issue_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("contract_risk_detail.html", **detail)
+
+
+@app.get("/api/contract-risks")
+async def contract_risks_api(bid_id: str | None = None, as_of: str | None = None) -> JSONResponse:
+    projection_date = _parse_as_of(as_of)
+    return JSONResponse(
+        {
+            "issues": contract_risk_service.list(bid_id),
+            "gaps": [
+                gap.model_dump(mode="json")
+                for gap in contract_risk_service.gaps(bid_id, projection_date)
+            ],
+            "metrics": contract_risk_service.metrics(bid_id, projection_date),
+        }
+    )
+
+
+@app.post("/api/contract-risks")
+async def create_contract_risk(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = contract_risk_service.create(ContractIssue.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/contract-risks/{issue_id}/sources")
+async def add_contract_source(issue_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["issue_id"] = issue_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = contract_risk_service.add_source(RiskSource.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/contract-risks/{issue_id}/links")
+async def add_contract_link(issue_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["issue_id"] = issue_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = contract_risk_service.add_link(RiskLink.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/contract-risks/{issue_id}/activate")
+async def activate_contract_risk(issue_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        contract_risk_service.activate(
+            issue_id, int(body.get("expected_version", 1)), str(body.get("actor", LOCAL_ACTOR))
+        )
+        return JSONResponse({"issue_id": issue_id, "activated": True})
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/contract-risks/{issue_id}/assessments")
+async def add_contract_assessment(issue_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["issue_id"] = issue_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = contract_risk_service.assessment(RiskAssessment.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/contract-risks/{issue_id}/reviews")
+async def add_contract_review(issue_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["issue_id"] = issue_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = contract_risk_service.review(RiskReview.model_validate(body), actor)
         return JSONResponse(value.model_dump(mode="json"), status_code=201)
     except (ValidationError, ValueError) as exc:
         raise _mutation_error(exc) from exc

@@ -91,6 +91,7 @@ class MyDayCounts(BaseModel):
     supplier_attention: int = 0
     deliverable_attention: int = 0
     commercial_attention: int = 0
+    contract_risk_attention: int = 0
 
 
 class MyDayProjection(BaseModel):
@@ -111,6 +112,7 @@ class MyDayProjection(BaseModel):
     supplier_attention: list[dict[str, str]] = Field(default_factory=list)
     deliverable_attention: list[dict[str, str]] = Field(default_factory=list)
     commercial_attention: list[dict[str, str]] = Field(default_factory=list)
+    contract_risk_attention: list[dict[str, str]] = Field(default_factory=list)
     counts: MyDayCounts
 
 
@@ -208,6 +210,7 @@ def project_my_day(
     supplier_attention: list[dict[str, str]] | None = None,
     deliverable_attention: list[dict[str, str]] | None = None,
     commercial_attention: list[dict[str, str]] | None = None,
+    contract_risk_attention: list[dict[str, str]] | None = None,
 ) -> MyDayProjection:
     """Classify and order supplied snapshots without I/O or hidden time access."""
     if horizon_days < 1:
@@ -255,6 +258,7 @@ def project_my_day(
         supplier_attention=supplier_attention or [],
         deliverable_attention=deliverable_attention or [],
         commercial_attention=commercial_attention or [],
+        contract_risk_attention=contract_risk_attention or [],
         counts=MyDayCounts(
             overdue=sum(item.is_overdue for item in active),
             due_today=sum(item.is_due_today for item in active),
@@ -267,5 +271,6 @@ def project_my_day(
             supplier_attention=len(supplier_attention or []),
             deliverable_attention=len(deliverable_attention or []),
             commercial_attention=len(commercial_attention or []),
+            contract_risk_attention=len(contract_risk_attention or []),
         ),
     )

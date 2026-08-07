@@ -1225,3 +1225,60 @@ G2/G5 readiness and My Day integration use read-only capability/attention adapte
 ## Conclusion
 
 TASK-13 is fully accepted and safe as the next task's base after commit and remote parity verification.
+
+# TASK-14 Contract Risk and Deviation Controls
+
+## Status
+COMPLETE
+
+## Base and migration
+
+- Accepted base: `task-13-commercial-completeness` at `63fb058b322551a1ad4f5c0c0fad45bb29272ddb`, parity 0/0.
+- Branch: `task-14-contract-risk-control`.
+- Additive migration: `task_14_contract_risk_control_v1`, parent `task_13_commercial_completeness_v1`.
+
+## Concept inventory and protected state
+
+Existing legacy contract findings, negotiation issues, obligations, knowledge terms, and report-extracted clause notes are advisory/analysis records, not authoritative contract-risk issues. TASK-08R through TASK-13 remain authoritative in their own domains and are linked explicitly without mutation. TASK-06 gate policy and TASK-07 work-item authority remain unchanged.
+
+Protected files remain exact and excluded from the commit:
+
+```text
+3c14cb821ed26d209a777d020fb340df87694f2e4da124719814102e27a1aaaa  docs/tasks/TASK-06-readiness-engine.md
+4e683123d19bce4d85081408d5bfee5b0ebeb7d8d6c9d98ecc4dd52d1d467377  uv.lock
+47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d  .claude/settings.local.json
+```
+
+## Implementation
+
+- `core/contract_risk.py` defines the 15 required categories, source/link/lifecycle/disposition/review vocabularies, deterministic likelihood/consequence matrix, exact Decimal exposure validation, and immutable-version models.
+- `core/contract_risk_repository.py` provides transactional SQLite migration, exact same-bid links, monotonic assessment versions, independent-review enforcement, audit writes, optimistic activation, and direct-SQL immutability/hard-delete triggers.
+- `core/contract_risk_rules.py` provides stable deterministic gap codes and metrics.
+- `core/contract_risk_service.py` provides workflow/read projections.
+- `app.py`, `templates/contract_risks.html`, and `templates/contract_risk_detail.html` provide register/detail/API workflows with explicit “review is not approval” and “G4 not approved” wording.
+- My Day receives contract-risk attention read-only; no TASK-07 work items are created.
+- `scripts/validate_task_14.py`, `scripts/asgi_acceptance_task14.py`, and `tests/unit/test_contract_risk.py` provide deterministic and runtime evidence.
+
+Assessment history distinguishes latest from accepted review state. Customer/company/target/fallback positions are explicitly proposed, never authorized. Monetary values preserve exact Decimal text and currency; schedule/percentage/qualitative/uncapped bases remain distinct and are never aggregated. Risk rating is the neutral likelihood×consequence matrix only; it is not materiality or approval. G4 is never passed, approved, overridden, or represented as complete.
+
+## Acceptance evidence
+
+- Focused TASK-14 tests: `2 passed`.
+- Unrestricted suite: `273 passed, 26 warnings`, normal completion.
+- `uv run python scripts/validate_task_14.py`: `TASK-14 validation: PASS`.
+- `uv run python scripts/asgi_acceptance_task14.py`: `TASK-14 ASGI acceptance: PASS`.
+- Ruff format/check: pass; canonical and explicit strict mypy: pass.
+- Clean/idempotent migration smoke: pass; isolated application import: pass.
+- Dependency-free ASGI covered dashboard, bid, My Day, documents, requirements, scope/interfaces, suppliers, deliverables, commercial, and contract-risk pages plus the risk API.
+- Exact risk matrix, Decimal range round-trip, self-review rejection, source/link/assessment workflows, and direct-SQL assessment immutability are proven by focused/validation tests.
+- `git diff --check`: pass.
+
+No production data, real clauses, company positions, approval thresholds, prices, managed bytes, secrets, external assets, telemetry, non-loopback network, dependencies, or deferred TASK-15 behavior was accessed. Live socket use remains subject to the trusted-localhost sandbox; in-process ASGI acceptance passed.
+
+## Deviations and residual risks
+
+Contract-risk attention is exposed through deterministic read seams; pure TASK-06 policy remains unchanged. G4 remains not assessable pending later approval, legal, finance, margin, and delegation controls. No legal advice, approval routing, residual-risk acceptance, expected-value risk cost, negotiation, concessions, proposal, submission, or handover behavior was implemented.
+
+## Conclusion
+
+TASK-14 is fully accepted and safe as the next task's base after commit and remote parity verification.
