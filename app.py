@@ -108,6 +108,16 @@ from core.commercial_service import CommercialService
 from core.contract_risk import ContractIssue, RiskAssessment, RiskLink, RiskReview, RiskSource
 from core.contract_risk_repository import ContractRiskRepository
 from core.contract_risk_service import ContractRiskService
+from core.approval_authority import (
+    ApprovalEvent,
+    AuthorityPolicy,
+    DecisionCase,
+    SubjectLink,
+    DecisionPackage,
+    RouteCycle,
+)
+from core.approval_repository import ApprovalRepository
+from core.approval_service import ApprovalService
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -180,6 +190,8 @@ commercial_repository = CommercialRepository(db)
 commercial_service = CommercialService(commercial_repository)
 contract_risk_repository = ContractRiskRepository(db)
 contract_risk_service = ContractRiskService(contract_risk_repository)
+approval_repository = ApprovalRepository(db)
+approval_service = ApprovalService(approval_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -1031,6 +1043,111 @@ async def contract_risk_detail(issue_id: str) -> HTMLResponse:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return render("contract_risk_detail.html", **detail)
+
+
+@app.get("/decisions", response_class=HTMLResponse)
+async def decisions_register(bid_id: str | None = None) -> HTMLResponse:
+    return render(
+        "decisions.html",
+        bids=bid_repository.list_bids(),
+        bid_id=bid_id or "",
+        policies=approval_repository.policies(),
+        cases=approval_repository.cases(bid_id),
+        gaps=approval_service.gaps(bid_id),
+    )
+
+
+@app.get("/api/decisions")
+async def decisions_api(bid_id: str | None = None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "policies": approval_repository.policies(),
+            "cases": approval_repository.cases(bid_id),
+            "routes": approval_repository.routes(bid_id),
+            "gaps": approval_service.gaps(bid_id),
+        }
+    )
+
+
+@app.post("/api/authority-policies")
+async def create_authority_policy(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = approval_service.create_policy(AuthorityPolicy.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/authority-policies/{policy_id}/publish")
+async def publish_authority_policy(policy_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        approval_service.publish_policy(policy_id, str(body.get("actor", LOCAL_ACTOR)))
+        return JSONResponse({"policy_id": policy_id, "published": True})
+    except ValueError as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/decision-cases")
+async def create_decision_case(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = approval_service.create_case(DecisionCase.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/decision-cases/{case_id}/subjects")
+async def add_decision_subject(case_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["case_id"] = case_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = approval_service.add_subject(SubjectLink.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/decision-cases/{case_id}/packages")
+async def add_decision_package(case_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["case_id"] = case_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = approval_service.add_package(DecisionPackage.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/decision-cases/{case_id}/route")
+async def route_decision_case(case_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["case_id"] = case_id
+    facts = body.pop("facts", {})
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = approval_service.route(RouteCycle.model_validate(body), facts, actor=actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/approval-routes/{route_id}/events")
+async def record_approval_event(route_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["route_id"] = route_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = approval_service.event(ApprovalEvent.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
 
 
 @app.get("/api/contract-risks")

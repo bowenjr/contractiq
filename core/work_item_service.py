@@ -295,7 +295,28 @@ class MyDayService:
         deliverable_attention: list[dict[str, str]] = []
         commercial_attention: list[dict[str, str]] = []
         contract_risk_attention: list[dict[str, str]] = []
+        approval_attention: list[dict[str, str]] = []
         with self.db._conn() as conn:
+            approval_tables_ready = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decision_cases'"
+                ).fetchone()
+                is not None
+            )
+            if approval_tables_ready:
+                rows = conn.execute(
+                    "SELECT bid_id, case_id, lifecycle_state FROM decision_cases "
+                    "WHERE lifecycle_state IN ('ACTIVE', 'DRAFT') ORDER BY bid_id, case_id"
+                ).fetchall()
+                approval_attention.extend(
+                    {
+                        "bid_id": str(row["bid_id"]),
+                        "entity_id": str(row["case_id"]),
+                        "code": "APPROVAL_PENDING",
+                        "severity": "HIGH",
+                    }
+                    for row in rows
+                )
             supplier_tables_ready = (
                 conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='supplier_requests'"
@@ -534,6 +555,7 @@ class MyDayService:
             deliverable_attention=deliverable_attention,
             commercial_attention=commercial_attention,
             contract_risk_attention=contract_risk_attention,
+            approval_attention=approval_attention,
         )
 
 
