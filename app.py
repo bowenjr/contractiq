@@ -136,6 +136,9 @@ from core.negotiation import (
 )
 from core.negotiation_repository import NegotiationRepository
 from core.negotiation_service import NegotiationService
+from core.proposals import ProposalFamily, ProposalProfile, ProposalReview, ProposalVersion
+from core.proposal_repository import ProposalRepository
+from core.proposal_service import ProposalService
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -214,6 +217,8 @@ scenario_repository = ScenarioRepository(db)
 scenario_service = ScenarioService(scenario_repository)
 negotiation_repository = NegotiationRepository(db)
 negotiation_service = NegotiationService(negotiation_repository)
+proposal_repository = ProposalRepository(db)
+proposal_service = ProposalService(proposal_repository, BASE_DIR / "proposal_artifacts")
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -1327,6 +1332,86 @@ async def record_negotiation_concession(request: Request) -> JSONResponse:
         )
         return JSONResponse(value.model_dump(mode="json"), status_code=201)
     except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/proposals", response_class=HTMLResponse)
+async def proposals_register(bid_id: str | None = None) -> HTMLResponse:
+    return render(
+        "proposals.html",
+        families=proposal_repository.families(bid_id),
+        metrics=proposal_service.metrics(bid_id),
+        bid_id=bid_id or "",
+    )
+
+
+@app.get("/api/proposals")
+async def proposals_api(bid_id: str | None = None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "families": proposal_repository.families(bid_id),
+            "metrics": proposal_service.metrics(bid_id),
+            "submission_assurance": "DEFERRED",
+        }
+    )
+
+
+@app.post("/api/proposals/profiles")
+async def create_proposal_profile(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = proposal_service.create_profile(ProposalProfile.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/proposals/families")
+async def create_proposal_family(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = proposal_service.create_family(ProposalFamily.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/proposals/versions")
+async def create_proposal_version(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = proposal_service.add_version(ProposalVersion.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/proposals/versions/{version_id}/review")
+async def review_proposal_version(version_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["proposal_version_id"] = version_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    bid_id = str(body.pop("bid_id", "synthetic"))
+    try:
+        value = proposal_service.review(ProposalReview.model_validate(body), bid_id, actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/proposals/versions/{version_id}/render")
+async def render_proposal_version(version_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = proposal_service.render(ProposalVersion.model_validate(body), actor)
+        return JSONResponse(
+            {"artifacts": [item.model_dump(mode="json") for item in value]}, status_code=201
+        )
+    except (ValidationError, ValueError, OSError) as exc:
         raise _mutation_error(exc) from exc
 
 

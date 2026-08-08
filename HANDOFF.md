@@ -1,37 +1,38 @@
-# Handoff — TASK-17
+# Handoff — TASK-18
 
 ## Status
 COMPLETE
 
-## Baseline and migration
+## Baseline
 
-- Accepted base: `task-16-commercial-scenarios` at `dd9682fd538c18c63f75b8818f838e69db94194d`, migration `task_16_commercial_scenarios_v1`, parity `0/0`.
-- Branch: `task-17-negotiation-concessions`.
-- Migration: `task_17_negotiation_concessions_v1`, additive and idempotent.
-- No company negotiation policy, threshold, named negotiator, approver, position, minimum, or walk-away authority is seeded.
+- Accepted base: `task-17-negotiation-concessions` at `8c08bcbaf35c3e49b3e92fd1d137803592d8436a`, migration `task_17_negotiation_concessions_v1`, parity `0/0`.
+- Branch: `task-18-proposal-production`.
+- Migration: `task_18_proposal_production_v1`, additive and idempotent.
+- No company presentation profile, branding, standard wording, customer-offer policy, approver, or submission identity is seeded.
 
 ## Implementation
 
-- `core/negotiation.py` — applicability, priorities, position ladders, immutable plan versions, mandates, conditional trades, movement events, concessions, value-received states, Decimal limits, and authority validation.
-- `core/negotiation_repository.py` — additive SQLite migration, audit writes, monotonic plan versions, same-bid identities, immutable movement/concession/version triggers, hard-delete protection, and metrics.
-- `core/negotiation_service.py` — explicit-authority workflow boundary; no default mandate, auto-commit, or self-approval path.
-- `app.py` — Negotiations register/API and safe plan/version/mandate/trade/movement/concession routes.
-- `templates/negotiations.html` — safe server-rendered register; empty state never implies no negotiation required.
-- `scripts/validate_task_17.py` — synthetic deterministic applicability/plan/mandate/trade/authority-at-event/direct-SQL oracle.
-- `scripts/asgi_acceptance_task17.py` — dependency-free in-process ASGI acceptance.
-- `tests/unit/test_negotiation.py` — priority ladder and explicit mandate regression coverage.
+- `core/proposals.py` — applicability, effective profiles, families, immutable versions, customer-visible section firewall, canonical fingerprints, and local HTML/DOCX/PDF/JSON rendering.
+- `core/proposal_repository.py` — additive SQLite schema, exact metadata/audit writes, monotonic versions, immutable version/artifact triggers, hard-delete protection, reviews, and explicit baseline prerequisites.
+- `core/proposal_service.py` — profile/family/version/review/render workflow boundary.
+- `app.py` — Proposals register/API, profile/family/version/review/render routes, and submission-assurance-deferred projection.
+- `templates/proposals.html` — safe server-rendered proposal and offer-baseline register.
+- `scripts/validate_task_18.py` — synthetic migration, rendering, artifact-hash/size, review, and direct-SQL oracle.
+- `scripts/asgi_acceptance_task18.py` — dependency-free in-process ASGI acceptance.
+- `tests/unit/test_proposals.py` — internal-data firewall and structured-source tests.
 
-Conditional GIVE/GET trades cannot commit before evidenced value. Company commitments require explicit authority-at-event evidence. Concessions require an authorized actor, issue, action, window, and currency-safe limit. Customer movements remain observations and do not create company authority. TASK-16 remains the sole arithmetic engine; no proposal/submission/award/handover behavior was added.
+Rendered artifacts are local-only and metadata records store relative paths, media types, byte sizes, hashes, and verification state. Review is independent data-quality acceptance; approval and explicit baseline selection remain separate. No transmission, receipt, sender, recipient, portal, email, or submission evidence exists. Submission assurance is explicitly deferred.
 
 ## Acceptance evidence
 
-- Focused TASK-17 tests: `2 passed`.
-- Full suite: `280 passed, 26 warnings`.
-- `uv run python scripts/validate_task_17.py`: `TASK-17 validation: PASS`.
-- `uv run python scripts/asgi_acceptance_task17.py`: `TASK-17 ASGI acceptance: PASS`.
+- Focused TASK-18 tests: `2 passed`.
+- Full suite: `282 passed, 26 warnings`.
+- `uv run python scripts/validate_task_18.py`: `TASK-18 validation: PASS`.
+- `uv run python scripts/asgi_acceptance_task18.py`: `TASK-18 ASGI acceptance: PASS`.
+- HTML, DOCX, PDF, and canonical JSON artifacts generated and verified with non-zero sizes and SHA-256 metadata.
 - Ruff format/check: PASS; canonical mypy: PASS.
-- Isolated import, migration, idempotence, and Uvicorn startup/shutdown: PASS.
-- Direct-SQL movement/version/concession deletion is rejected; unevidenced conditional commitment is rejected; missing authority is rejected.
+- Isolated import, migration, idempotence, Uvicorn startup/shutdown, and diff-check: PASS.
+- Self-review rejected; customer-visible internal margin/approval/mandate text rejected; immutable proposal deletion rejected.
 - No TASK-06 override or TASK-07 work item is created.
 
 ## Protected files
@@ -46,8 +47,8 @@ All remain untracked/unstaged or the known local modification and were excluded 
 
 ## G4/G5/G6 and scope
 
-Negotiation authority and evidence remain separate from approval, commercial calculation, and baseline selection. G4/G5/G6 fail closed unless exact current upstream evidence is present; proposal/submission readiness remains deferred to TASK-18. No real company/customer/supplier information, managed correspondence, recordings, transcripts, secrets, external services, dependencies, or deferred functionality was accessed.
+Proposal-ready and submission-assurance-deferred states remain distinct. G4/G5/G6 remain fail-closed unless exact current upstream evidence and required approvals exist. No proposal was transmitted and no receipt evidence was created. No real company/customer/supplier information, branding, templates, managed documents, secrets, external services, or later-roadmap functionality was accessed.
 
 ## Conclusion
 
-TASK-17 is fully accepted and safe as TASK-18’s base after final commit and remote parity verification.
+TASK-18 is fully accepted as the Phase 3 testing baseline. Development stopped after TASK-18; TASK-19 was not started.
