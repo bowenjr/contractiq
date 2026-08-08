@@ -1,43 +1,38 @@
-# Handoff — TASK-16
+# Handoff — TASK-17
 
 ## Status
 COMPLETE
 
-## Baseline
+## Baseline and migration
 
-- Accepted base: `task-15-approval-authority` at `d9ba64e9147bd980be69cf07c7ec2d5fc8037969`, migration `task_15_approval_authority_v1`, parity `0/0`.
-- Branch: `task-16-commercial-scenarios`.
-- Migration: `task_16_commercial_scenarios_v1`, additive and idempotent.
-- No financial or company approval policy, threshold, FX rate, margin floor, or named approver is seeded.
+- Accepted base: `task-16-commercial-scenarios` at `dd9682fd538c18c63f75b8818f838e69db94194d`, migration `task_16_commercial_scenarios_v1`, parity `0/0`.
+- Branch: `task-17-negotiation-concessions`.
+- Migration: `task_17_negotiation_concessions_v1`, additive and idempotent.
+- No company negotiation policy, threshold, named negotiator, approver, position, minimum, or walk-away authority is seeded.
 
 ## Implementation
 
-- `core/commercial_scenarios.py` — bounded family/version/source/assumption/cash-event/review/comparison/baseline models and pure Decimal calculation.
-- `core/scenario_repository.py` — additive SQLite persistence, immutable version/result triggers, monotonic versions, audit writes, reviews, and baseline lineage.
-- `core/scenario_service.py` — calculation/review/baseline workflow boundary.
-- `app.py` — scenario repository/service initialization and register/API/review/baseline routes.
-- `templates/commercial_scenarios.html` — safe server-rendered register explicitly distinguishing review, approval, baseline, and G6.
-- `scripts/validate_task_16.py` — synthetic migration, exact arithmetic, fingerprint, independent review, baseline, and direct-SQL oracle.
-- `scripts/asgi_acceptance_task16.py` — dependency-free ASGI register/API acceptance.
-- `tests/unit/test_commercial_scenarios.py` — exact Decimal, zero-denominator, fingerprint, and currency validation tests.
-- `core/approval_authority.py` — additive TASK-15 scenario/price-margin/financial-exposure decision and scenario-version subject vocabularies.
+- `core/negotiation.py` — applicability, priorities, position ladders, immutable plan versions, mandates, conditional trades, movement events, concessions, value-received states, Decimal limits, and authority validation.
+- `core/negotiation_repository.py` — additive SQLite migration, audit writes, monotonic plan versions, same-bid identities, immutable movement/concession/version triggers, hard-delete protection, and metrics.
+- `core/negotiation_service.py` — explicit-authority workflow boundary; no default mandate, auto-commit, or self-approval path.
+- `app.py` — Negotiations register/API and safe plan/version/mandate/trade/movement/concession routes.
+- `templates/negotiations.html` — safe server-rendered register; empty state never implies no negotiation required.
+- `scripts/validate_task_17.py` — synthetic deterministic applicability/plan/mandate/trade/authority-at-event/direct-SQL oracle.
+- `scripts/asgi_acceptance_task17.py` — dependency-free in-process ASGI acceptance.
+- `tests/unit/test_negotiation.py` — priority ladder and explicit mandate regression coverage.
 
-## Deterministic controls
-
-All authoritative amounts are `Decimal`; values are quantized with explicit scale and `ROUND_HALF_UP`. Margin/markup are integer basis points with explicit zero-denominator behavior. Cash events are date/event-ID ordered and produce cumulative balances and peak working capital. FX is an explicit immutable assumption only; there is no lookup, default rate, network, or float path. Scenario fingerprints are canonical SHA-256 values. NEGOTIATED/AWARD labels remain unsupported comparison labels and cannot prove G6, negotiation, submission, or award.
-
-Calculation review is independent data-quality acceptance. Baseline selection is a separate append-only action and requires an accepted review; approval routes are not auto-created or auto-selected by calculation. G4/G5 remain honest and G6 remains incomplete.
+Conditional GIVE/GET trades cannot commit before evidenced value. Company commitments require explicit authority-at-event evidence. Concessions require an authorized actor, issue, action, window, and currency-safe limit. Customer movements remain observations and do not create company authority. TASK-16 remains the sole arithmetic engine; no proposal/submission/award/handover behavior was added.
 
 ## Acceptance evidence
 
-- Focused TASK-16 tests: `3 passed`.
-- Full suite: `278 passed, 26 warnings`.
-- `uv run python scripts/validate_task_16.py`: `TASK-16 validation: PASS`.
-- `uv run python scripts/asgi_acceptance_task16.py`: `TASK-16 ASGI acceptance: PASS`.
+- Focused TASK-17 tests: `2 passed`.
+- Full suite: `280 passed, 26 warnings`.
+- `uv run python scripts/validate_task_17.py`: `TASK-17 validation: PASS`.
+- `uv run python scripts/asgi_acceptance_task17.py`: `TASK-17 ASGI acceptance: PASS`.
 - Ruff format/check: PASS; canonical mypy: PASS.
 - Isolated import, migration, idempotence, and Uvicorn startup/shutdown: PASS.
-- Direct-SQL immutable scenario deletion: rejected; self-review: rejected; baseline without review: rejected.
-- No TASK-06 override or TASK-07 work item is created by scenario reads/calculation.
+- Direct-SQL movement/version/concession deletion is rejected; unevidenced conditional commitment is rejected; missing authority is rejected.
+- No TASK-06 override or TASK-07 work item is created.
 
 ## Protected files
 
@@ -49,10 +44,10 @@ Calculation review is independent data-quality acceptance. Baseline selection is
 
 All remain untracked/unstaged or the known local modification and were excluded from the commit.
 
-## Scope, scans, and residual risk
+## G4/G5/G6 and scope
 
-No production data, managed bytes, real prices/rates/policies/approvers, secrets, external assets, telemetry, network services, dependencies, or deferred negotiation/proposal/submission/award/handover functionality was accessed. The trusted localhost deployment boundary and inherited multipart spooling risk remain unchanged.
+Negotiation authority and evidence remain separate from approval, commercial calculation, and baseline selection. G4/G5/G6 fail closed unless exact current upstream evidence is present; proposal/submission readiness remains deferred to TASK-18. No real company/customer/supplier information, managed correspondence, recordings, transcripts, secrets, external services, dependencies, or deferred functionality was accessed.
 
 ## Conclusion
 
-TASK-16 is fully accepted and safe as TASK-17’s base after final commit and remote parity verification.
+TASK-17 is fully accepted and safe as TASK-18’s base after final commit and remote parity verification.

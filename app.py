@@ -126,6 +126,16 @@ from core.commercial_scenarios import (
 )
 from core.scenario_repository import ScenarioRepository
 from core.scenario_service import ScenarioService
+from core.negotiation import (
+    ConditionalTrade,
+    Concession,
+    Mandate,
+    NegotiationMovement,
+    NegotiationPlan,
+    PlanVersion,
+)
+from core.negotiation_repository import NegotiationRepository
+from core.negotiation_service import NegotiationService
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -202,6 +212,8 @@ approval_repository = ApprovalRepository(db)
 approval_service = ApprovalService(approval_repository)
 scenario_repository = ScenarioRepository(db)
 scenario_service = ScenarioService(scenario_repository)
+negotiation_repository = NegotiationRepository(db)
+negotiation_service = NegotiationService(negotiation_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -1225,6 +1237,94 @@ async def select_scenario_baseline(request: Request) -> JSONResponse:
     body["selected_by"] = actor
     try:
         value = scenario_service.select_baseline(BaselineSelection.model_validate(body))
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/negotiations", response_class=HTMLResponse)
+async def negotiations_register(bid_id: str | None = None) -> HTMLResponse:
+    return render(
+        "negotiations.html",
+        plans=negotiation_repository.plans(bid_id),
+        metrics=negotiation_service.metrics(bid_id),
+        bid_id=bid_id or "",
+    )
+
+
+@app.get("/api/negotiations")
+async def negotiations_api(bid_id: str | None = None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "plans": negotiation_repository.plans(bid_id),
+            "metrics": negotiation_service.metrics(bid_id),
+        }
+    )
+
+
+@app.post("/api/negotiations/plans")
+async def create_negotiation_plan(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = negotiation_service.create_plan(NegotiationPlan.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/negotiations/plan-versions")
+async def create_negotiation_plan_version(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = negotiation_service.add_version(PlanVersion.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/negotiations/mandates")
+async def create_negotiation_mandate(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = negotiation_service.add_mandate(Mandate.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/negotiations/trades")
+async def create_negotiation_trade(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = negotiation_service.add_trade(ConditionalTrade.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/negotiations/movements")
+async def record_negotiation_movement(request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        value = negotiation_service.add_movement(NegotiationMovement.model_validate(body))
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/negotiations/concessions")
+async def record_negotiation_concession(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    mandate = Mandate.model_validate(body.pop("mandate")) if body.get("mandate") else None
+    try:
+        value = negotiation_service.add_concession(
+            Concession.model_validate(body), mandate, actor, datetime.now()
+        )
         return JSONResponse(value.model_dump(mode="json"), status_code=201)
     except (ValidationError, ValueError) as exc:
         raise _mutation_error(exc) from exc
