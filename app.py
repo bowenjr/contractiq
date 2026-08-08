@@ -118,6 +118,14 @@ from core.approval_authority import (
 )
 from core.approval_repository import ApprovalRepository
 from core.approval_service import ApprovalService
+from core.commercial_scenarios import (
+    BaselineSelection,
+    ScenarioFamily,
+    ScenarioReview,
+    ScenarioVersion,
+)
+from core.scenario_repository import ScenarioRepository
+from core.scenario_service import ScenarioService
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -192,6 +200,8 @@ contract_risk_repository = ContractRiskRepository(db)
 contract_risk_service = ContractRiskService(contract_risk_repository)
 approval_repository = ApprovalRepository(db)
 approval_service = ApprovalService(approval_repository)
+scenario_repository = ScenarioRepository(db)
+scenario_service = ScenarioService(scenario_repository)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -1146,6 +1156,75 @@ async def record_approval_event(route_id: str, request: Request) -> JSONResponse
     actor = str(body.pop("actor", LOCAL_ACTOR))
     try:
         value = approval_service.event(ApprovalEvent.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get("/commercial-scenarios", response_class=HTMLResponse)
+async def commercial_scenarios_register(bid_id: str | None = None) -> HTMLResponse:
+    return render(
+        "commercial_scenarios.html",
+        families=scenario_repository.families(bid_id),
+        bid_id=bid_id or "",
+        metrics=scenario_service.metrics(bid_id),
+    )
+
+
+@app.get("/api/commercial-scenarios")
+async def commercial_scenarios_api(bid_id: str | None = None) -> JSONResponse:
+    return JSONResponse(
+        {
+            "families": scenario_repository.families(bid_id),
+            "baselines": scenario_repository.baselines(bid_id),
+            "metrics": scenario_service.metrics(bid_id),
+        }
+    )
+
+
+@app.post("/api/commercial-scenarios/families")
+async def create_scenario_family(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = scenario_service.create_family(ScenarioFamily.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial-scenarios/versions")
+async def calculate_scenario_version(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = scenario_service.calculate(ScenarioVersion.model_validate(body), actor)
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial-scenarios/versions/{version_id}/reviews")
+async def review_scenario_version(version_id: str, request: Request) -> JSONResponse:
+    body = await request.json()
+    body["scenario_version_id"] = version_id
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    try:
+        value = scenario_service.review(
+            ScenarioReview.model_validate(body), str(body.get("bid_id", "synthetic")), actor
+        )
+        return JSONResponse(value.model_dump(mode="json"), status_code=201)
+    except (ValidationError, ValueError) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.post("/api/commercial-scenarios/baselines")
+async def select_scenario_baseline(request: Request) -> JSONResponse:
+    body = await request.json()
+    actor = str(body.pop("actor", LOCAL_ACTOR))
+    body["selected_by"] = actor
+    try:
+        value = scenario_service.select_baseline(BaselineSelection.model_validate(body))
         return JSONResponse(value.model_dump(mode="json"), status_code=201)
     except (ValidationError, ValueError) as exc:
         raise _mutation_error(exc) from exc
