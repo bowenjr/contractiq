@@ -144,3 +144,34 @@ def approval_gaps(
         ):
             add("APPROVAL_EXPIRED", bid, cid, "Approval validity has expired.")
     return sorted(result, key=lambda row: (row["bid_id"], row["case_id"], row["code"]))
+
+
+def approval_metrics(
+    cases: list[dict[str, Any]],
+    routes: list[dict[str, Any]],
+    gaps: list[dict[str, str]],
+) -> dict[str, int | float]:
+    """Return deterministic counts; zero denominators never fabricate ratios."""
+    route_states = [str(row.get("state")) for row in routes]
+    gap_counts = {code: sum(item.get("code") == code for item in gaps) for code in GAP_CODES}
+    approved = sum(state == "APPROVED" for state in route_states)
+    total = len(route_states)
+    result: dict[str, int | float] = {
+        "cases_total": len(cases),
+        "cases_draft": sum(row.get("lifecycle_state") == "DRAFT" for row in cases),
+        "cases_active": sum(row.get("lifecycle_state") == "ACTIVE" for row in cases),
+        "cases_closed": sum(row.get("lifecycle_state") == "CLOSED" for row in cases),
+        "cases_withdrawn": sum(row.get("lifecycle_state") == "WITHDRAWN" for row in cases),
+        "routes_total": total,
+        "routes_approved": approved,
+        "routes_pending": sum(state == "PENDING" for state in route_states),
+        "routes_rejected": sum(state == "REJECTED" for state in route_states),
+        "routes_changes_required": sum(state == "CHANGES_REQUIRED" for state in route_states),
+        "approved_ratio": approved / total if total else 0.0,
+    }
+    result.update({f"gap_{key}": value for key, value in gap_counts.items()})
+    result["approval_blockers"] = sum(item.get("severity") == "BLOCKING_ATTENTION" for item in gaps)
+    result["approval_advisories"] = sum(
+        item.get("severity") != "BLOCKING_ATTENTION" for item in gaps
+    )
+    return result

@@ -1065,6 +1065,7 @@ async def decisions_api(bid_id: str | None = None) -> JSONResponse:
             "cases": approval_repository.cases(bid_id),
             "routes": approval_repository.routes(bid_id),
             "gaps": approval_service.gaps(bid_id),
+            "metrics": approval_service.metrics(bid_id),
         }
     )
 

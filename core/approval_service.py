@@ -15,7 +15,7 @@ from core.approval_authority import (
     SubjectLink,
 )
 from core.approval_repository import ApprovalRepository
-from core.approval_rules import approval_gaps, match_policy
+from core.approval_rules import approval_gaps, approval_metrics, match_policy
 
 
 class ApprovalService:
@@ -89,4 +89,14 @@ class ApprovalService:
             self.repository.routes(bid_id),
             self.repository.policies(),
             as_of=as_of or datetime.now(),
+        )
+
+    def metrics(
+        self, bid_id: str | None = None, as_of: datetime | None = None
+    ) -> dict[str, int | float]:
+        gaps = self.gaps(bid_id, as_of)
+        return approval_metrics(
+            self.repository.cases(bid_id),
+            self.repository.routes(bid_id),
+            gaps,
         )
