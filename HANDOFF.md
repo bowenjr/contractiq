@@ -1,39 +1,27 @@
-# Handoff — TASK-18
+# Handoff — OPS-01
 
 ## Status
 COMPLETE
 
-## Baseline
+## Baseline and implementation
 
-- Accepted base: `task-17-negotiation-concessions` at `8c08bcbaf35c3e49b3e92fd1d137803592d8436a`, migration `task_17_negotiation_concessions_v1`, parity `0/0`.
-- Branch: `task-18-proposal-production`.
-- Migration: `task_18_proposal_production_v1`, additive and idempotent.
-- No company presentation profile, branding, standard wording, customer-offer policy, approver, or submission identity is seeded.
-
-## Implementation
-
-- `core/proposals.py` — applicability, effective profiles, families, immutable versions, customer-visible section firewall, canonical fingerprints, and local HTML/DOCX/PDF/JSON rendering.
-- `core/proposal_repository.py` — additive SQLite schema, exact metadata/audit writes, monotonic versions, immutable version/artifact triggers, hard-delete protection, reviews, and explicit baseline prerequisites.
-- `core/proposal_service.py` — profile/family/version/review/render workflow boundary.
-- `app.py` — Proposals register/API, profile/family/version/review/render routes, and submission-assurance-deferred projection.
-- `templates/proposals.html` — safe server-rendered proposal and offer-baseline register.
-- `scripts/validate_task_18.py` — synthetic migration, rendering, artifact-hash/size, review, and direct-SQL oracle.
-- `scripts/asgi_acceptance_task18.py` — dependency-free in-process ASGI acceptance.
-- `tests/unit/test_proposals.py` — internal-data firewall and structured-source tests.
-
-Rendered artifacts are local-only and metadata records store relative paths, media types, byte sizes, hashes, and verification state. Review is independent data-quality acceptance; approval and explicit baseline selection remain separate. No transmission, receipt, sender, recipient, portal, email, or submission evidence exists. Submission assurance is explicitly deferred.
+- Accepted TASK-18 base: `task-18-proposal-production` at `32130a7c0ab635f54b43d69d58a167815f636158`; migration `task_18_proposal_production_v1`; preflight parity `0/0`.
+- Branch: `ops-01-role-work-foundation`.
+- Migration: `ops_01_role_work_foundation_v1` (additive, idempotent, no seeded role data).
+- `core/work_items.py`, `core/work_item_repository.py`, and `core/work_item_service.py` generalize the accepted TASK-07 authority to optional bid context while preserving existing IDs, statuses, transitions, audit, and My Day projections. Added bounded category/domain/date/waiting/blocker/completion fields and SQLite hard-delete protection.
+- `core/ops_foundation.py` provides effective-dated DRAFT/PUBLISHED/RETIRED role profiles, stable 13-domain and 18-category vocabularies, context-link protection, migration marker, effective lookup, revision, and deterministic metrics.
+- `app.py`, `templates/my_work.html`, and `templates/role_framework.html` provide My Work, Role Framework setup/history, Quick Capture, JSON role/profile/work reads and writes, and an explicit Contract Controls boundary.
 
 ## Acceptance evidence
 
-- Focused TASK-18 tests: `2 passed`.
-- Full suite: `282 passed, 26 warnings`.
-- `uv run python scripts/validate_task_18.py`: `TASK-18 validation: PASS`.
-- `uv run python scripts/asgi_acceptance_task18.py`: `TASK-18 ASGI acceptance: PASS`.
-- HTML, DOCX, PDF, and canonical JSON artifacts generated and verified with non-zero sizes and SHA-256 metadata.
-- Ruff format/check: PASS; canonical mypy: PASS.
-- Isolated import, migration, idempotence, Uvicorn startup/shutdown, and diff-check: PASS.
-- Self-review rejected; customer-visible internal margin/approval/mandate text rejected; immutable proposal deletion rejected.
-- No TASK-06 override or TASK-07 work item is created.
+- Focused OPS-01 tests: `2 passed`.
+- Deterministic validation: `OPS-01 validation: PASS`.
+- Dependency-free ASGI acceptance: `OPS-01 ASGI acceptance: PASS`.
+- Unrestricted full suite: `284 passed, 26 warnings`.
+- Ruff changed production/validation files: PASS. Existing repository-wide Ruff findings are inherited baseline debt and were not rewritten.
+- Strict typing was exercised; inherited dependency errors remain in legacy untyped modules and are unchanged by OPS-01.
+- Synthetic migration, role setup, unassigned Quick Capture, effective profile, overlap rejection, unknown-category rejection, no-mutation metrics, and existing TASK-07 regression behavior were verified.
+- No external calls, notifications, integrations, AI, production data, managed documents, secrets, or deferred OPS-02/TASK-19 engines were used.
 
 ## Protected files
 
@@ -43,12 +31,14 @@ Rendered artifacts are local-only and metadata records store relative paths, med
 47362324978efd2ab0f479bd937ff70ca9a1c37a91224cd164c1b4f385d2622d  .claude/settings.local.json
 ```
 
-All remain untracked/unstaged or the known local modification and were excluded from the commit.
+All remain untracked/unstaged or the known local modification and are excluded from the commit.
 
-## G4/G5/G6 and scope
+## Decisions, deviations, and concerns
 
-Proposal-ready and submission-assurance-deferred states remain distinct. G4/G5/G6 remain fail-closed unless exact current upstream evidence and required approvals exist. No proposal was transmitted and no receipt evidence was created. No real company/customer/supplier information, branding, templates, managed documents, secrets, external services, or later-roadmap functionality was accessed.
+- `UNASSIGNED` remains a presentation state represented by a null bid/context; no fake context object is created.
+- Existing TASK-07 waiting/blocker minimum fields remain backward compatible; OPS-01 structured fields are additive and audited through the existing work-item transaction path.
+- Canonical repository-wide Ruff/mypy commands retain pre-existing failures in legacy files; no configuration, dependency, or protected file was changed.
 
-## Conclusion
+## Prior accepted evidence
 
-TASK-18 is fully accepted as the Phase 3 testing baseline. Development stopped after TASK-18; TASK-19 was not started.
+TASK-18 remains the accepted Phase 3 baseline; proposal-ready and submission-deferred states remain distinct, no proposal was transmitted, and no receipt evidence was created.

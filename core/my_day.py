@@ -139,6 +139,12 @@ def _bucket_for(item: WorkItem, as_of: date, horizon_days: int) -> MyDayBucket:
         days=1
     ) <= item.due_date <= as_of + timedelta(days=horizon_days):
         return MyDayBucket.UPCOMING
+    if item.next_action_date == as_of:
+        return MyDayBucket.DUE_TODAY
+    if item.next_action_date is not None and as_of + timedelta(
+        days=1
+    ) <= item.next_action_date <= as_of + timedelta(days=horizon_days):
+        return MyDayBucket.UPCOMING
     return MyDayBucket.LATER_OR_UNSCHEDULED
 
 
@@ -230,7 +236,7 @@ def project_my_day(
             bid_name=snapshot.bid_name,
             bucket=_bucket_for(item, as_of, horizon_days),
             is_overdue=item.due_date is not None and item.due_date < as_of,
-            is_due_today=item.due_date == as_of,
+            is_due_today=item.due_date == as_of or item.next_action_date == as_of,
         )
         buckets[projected.bucket].append(projected)
         active.append(projected)

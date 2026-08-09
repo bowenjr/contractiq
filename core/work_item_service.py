@@ -108,7 +108,7 @@ class WorkItemService:
         """Validate first, then create a parent-owned item with atomic audit."""
         request = WorkItemCreate.model_validate(data)
         normalized_actor = self._actor(actor)
-        if self.bid_repository.get_bid(request.bid_id) is None:
+        if request.bid_id is not None and self.bid_repository.get_bid(request.bid_id) is None:
             raise ValueError(f"Bid not found: {request.bid_id}")
 
         now = self._now()
@@ -125,6 +125,25 @@ class WorkItemService:
             blocker_note=(
                 request.blocker_note if request.status == WorkItemStatus.BLOCKED else None
             ),
+            category=request.category,
+            responsibility_domain=request.responsibility_domain,
+            next_action_date=request.next_action_date,
+            requester_label=request.requester_label,
+            waiting_party_kind=request.waiting_party_kind,
+            waiting_party_label=request.waiting_party_label,
+            waiting_owed=request.waiting_owed,
+            requested_date=request.requested_date,
+            chase_date=request.chase_date,
+            blocker_description=request.blocker_description,
+            resolution_owner=request.resolution_owner,
+            review_date=request.review_date,
+            completion_outcome=(
+                "Captured"
+                if request.status == WorkItemStatus.COMPLETED and request.completion_outcome is None
+                else request.completion_outcome
+            ),
+            completion_evidence=request.completion_evidence,
+            contribution_candidate=request.contribution_candidate,
             created_at=now,
             updated_at=now,
             completed_at=now if request.status == WorkItemStatus.COMPLETED else None,
@@ -220,6 +239,39 @@ class WorkItemService:
                     request.blocker_note if request.status == WorkItemStatus.BLOCKED else None
                 ),
                 "completed_at": (now if request.status == WorkItemStatus.COMPLETED else None),
+                "waiting_party_kind": request.waiting_party_kind
+                if request.status == WorkItemStatus.WAITING
+                else None,
+                "waiting_party_label": request.waiting_party_label
+                if request.status == WorkItemStatus.WAITING
+                else None,
+                "waiting_owed": request.waiting_owed
+                if request.status == WorkItemStatus.WAITING
+                else None,
+                "requested_date": request.requested_date
+                if request.status == WorkItemStatus.WAITING
+                else None,
+                "chase_date": request.chase_date
+                if request.status == WorkItemStatus.WAITING
+                else None,
+                "blocker_description": request.blocker_description
+                if request.status == WorkItemStatus.BLOCKED
+                else None,
+                "resolution_owner": request.resolution_owner
+                if request.status == WorkItemStatus.BLOCKED
+                else None,
+                "review_date": request.review_date
+                if request.status == WorkItemStatus.BLOCKED
+                else None,
+                "completion_outcome": request.completion_outcome
+                if request.status == WorkItemStatus.COMPLETED
+                else current.completion_outcome,
+                "completion_evidence": request.completion_evidence
+                if request.status == WorkItemStatus.COMPLETED
+                else current.completion_evidence,
+                "contribution_candidate": request.contribution_candidate
+                if request.contribution_candidate is not None
+                else current.contribution_candidate,
                 "updated_at": now,
                 "version": current.version + 1,
             }
@@ -268,7 +320,9 @@ class MyDayService:
         work_snapshots = [
             WorkItemSnapshot(
                 item=item,
-                bid_name=bid_names.get(item.bid_id, item.bid_id),
+                bid_name=bid_names.get(item.bid_id, item.bid_id)
+                if item.bid_id is not None
+                else "Unassigned",
             )
             for item in self.work_repository.list(active_only=True)
         ]

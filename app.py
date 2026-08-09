@@ -12,39 +12,56 @@ from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, BackgroundTasks
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
-import uvicorn
 
-from core.document_processor import DocumentProcessor
-from core.document_preprocessor import DocumentPreprocessor
-from core.llm_client import LMStudioClient
 from core.analysis_engine import AnalysisEngine
-from core.report_generator import ReportGenerator
-from core.excel_generator import ExcelGenerator
-from core.database import Database
-from core.knowledge_bootstrap import bootstrap_knowledge
-from core.knowledge_io import KnowledgeIO
-from core.knowledge_engine import KnowledgeEngine
-from core.bid_repository import BidRepository
-from core.work_item_repository import (
-    StaleWorkItemError,
-    WorkItemNotFoundError,
-    WorkItemRepository,
+from core.approval_authority import (
+    ApprovalEvent,
+    AuthorityPolicy,
+    DecisionCase,
+    DecisionPackage,
+    RouteCycle,
+    SubjectLink,
 )
-from core.work_item_service import MyDayService, WorkItemService, validation_error_message
-from core.my_day import WorkItemSnapshot
-from core.work_items import WorkItem, WorkItemKind, WorkItemPriority, WorkItemStatus
+from core.approval_repository import ApprovalRepository
+from core.approval_service import ApprovalService
+from core.bid_repository import BidRepository
+from core.commercial import AssessmentVersion, CommercialItem, CommercialLink, CommercialReview
+from core.commercial_repository import CommercialRepository
+from core.commercial_scenarios import (
+    BaselineSelection,
+    ScenarioFamily,
+    ScenarioReview,
+    ScenarioVersion,
+)
+from core.commercial_service import CommercialService
+from core.contract_risk import ContractIssue, RiskAssessment, RiskLink, RiskReview, RiskSource
+from core.contract_risk_repository import ContractRiskRepository
+from core.contract_risk_service import ContractRiskService
+from core.database import Database
+from core.deliverable_repository import DeliverableRepository
+from core.deliverable_service import DeliverableService
+from core.deliverables import (
+    Deliverable,
+    DeliverableLink,
+    ReviewDecisionRecord,
+    SubmissionVersion,
+    SupplierCommitment,
+)
 from core.document_control import (
     ControlledDocumentIdentityError,
     ControlledDocumentIntegrityError,
     DocumentCategory,
     DocumentLifecycle,
 )
+from core.document_preprocessor import DocumentPreprocessor
+from core.document_processor import DocumentProcessor
 from core.document_repository import (
     ControlledDocumentNotFoundError,
     DocumentRepository,
@@ -54,7 +71,34 @@ from core.document_repository import (
     StaleDocumentError,
 )
 from core.document_service import DocumentService
+from core.excel_generator import ExcelGenerator
+from core.knowledge_bootstrap import bootstrap_knowledge
+from core.knowledge_engine import KnowledgeEngine
+from core.knowledge_io import KnowledgeIO
+from core.llm_client import LMStudioClient
+from core.managed_document_storage import (
+    EmptyManagedFileError,
+    ManagedDocumentStorage,
+    ManagedFileTooLargeError,
+    ManagedStorageFailureError,
+)
+from core.my_day import WorkItemSnapshot
+from core.negotiation import (
+    Concession,
+    ConditionalTrade,
+    Mandate,
+    NegotiationMovement,
+    NegotiationPlan,
+    PlanVersion,
+)
+from core.negotiation_repository import NegotiationRepository
+from core.negotiation_service import NegotiationService
+from core.ops_foundation import RESPONSIBILITY_DOMAINS, WORK_CATEGORIES, OpsFoundationRepository
+from core.proposal_repository import ProposalRepository
+from core.proposal_service import ProposalService
+from core.proposals import ProposalFamily, ProposalProfile, ProposalReview, ProposalVersion
 from core.readiness_service import evaluate_readiness
+from core.report_generator import ReportGenerator
 from core.requirement_repository import (
     RequirementNotFoundError,
     RequirementRepository,
@@ -72,18 +116,12 @@ from core.requirements import (
     RequirementWorkState,
     ResponseDisposition,
 )
-from core.managed_document_storage import (
-    EmptyManagedFileError,
-    ManagedDocumentStorage,
-    ManagedFileTooLargeError,
-    ManagedStorageFailureError,
-)
+from core.scenario_repository import ScenarioRepository
+from core.scenario_service import ScenarioService
+from core.schemas import Provenance
+from core.scope_interfaces import InterfaceRecord, ScopeItem
 from core.scope_repository import ScopeInterfaceRepository
 from core.scope_service import ScopeInterfaceService
-from core.scope_interfaces import InterfaceRecord, ScopeItem
-from core.schemas import Provenance
-from core.supplier_repository import SupplierRepository
-from core.supplier_service import SupplierService
 from core.supplier_assurance import (
     Coverage,
     FlowDownLink,
@@ -93,52 +131,15 @@ from core.supplier_assurance import (
     Supplier,
     SupplierRequest,
 )
-from core.deliverable_repository import DeliverableRepository
-from core.deliverable_service import DeliverableService
-from core.deliverables import (
-    Deliverable,
-    DeliverableLink,
-    ReviewDecisionRecord,
-    SubmissionVersion,
-    SupplierCommitment,
+from core.supplier_repository import SupplierRepository
+from core.supplier_service import SupplierService
+from core.work_item_repository import (
+    StaleWorkItemError,
+    WorkItemNotFoundError,
+    WorkItemRepository,
 )
-from core.commercial import AssessmentVersion, CommercialItem, CommercialLink, CommercialReview
-from core.commercial_repository import CommercialRepository
-from core.commercial_service import CommercialService
-from core.contract_risk import ContractIssue, RiskAssessment, RiskLink, RiskReview, RiskSource
-from core.contract_risk_repository import ContractRiskRepository
-from core.contract_risk_service import ContractRiskService
-from core.approval_authority import (
-    ApprovalEvent,
-    AuthorityPolicy,
-    DecisionCase,
-    SubjectLink,
-    DecisionPackage,
-    RouteCycle,
-)
-from core.approval_repository import ApprovalRepository
-from core.approval_service import ApprovalService
-from core.commercial_scenarios import (
-    BaselineSelection,
-    ScenarioFamily,
-    ScenarioReview,
-    ScenarioVersion,
-)
-from core.scenario_repository import ScenarioRepository
-from core.scenario_service import ScenarioService
-from core.negotiation import (
-    ConditionalTrade,
-    Concession,
-    Mandate,
-    NegotiationMovement,
-    NegotiationPlan,
-    PlanVersion,
-)
-from core.negotiation_repository import NegotiationRepository
-from core.negotiation_service import NegotiationService
-from core.proposals import ProposalFamily, ProposalProfile, ProposalReview, ProposalVersion
-from core.proposal_repository import ProposalRepository
-from core.proposal_service import ProposalService
+from core.work_item_service import MyDayService, WorkItemService, validation_error_message
+from core.work_items import WorkItem, WorkItemKind, WorkItemPriority, WorkItemStatus
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -194,6 +195,7 @@ db = Database(Path(os.environ.get("CONTRACTIQ_DB_PATH", BASE_DIR / "data" / "con
 bid_repository = BidRepository(db)
 work_item_repository = WorkItemRepository(db)
 work_item_service = WorkItemService(work_item_repository, bid_repository)
+ops_repository = OpsFoundationRepository(db)
 document_repository = DocumentRepository(db)
 requirement_repository = RequirementRepository(db)
 requirement_service = RequirementService(
@@ -585,7 +587,9 @@ async def my_day(request: Request, as_of: str | None = None) -> HTMLResponse:
     archived_items = [
         WorkItemSnapshot(
             item=item,
-            bid_name=bid_names.get(item.bid_id, item.bid_id),
+            bid_name=bid_names.get(item.bid_id, item.bid_id)
+            if item.bid_id is not None
+            else "Unassigned",
         )
         for item in work_item_repository.list()
         if item.status in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}
@@ -609,6 +613,89 @@ async def my_day(request: Request, as_of: str | None = None) -> HTMLResponse:
 @app.get("/api/work-items")
 async def list_work_items(bid_id: str | None = None) -> JSONResponse:
     return _json_item(work_item_repository.list(bid_id=bid_id))
+
+
+@app.get("/my-work", response_class=HTMLResponse)
+async def my_work(request: Request) -> HTMLResponse:
+    return render(
+        "my_work.html",
+        work_items=work_item_repository.list(),
+        metrics=ops_repository.metrics(),
+        categories=WORK_CATEGORIES,
+        domains=RESPONSIBILITY_DOMAINS,
+    )
+
+
+@app.get("/role-framework", response_class=HTMLResponse)
+async def role_framework(request: Request) -> HTMLResponse:
+    return render(
+        "role_framework.html",
+        profiles=ops_repository.profiles(),
+        effective=ops_repository.effective_profile(),
+        domains=RESPONSIBILITY_DOMAINS,
+    )
+
+
+@app.get("/api/ops/role-profiles")
+async def list_role_profiles() -> JSONResponse:
+    return JSONResponse(
+        {
+            "profiles": ops_repository.profiles(),
+            "effective": ops_repository.effective_profile(),
+            "domains": list(RESPONSIBILITY_DOMAINS),
+        }
+    )
+
+
+@app.post("/api/ops/role-profiles")
+async def create_role_profile(request: Request) -> JSONResponse:
+    body = await request.json()
+    try:
+        profile_id = ops_repository.create_profile(body)
+        return JSONResponse({"profile_id": profile_id}, status_code=201)
+    except (KeyError, ValueError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail="Role profile could not be saved.") from exc
+
+
+@app.post("/api/ops/role-profiles/{profile_id}/publish")
+async def publish_role_profile(profile_id: str) -> JSONResponse:
+    try:
+        ops_repository.publish_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Role profile could not be published.") from exc
+    return JSONResponse({"profile_id": profile_id, "state": "PUBLISHED"})
+
+
+@app.post("/api/ops/role-profiles/{profile_id}/retire")
+async def retire_role_profile(profile_id: str) -> JSONResponse:
+    try:
+        ops_repository.retire_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Role profile could not be retired.") from exc
+    return JSONResponse({"profile_id": profile_id, "state": "RETIRED"})
+
+
+@app.get("/api/ops/work")
+async def list_ops_work(
+    category: str | None = None,
+    domain: str | None = None,
+    status: str | None = None,
+    unassigned: bool = False,
+) -> JSONResponse:
+    items = work_item_repository.list(active_only=False)
+    if category:
+        items = [item for item in items if item.category.value == category]
+    if domain:
+        items = [
+            item
+            for item in items
+            if item.responsibility_domain and item.responsibility_domain.value == domain
+        ]
+    if status:
+        items = [item for item in items if item.status.value == status]
+    if unassigned:
+        items = [item for item in items if item.bid_id is None]
+    return _json_item(items)
 
 
 @app.get("/api/work-items/{work_item_id}")
@@ -2186,8 +2273,8 @@ async def analyse_document(doc_id: str, background_tasks: BackgroundTasks):
         )
 
     print(
-        f"  ⚠ Analysis running — prevent computer sleep to avoid interruption. "
-        f"Windows: Settings → Power & sleep → Sleep → Never"
+        "  ⚠ Analysis running — prevent computer sleep to avoid interruption. "
+        "Windows: Settings → Power & sleep → Sleep → Never"
     )
     db.update_document(doc_id, {"status": "processing"})
     progress_store[doc_id] = {
@@ -2365,6 +2452,7 @@ async def get_negotiation_issues(doc_id: str):
 async def download_markdown(doc_id: str):
     """Download structured markdown as a .md file attachment."""
     import re
+
     from fastapi.responses import Response as FastAPIResponse
 
     document = db.get_document(doc_id)
@@ -2678,6 +2766,7 @@ async def deactivate_knowledge_record(table_name: str, record_id: int):
 async def export_knowledge_table(table_name: str):
     _resolve_table(table_name)  # validate
     import tempfile
+
     from fastapi.responses import FileResponse
 
     kio = KnowledgeIO(db)
@@ -2710,6 +2799,7 @@ async def import_knowledge_table(table_name: str, file: UploadFile = File(...)):
 @app.get("/api/knowledge-export-all")
 async def export_all_knowledge():
     import tempfile
+
     from fastapi.responses import FileResponse
 
     kio = KnowledgeIO(db)

@@ -1,4 +1,5 @@
 """Domain models and validation for ContractIQ operational work items."""
+# ruff: noqa: UP042
 
 from datetime import date, datetime
 from enum import Enum
@@ -30,6 +31,52 @@ class WorkItemPriority(str, Enum):  # noqa: UP042 - persisted string enum by des
     CRITICAL = "CRITICAL"
 
 
+class WorkCategory(str, Enum):
+    OPPORTUNITY_DEVELOPMENT = "OPPORTUNITY_DEVELOPMENT"
+    SAM_SUPPORT = "SAM_SUPPORT"
+    CUSTOMER_REQUEST = "CUSTOMER_REQUEST"
+    CUSTOMER_MEETING = "CUSTOMER_MEETING"
+    SUPPLIER_REQUEST = "SUPPLIER_REQUEST"
+    PRODUCT_TECHNICAL = "PRODUCT_TECHNICAL"
+    QUOTATION_PRICING = "QUOTATION_PRICING"
+    COMMERCIAL_REVIEW = "COMMERCIAL_REVIEW"
+    PROJECT_COORDINATION = "PROJECT_COORDINATION"
+    OPERATIONAL_ISSUE = "OPERATIONAL_ISSUE"
+    MANAGEMENT_REQUEST = "MANAGEMENT_REQUEST"
+    REPORT_PRESENTATION = "REPORT_PRESENTATION"
+    PROCESS_IMPROVEMENT = "PROCESS_IMPROVEMENT"
+    KNOWLEDGE_RESEARCH = "KNOWLEDGE_RESEARCH"
+    TRAINING_DEVELOPMENT = "TRAINING_DEVELOPMENT"
+    STRATEGIC_INITIATIVE = "STRATEGIC_INITIATIVE"
+    ADMINISTRATIVE = "ADMINISTRATIVE"
+    OTHER = "OTHER"
+
+
+class ResponsibilityDomain(str, Enum):
+    STRATEGIC_OPPORTUNITY = "STRATEGIC_OPPORTUNITY"
+    EPC_PROJECT_PURSUIT = "EPC_PROJECT_PURSUIT"
+    SAM_ENABLEMENT = "SAM_ENABLEMENT"
+    CUSTOMER_SOLUTION = "CUSTOMER_SOLUTION"
+    SUPPLIER_COORDINATION = "SUPPLIER_COORDINATION"
+    QUOTATION_COMMERCIAL = "QUOTATION_COMMERCIAL"
+    CROSS_FUNCTIONAL = "CROSS_FUNCTIONAL"
+    RISK_ASSURANCE = "RISK_ASSURANCE"
+    ACCOUNT_INTELLIGENCE = "ACCOUNT_INTELLIGENCE"
+    OPERATIONAL_SUPPORT = "OPERATIONAL_SUPPORT"
+    MANAGEMENT_INTELLIGENCE = "MANAGEMENT_INTELLIGENCE"
+    PROCESS_KNOWLEDGE = "PROCESS_KNOWLEDGE"
+    ROLE_DEVELOPMENT = "ROLE_DEVELOPMENT"
+
+
+class WaitingPartyKind(str, Enum):
+    PERSON = "PERSON"
+    INTERNAL_FUNCTION = "INTERNAL_FUNCTION"
+    EXTERNAL_ORGANIZATION = "EXTERNAL_ORGANIZATION"
+    CUSTOMER = "CUSTOMER"
+    SUPPLIER_MANUFACTURER = "SUPPLIER_MANUFACTURER"
+    OTHER = "OTHER"
+
+
 ACTIVE_WORK_ITEM_STATUSES = frozenset(
     {
         WorkItemStatus.OPEN,
@@ -59,7 +106,7 @@ class WorkItemCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    bid_id: str
+    bid_id: str | None = None
     kind: WorkItemKind = WorkItemKind.TASK
     title: str = Field(max_length=300)
     details: str | None = Field(default=None, max_length=10_000)
@@ -68,8 +115,23 @@ class WorkItemCreate(BaseModel):
     due_date: date | None = None
     waiting_on: str | None = Field(default=None, max_length=1_000)
     blocker_note: str | None = Field(default=None, max_length=2_000)
+    category: WorkCategory = WorkCategory.OTHER
+    responsibility_domain: ResponsibilityDomain | None = None
+    next_action_date: date | None = None
+    requester_label: str | None = None
+    waiting_party_kind: WaitingPartyKind | None = None
+    waiting_party_label: str | None = None
+    waiting_owed: str | None = None
+    requested_date: date | None = None
+    chase_date: date | None = None
+    blocker_description: str | None = None
+    resolution_owner: str | None = None
+    review_date: date | None = None
+    completion_outcome: str | None = None
+    contribution_candidate: bool = False
+    completion_evidence: str | None = None
 
-    @field_validator("bid_id", "title")
+    @field_validator("title")
     @classmethod
     def validate_required_text(cls, value: str, info: object) -> str:
         field_name = str(getattr(info, "field_name", "value"))
@@ -102,6 +164,11 @@ class WorkItemEdit(BaseModel):
     details: str | None = Field(default=None, max_length=10_000)
     priority: WorkItemPriority | None = None
     due_date: date | None = None
+    category: WorkCategory | None = None
+    responsibility_domain: ResponsibilityDomain | None = None
+    next_action_date: date | None = None
+    requester_label: str | None = None
+    contribution_candidate: bool | None = None
 
     @field_validator("title")
     @classmethod
@@ -137,6 +204,17 @@ class WorkItemTransition(BaseModel):
     status: WorkItemStatus
     waiting_on: str | None = Field(default=None, max_length=1_000)
     blocker_note: str | None = Field(default=None, max_length=2_000)
+    waiting_party_kind: WaitingPartyKind | None = None
+    waiting_party_label: str | None = None
+    waiting_owed: str | None = None
+    requested_date: date | None = None
+    chase_date: date | None = None
+    blocker_description: str | None = None
+    resolution_owner: str | None = None
+    review_date: date | None = None
+    completion_outcome: str | None = None
+    completion_evidence: str | None = None
+    contribution_candidate: bool | None = None
 
     @field_validator("waiting_on", "blocker_note")
     @classmethod
@@ -158,7 +236,7 @@ class WorkItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     work_item_id: str = Field(pattern=r"^WI-[0-9a-f-]{36}$")
-    bid_id: str
+    bid_id: str | None = None
     kind: WorkItemKind
     title: str = Field(max_length=300)
     details: str | None = Field(default=None, max_length=10_000)
@@ -172,8 +250,23 @@ class WorkItem(BaseModel):
     completed_at: datetime | None = None
     version: int = Field(ge=1)
     provenance: Provenance
+    category: WorkCategory = WorkCategory.OTHER
+    responsibility_domain: ResponsibilityDomain | None = None
+    next_action_date: date | None = None
+    requester_label: str | None = None
+    waiting_party_kind: WaitingPartyKind | None = None
+    waiting_party_label: str | None = None
+    waiting_owed: str | None = None
+    requested_date: date | None = None
+    chase_date: date | None = None
+    blocker_description: str | None = None
+    resolution_owner: str | None = None
+    review_date: date | None = None
+    completion_outcome: str | None = None
+    completion_evidence: str | None = None
+    contribution_candidate: bool = False
 
-    @field_validator("bid_id", "title")
+    @field_validator("title")
     @classmethod
     def validate_required_text(cls, value: str, info: object) -> str:
         field_name = str(getattr(info, "field_name", "value"))

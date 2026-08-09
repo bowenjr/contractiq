@@ -1,4 +1,5 @@
 """SQLite persistence and atomic audit writes for operational work items."""
+# ruff: noqa: E501
 
 import sqlite3
 from datetime import date, datetime
@@ -8,6 +9,9 @@ from core.database import Database
 from core.schemas import AuditEntry, Provenance
 from core.work_items import (
     ACTIVE_WORK_ITEM_STATUSES,
+    ResponsibilityDomain,
+    WaitingPartyKind,
+    WorkCategory,
     WorkItem,
     WorkItemKind,
     WorkItemPriority,
@@ -38,11 +42,23 @@ class WorkItemRepository:
     def _apply_work_items_v1(self) -> None:
         """Apply the additive, idempotent TASK-07 work-item migration."""
         with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'"
+            ).fetchone()
+            if existing is not None:
+                bid_not_null = next(
+                    int(row["notnull"])
+                    for row in conn.execute("PRAGMA table_info(work_items)").fetchall()
+                    if row["name"] == "bid_id"
+                )
+                if bid_not_null:
+                    conn.execute("PRAGMA foreign_keys=OFF")
+                    conn.execute("ALTER TABLE work_items RENAME TO work_items_ops_legacy")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS work_items (
                     work_item_id TEXT PRIMARY KEY,
-                    bid_id TEXT NOT NULL,
+                    bid_id TEXT,
                     kind TEXT NOT NULL CHECK (kind IN ('TASK', 'MILESTONE')),
                     title TEXT NOT NULL CHECK (length(trim(title)) > 0),
                     details TEXT,
@@ -61,6 +77,21 @@ class WorkItemRepository:
                     completed_at TEXT,
                     version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
                     provenance_json TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'OTHER',
+                    responsibility_domain TEXT,
+                    next_action_date TEXT,
+                    requester_label TEXT,
+                    waiting_party_kind TEXT,
+                    waiting_party_label TEXT,
+                    waiting_owed TEXT,
+                    requested_date TEXT,
+                    chase_date TEXT,
+                    blocker_description TEXT,
+                    resolution_owner TEXT,
+                    review_date TEXT,
+                    completion_outcome TEXT,
+                    completion_evidence TEXT,
+                    contribution_candidate INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY (bid_id) REFERENCES bids(bid_id),
                     CHECK (kind <> 'MILESTONE' OR due_date IS NOT NULL),
                     CHECK (
@@ -81,8 +112,42 @@ class WorkItemRepository:
                     ON work_items(bid_id, status, due_date);
                 CREATE INDEX IF NOT EXISTS idx_work_items_status_due
                     ON work_items(status, due_date);
+                CREATE TRIGGER IF NOT EXISTS work_items_no_hard_delete
+                    BEFORE DELETE ON work_items
+                    BEGIN SELECT RAISE(ABORT, 'work items are append-only; cancel instead'); END;
                 """
             )
+            legacy = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items_ops_legacy'"
+            ).fetchone()
+            if legacy is not None:
+                conn.execute(
+                    "INSERT INTO work_items(work_item_id,bid_id,kind,title,details,status,priority,due_date,waiting_on,blocker_note,created_at,updated_at,completed_at,version,provenance_json) SELECT work_item_id,bid_id,kind,title,details,status,priority,due_date,waiting_on,blocker_note,created_at,updated_at,completed_at,version,provenance_json FROM work_items_ops_legacy"
+                )
+                conn.execute("DROP TABLE work_items_ops_legacy")
+                conn.execute("PRAGMA foreign_keys=ON")
+            columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(work_items)").fetchall()
+            }
+            for name, definition in (
+                ("category", "TEXT NOT NULL DEFAULT 'OTHER'"),
+                ("responsibility_domain", "TEXT"),
+                ("next_action_date", "TEXT"),
+                ("requester_label", "TEXT"),
+                ("waiting_party_kind", "TEXT"),
+                ("waiting_party_label", "TEXT"),
+                ("waiting_owed", "TEXT"),
+                ("requested_date", "TEXT"),
+                ("chase_date", "TEXT"),
+                ("blocker_description", "TEXT"),
+                ("resolution_owner", "TEXT"),
+                ("review_date", "TEXT"),
+                ("completion_outcome", "TEXT"),
+                ("completion_evidence", "TEXT"),
+                ("contribution_candidate", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE work_items ADD COLUMN {name} {definition}")
 
     @staticmethod
     def _optional_str(value: object) -> str | None:
@@ -94,7 +159,7 @@ class WorkItemRepository:
         completed_at = cls._optional_str(row["completed_at"])
         return WorkItem(
             work_item_id=str(row["work_item_id"]),
-            bid_id=str(row["bid_id"]),
+            bid_id=str(row["bid_id"]) if row["bid_id"] is not None else None,
             kind=WorkItemKind(str(row["kind"])),
             title=str(row["title"]),
             details=cls._optional_str(row["details"]),
@@ -110,6 +175,37 @@ class WorkItemRepository:
             ),
             version=int(row["version"]),
             provenance=Provenance.model_validate_json(str(row["provenance_json"])),
+            category=WorkCategory(str(row["category"] or "OTHER")),
+            responsibility_domain=(
+                ResponsibilityDomain(str(row["responsibility_domain"]))
+                if row["responsibility_domain"] is not None
+                else None
+            ),
+            next_action_date=(
+                date.fromisoformat(str(row["next_action_date"]))
+                if row["next_action_date"] is not None
+                else None
+            ),
+            requester_label=cls._optional_str(row["requester_label"]),
+            waiting_party_kind=(
+                WaitingPartyKind(str(row["waiting_party_kind"]))
+                if row["waiting_party_kind"]
+                else None
+            ),
+            waiting_party_label=cls._optional_str(row["waiting_party_label"]),
+            waiting_owed=cls._optional_str(row["waiting_owed"]),
+            requested_date=(
+                date.fromisoformat(str(row["requested_date"])) if row["requested_date"] else None
+            ),
+            chase_date=(date.fromisoformat(str(row["chase_date"])) if row["chase_date"] else None),
+            blocker_description=cls._optional_str(row["blocker_description"]),
+            resolution_owner=cls._optional_str(row["resolution_owner"]),
+            review_date=(
+                date.fromisoformat(str(row["review_date"])) if row["review_date"] else None
+            ),
+            completion_outcome=cls._optional_str(row["completion_outcome"]),
+            completion_evidence=cls._optional_str(row["completion_evidence"]),
+            contribution_candidate=bool(row["contribution_candidate"]),
         )
 
     @staticmethod
@@ -130,6 +226,21 @@ class WorkItemRepository:
             item.completed_at.isoformat() if item.completed_at is not None else None,
             item.version,
             item.provenance.model_dump_json(),
+            item.category.value,
+            item.responsibility_domain.value if item.responsibility_domain else None,
+            item.next_action_date.isoformat() if item.next_action_date else None,
+            item.requester_label,
+            item.waiting_party_kind.value if item.waiting_party_kind else None,
+            item.waiting_party_label,
+            item.waiting_owed,
+            item.requested_date.isoformat() if item.requested_date else None,
+            item.chase_date.isoformat() if item.chase_date else None,
+            item.blocker_description,
+            item.resolution_owner,
+            item.review_date.isoformat() if item.review_date else None,
+            item.completion_outcome,
+            item.completion_evidence,
+            int(item.contribution_candidate),
         )
 
     @staticmethod
@@ -164,8 +275,12 @@ class WorkItemRepository:
                 INSERT INTO work_items (
                     work_item_id, bid_id, kind, title, details, status,
                     priority, due_date, waiting_on, blocker_note, created_at,
-                    updated_at, completed_at, version, provenance_json
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    updated_at, completed_at, version, provenance_json,
+                    category, responsibility_domain, next_action_date, requester_label,
+                    waiting_party_kind, waiting_party_label, waiting_owed, requested_date,
+                    chase_date, blocker_description, resolution_owner, review_date,
+                    completion_outcome, completion_evidence, contribution_candidate
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 self._values(item),
             )
@@ -220,7 +335,11 @@ class WorkItemRepository:
                     bid_id = ?, kind = ?, title = ?, details = ?, status = ?,
                     priority = ?, due_date = ?, waiting_on = ?, blocker_note = ?,
                     created_at = ?, updated_at = ?, completed_at = ?, version = ?,
-                    provenance_json = ?
+                    provenance_json = ?, category = ?, responsibility_domain = ?,
+                    next_action_date = ?, requester_label = ?, waiting_party_kind = ?,
+                    waiting_party_label = ?, waiting_owed = ?, requested_date = ?, chase_date = ?,
+                    blocker_description = ?, resolution_owner = ?, review_date = ?,
+                    completion_outcome = ?, completion_evidence = ?, contribution_candidate = ?
                 WHERE work_item_id = ? AND version = ?
                 """,
                 (
@@ -238,6 +357,21 @@ class WorkItemRepository:
                     item.completed_at.isoformat() if item.completed_at is not None else None,
                     item.version,
                     item.provenance.model_dump_json(),
+                    item.category.value,
+                    item.responsibility_domain.value if item.responsibility_domain else None,
+                    item.next_action_date.isoformat() if item.next_action_date else None,
+                    item.requester_label,
+                    item.waiting_party_kind.value if item.waiting_party_kind else None,
+                    item.waiting_party_label,
+                    item.waiting_owed,
+                    item.requested_date.isoformat() if item.requested_date else None,
+                    item.chase_date.isoformat() if item.chase_date else None,
+                    item.blocker_description,
+                    item.resolution_owner,
+                    item.review_date.isoformat() if item.review_date else None,
+                    item.completion_outcome,
+                    item.completion_evidence,
+                    int(item.contribution_candidate),
                     item.work_item_id,
                     expected_version,
                 ),
