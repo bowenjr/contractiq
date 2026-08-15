@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
@@ -93,7 +93,7 @@ from core.negotiation import (
 )
 from core.negotiation_repository import NegotiationRepository
 from core.negotiation_service import NegotiationService
-from core.ops_foundation import RESPONSIBILITY_DOMAINS, WORK_CATEGORIES, OpsFoundationRepository
+from core.ops_foundation import RESPONSIBILITY_DOMAINS, OpsFoundationRepository
 from core.proposal_repository import ProposalRepository
 from core.proposal_service import ProposalService
 from core.proposals import ProposalFamily, ProposalProfile, ProposalReview, ProposalVersion
@@ -139,7 +139,20 @@ from core.work_item_repository import (
     WorkItemRepository,
 )
 from core.work_item_service import MyDayService, WorkItemService, validation_error_message
-from core.work_items import WorkItem, WorkItemKind, WorkItemPriority, WorkItemStatus
+from core.work_items import (
+    ACTIVE_WORK_ITEM_STATUSES,
+    RESPONSIBILITY_DOMAIN_LABELS,
+    WAITING_PARTY_KIND_LABELS,
+    WORK_CATEGORY_LABELS,
+    WORK_ITEM_STATUS_LABELS,
+    ResponsibilityDomain,
+    WaitingPartyKind,
+    WorkCategory,
+    WorkItem,
+    WorkItemKind,
+    WorkItemPriority,
+    WorkItemStatus,
+)
 
 # ── App Setup ──────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -185,9 +198,9 @@ jinja_env = Environment(
 )
 
 
-def render(template_name: str, **context) -> HTMLResponse:
+def render(template_name: str, status_code: int = 200, **context) -> HTMLResponse:
     template = jinja_env.get_template(template_name)
-    return HTMLResponse(template.render(**context))
+    return HTMLResponse(template.render(**context), status_code=status_code)
 
 
 # ── Core Services ───────────────────────────────────────────────────────────
@@ -606,6 +619,8 @@ async def my_day(request: Request, as_of: str | None = None) -> HTMLResponse:
         kinds=list(WorkItemKind),
         priorities=list(WorkItemPriority),
         statuses=list(WorkItemStatus),
+        category_labels=WORK_CATEGORY_LABELS,
+        status_labels=WORK_ITEM_STATUS_LABELS,
         actor=LOCAL_ACTOR,
     )
 
@@ -617,13 +632,131 @@ async def list_work_items(bid_id: str | None = None) -> JSONResponse:
 
 @app.get("/my-work", response_class=HTMLResponse)
 async def my_work(request: Request) -> HTMLResponse:
+    items = work_item_repository.list()
     return render(
         "my_work.html",
-        work_items=work_item_repository.list(),
+        active_items=[item for item in items if item.status in ACTIVE_WORK_ITEM_STATUSES],
+        history_items=[item for item in items if item.status not in ACTIVE_WORK_ITEM_STATUSES],
         metrics=ops_repository.metrics(),
-        categories=WORK_CATEGORIES,
-        domains=RESPONSIBILITY_DOMAINS,
+        categories=list(WorkCategory),
+        category_labels=WORK_CATEGORY_LABELS,
+        domain_labels=RESPONSIBILITY_DOMAIN_LABELS,
+        status_labels=WORK_ITEM_STATUS_LABELS,
+        capture={},
+        capture_error=None,
     )
+
+
+@app.post("/my-work", response_class=HTMLResponse)
+async def quick_capture_work(
+    request: Request,
+    title: str = Form(...),
+    category: str = Form(...),
+    next_action_date: str = Form(""),
+) -> HTMLResponse:
+    capture = {"title": title, "category": category, "next_action_date": next_action_date}
+    try:
+        work_item_service.create_work_item(
+            {
+                "title": title,
+                "category": category,
+                "next_action_date": next_action_date or None,
+            },
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError) as exc:
+        items = work_item_repository.list()
+        return render(
+            "my_work.html",
+            active_items=[item for item in items if item.status in ACTIVE_WORK_ITEM_STATUSES],
+            history_items=[item for item in items if item.status not in ACTIVE_WORK_ITEM_STATUSES],
+            metrics=ops_repository.metrics(),
+            categories=list(WorkCategory),
+            category_labels=WORK_CATEGORY_LABELS,
+            domain_labels=RESPONSIBILITY_DOMAIN_LABELS,
+            status_labels=WORK_ITEM_STATUS_LABELS,
+            capture=capture,
+            capture_error=validation_error_message(exc),
+            status_code=422,
+        )
+    return RedirectResponse("/my-work", status_code=303)
+
+
+def _work_item_editor_context(
+    item: WorkItem,
+    *,
+    values: dict[str, object] | None = None,
+    error: str | None = None,
+) -> dict[str, object]:
+    return {
+        "item": item,
+        "values": values or item.model_dump(mode="json"),
+        "error": error,
+        "categories": list(WorkCategory),
+        "category_labels": WORK_CATEGORY_LABELS,
+        "domains": list(ResponsibilityDomain),
+        "domain_labels": RESPONSIBILITY_DOMAIN_LABELS,
+        "statuses": list(WorkItemStatus),
+        "status_labels": WORK_ITEM_STATUS_LABELS,
+        "waiting_kinds": list(WaitingPartyKind),
+        "waiting_kind_labels": WAITING_PARTY_KIND_LABELS,
+        "bids": bid_repository.list_bids(),
+    }
+
+
+@app.get("/my-work/{work_item_id}", response_class=HTMLResponse)
+async def work_item_detail(request: Request, work_item_id: str) -> HTMLResponse:
+    try:
+        item = work_item_service.get_work_item(work_item_id)
+    except WorkItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("work_item_detail.html", **_work_item_editor_context(item))
+
+
+@app.post("/my-work/{work_item_id}", response_class=HTMLResponse)
+async def save_work_item_detail(request: Request, work_item_id: str) -> HTMLResponse:
+    try:
+        current = work_item_service.get_work_item(work_item_id)
+    except WorkItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    form = await request.form()
+    values = {key: str(value) for key, value in form.items()}
+    nullable = {
+        "bid_id",
+        "details",
+        "due_date",
+        "next_action_date",
+        "responsibility_domain",
+        "waiting_party_kind",
+        "waiting_party_label",
+        "waiting_owed",
+        "requested_date",
+        "chase_date",
+        "blocker_description",
+        "resolution_owner",
+        "review_date",
+        "completion_outcome",
+        "completion_evidence",
+        "cancellation_reason",
+    }
+    payload: dict[str, object] = {
+        key: (None if key in nullable and value == "" else value) for key, value in values.items()
+    }
+    payload["waiting_on"] = payload.get("waiting_party_label")
+    payload["blocker_note"] = payload.get("blocker_description")
+    try:
+        work_item_service.edit_work_item(work_item_id, payload, LOCAL_ACTOR)
+    except (ValidationError, ValueError) as exc:
+        return render(
+            "work_item_detail.html",
+            **_work_item_editor_context(
+                current,
+                values=values,
+                error=validation_error_message(exc),
+            ),
+            status_code=422,
+        )
+    return RedirectResponse(f"/my-work/{quote(work_item_id)}", status_code=303)
 
 
 @app.get("/role-framework", response_class=HTMLResponse)

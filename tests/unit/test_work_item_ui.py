@@ -22,6 +22,14 @@ class JsonRequest:
         return dict(self.payload)
 
 
+class FormRequest:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    async def form(self) -> dict[str, object]:
+        return dict(self.payload)
+
+
 def _html(response: HTMLResponse) -> str:
     return bytes(response.body).decode()
 
@@ -120,6 +128,9 @@ def test_ui_api_creates_transitions_completes_and_reopens_audited_item(
                         "expected_version": edited["version"],
                         "status": "WAITING",
                         "waiting_on": "Customer counsel",
+                        "waiting_party_label": "Customer counsel",
+                        "waiting_owed": "Legal response",
+                        "chase_date": "2026-08-06",
                         "actor": "jason",
                     }
                 ),
@@ -139,6 +150,7 @@ def test_ui_api_creates_transitions_completes_and_reopens_audited_item(
                     {
                         "expected_version": waiting["version"],
                         "status": "COMPLETED",
+                        "completion_outcome": "Review completed",
                         "actor": "jason",
                     }
                 ),
@@ -178,6 +190,7 @@ def test_ui_api_creates_transitions_completes_and_reopens_audited_item(
                     {
                         "expected_version": reopened["version"],
                         "status": "CANCELLED",
+                        "cancellation_reason": "No longer required",
                         "actor": "jason",
                     }
                 ),
@@ -213,7 +226,7 @@ def test_ui_validation_error_is_visible_and_does_not_mutate(
         )
 
     assert raised.value.status_code == 422
-    assert "WAITING requires waiting_on" in str(raised.value.detail)
+    assert "WAITING requires a waiting party" in str(raised.value.detail)
     assert ui_app.work_item_repository.list() == []
     assert ui_app.bid_repository.list_audit(valid_bid.bid_id) == []
     page = asyncio.run(ui_app.my_day(cast(Request, object()), "2026-08-05"))
@@ -239,3 +252,122 @@ def test_task06_hold_is_read_only_and_my_day_does_not_contact_alice(
     assert "Bid is on HOLD" in _html(response)
     assert valid_bid.bid_id in _html(response)
     health_check.assert_not_called()
+
+
+def test_my_work_quick_capture_and_full_editor_lifecycle(ui_app: ModuleType) -> None:
+    page = asyncio.run(ui_app.my_work(cast(Request, object())))
+    assert page.status_code == 200
+    page_text = _html(page)
+    assert '<label for="capture-title">Work title</label>' in page_text
+    assert '<label for="capture-category">Work category</label>' in page_text
+    assert '<label for="capture-next-action">Next-action date</label>' in page_text
+    assert "Opportunity Development" in page_text
+    assert ">OPPORTUNITY_DEVELOPMENT<" not in page_text
+
+    created = asyncio.run(
+        ui_app.quick_capture_work(
+            cast(Request, object()),
+            "Prepare regional opportunity summary",
+            "OPPORTUNITY_DEVELOPMENT",
+            "2026-08-14",
+        )
+    )
+    assert created.status_code == 303
+    item = ui_app.work_item_repository.list()[0]
+    assert item.bid_id is None
+    register = asyncio.run(ui_app.my_work(cast(Request, object())))
+    assert f'href="/my-work/{item.work_item_id}"' in _html(register)
+    assert "Opportunity Development" in _html(register)
+
+    editor = asyncio.run(ui_app.work_item_detail(cast(Request, object()), item.work_item_id))
+    assert editor.status_code == 200
+    assert "Prepare regional opportunity summary" in _html(editor)
+    assert "Back to My Work" in _html(editor)
+
+    waiting = asyncio.run(
+        ui_app.save_work_item_detail(
+            cast(
+                Request,
+                FormRequest(
+                    {
+                        "expected_version": str(item.version),
+                        "title": item.title,
+                        "details": "Regional pipeline and actions",
+                        "category": item.category.value,
+                        "responsibility_domain": "STRATEGIC_OPPORTUNITY",
+                        "status": "WAITING",
+                        "bid_id": "",
+                        "due_date": "2026-08-20",
+                        "next_action_date": "2026-08-15",
+                        "waiting_party_kind": "INTERNAL_FUNCTION",
+                        "waiting_party_label": "Regional sales",
+                        "waiting_owed": "Opportunity inputs",
+                        "requested_date": "2026-08-12",
+                        "chase_date": "2026-08-16",
+                        "blocker_description": "",
+                        "resolution_owner": "",
+                        "review_date": "",
+                        "completion_outcome": "",
+                        "completion_evidence": "",
+                        "cancellation_reason": "",
+                    }
+                ),
+            ),
+            item.work_item_id,
+        )
+    )
+    assert waiting.status_code == 303
+    saved = ui_app.work_item_repository.get(item.work_item_id)
+    assert saved is not None
+    assert saved.due_date.isoformat() == "2026-08-20"
+    assert saved.next_action_date.isoformat() == "2026-08-15"
+    assert saved.responsibility_domain.value == "STRATEGIC_OPPORTUNITY"
+    assert saved.waiting_owed == "Opportunity inputs"
+
+    audit_before = len(ui_app.bid_repository.list_audit(None))
+    rejected = asyncio.run(
+        ui_app.save_work_item_detail(
+            cast(
+                Request,
+                FormRequest(
+                    {
+                        "expected_version": str(saved.version),
+                        "title": "Unsaved title",
+                        "category": saved.category.value,
+                        "responsibility_domain": "STRATEGIC_OPPORTUNITY",
+                        "status": "COMPLETED",
+                        "bid_id": "",
+                        "due_date": "2026-08-20",
+                        "next_action_date": "2026-08-15",
+                        "waiting_party_kind": "",
+                        "waiting_party_label": "",
+                        "waiting_owed": "",
+                        "requested_date": "",
+                        "chase_date": "",
+                        "blocker_description": "",
+                        "resolution_owner": "",
+                        "review_date": "",
+                        "completion_outcome": "",
+                        "completion_evidence": "",
+                        "cancellation_reason": "",
+                    }
+                ),
+            ),
+            item.work_item_id,
+        )
+    )
+    assert rejected.status_code == 422
+    assert "Unsaved title" in _html(rejected)
+    unchanged = ui_app.work_item_repository.get(item.work_item_id)
+    assert unchanged == saved
+    assert len(ui_app.bid_repository.list_audit(None)) == audit_before
+
+
+def test_work_item_html_missing_record_returns_404(ui_app: ModuleType) -> None:
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            ui_app.work_item_detail(
+                cast(Request, object()), "WI-00000000-0000-0000-0000-000000000000"
+            )
+        )
+    assert raised.value.status_code == 404

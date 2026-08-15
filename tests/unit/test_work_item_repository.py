@@ -131,7 +131,7 @@ def test_create_edit_transition_persist_and_append_audit(
     )
     completed = service.transition_work_item(
         created.work_item_id,
-        {"expected_version": 2, "status": "COMPLETED"},
+        {"expected_version": 2, "status": "COMPLETED", "completion_outcome": "Finished"},
         "jason",
     )
 

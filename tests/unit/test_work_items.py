@@ -58,7 +58,7 @@ def _service(
                 "status": "WAITING",
                 "waiting_on": "   ",
             },
-            "WAITING requires waiting_on",
+            "WAITING requires a waiting party",
         ),
         (
             {
@@ -67,7 +67,7 @@ def _service(
                 "status": "BLOCKED",
                 "blocker_note": "",
             },
-            "BLOCKED requires blocker_note",
+            "BLOCKED requires a blocker and resolution owner",
         ),
     ],
 )
@@ -91,7 +91,7 @@ def test_invalid_input_is_rejected_before_repository_access() -> None:
         cast(BidRepository, bid_repository),
     )
 
-    with pytest.raises(ValidationError, match="WAITING requires waiting_on"):
+    with pytest.raises(ValidationError, match="WAITING requires a waiting party"):
         service.create_work_item(
             {"bid_id": "B-2026-0001", "title": "Wait", "status": "WAITING"},
             "jason",
@@ -138,6 +138,9 @@ def test_transition_fields_and_completion_timestamp_are_controlled_by_service(
             "expected_version": 1,
             "status": WorkItemStatus.WAITING,
             "waiting_on": " Customer legal ",
+            "waiting_party_label": "Customer legal",
+            "waiting_owed": "Legal response",
+            "chase_date": "2026-08-13",
         },
         "jason",
     )
@@ -150,6 +153,8 @@ def test_transition_fields_and_completion_timestamp_are_controlled_by_service(
             "expected_version": 2,
             "status": WorkItemStatus.BLOCKED,
             "blocker_note": "Pricing approval missing",
+            "blocker_description": "Pricing approval missing",
+            "resolution_owner": "Commercial team",
         },
         "jason",
     )
@@ -158,7 +163,11 @@ def test_transition_fields_and_completion_timestamp_are_controlled_by_service(
 
     completed = service.transition_work_item(
         created.work_item_id,
-        {"expected_version": 3, "status": WorkItemStatus.COMPLETED},
+        {
+            "expected_version": 3,
+            "status": WorkItemStatus.COMPLETED,
+            "completion_outcome": "Submission coordinated",
+        },
         "jason",
     )
     assert completed.blocker_note is None

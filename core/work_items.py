@@ -77,6 +77,20 @@ class WaitingPartyKind(str, Enum):
     OTHER = "OTHER"
 
 
+WORK_CATEGORY_LABELS: dict[WorkCategory, str] = {
+    value: value.value.replace("_", " ").title() for value in WorkCategory
+}
+RESPONSIBILITY_DOMAIN_LABELS: dict[ResponsibilityDomain, str] = {
+    value: value.value.replace("_", " ").title() for value in ResponsibilityDomain
+}
+WORK_ITEM_STATUS_LABELS: dict[WorkItemStatus, str] = {
+    value: value.value.replace("_", " ").title() for value in WorkItemStatus
+}
+WAITING_PARTY_KIND_LABELS: dict[WaitingPartyKind, str] = {
+    value: value.value.replace("_", " ").title() for value in WaitingPartyKind
+}
+
+
 ACTIVE_WORK_ITEM_STATUSES = frozenset(
     {
         WorkItemStatus.OPEN,
@@ -128,6 +142,7 @@ class WorkItemCreate(BaseModel):
     resolution_owner: str | None = None
     review_date: date | None = None
     completion_outcome: str | None = None
+    cancellation_reason: str | None = Field(default=None, max_length=2_000)
     contribution_candidate: bool = False
     completion_evidence: str | None = None
 
@@ -137,7 +152,17 @@ class WorkItemCreate(BaseModel):
         field_name = str(getattr(info, "field_name", "value"))
         return _trim_required(value, field_name)
 
-    @field_validator("details", "waiting_on", "blocker_note")
+    @field_validator(
+        "details",
+        "waiting_on",
+        "blocker_note",
+        "waiting_party_label",
+        "waiting_owed",
+        "blocker_description",
+        "resolution_owner",
+        "completion_outcome",
+        "cancellation_reason",
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         return _trim_optional(value)
@@ -146,10 +171,18 @@ class WorkItemCreate(BaseModel):
     def validate_conditional_fields(self) -> Self:
         if self.kind == WorkItemKind.MILESTONE and self.due_date is None:
             raise ValueError("MILESTONE requires a due_date")
-        if self.status == WorkItemStatus.WAITING and self.waiting_on is None:
-            raise ValueError("WAITING requires waiting_on")
-        if self.status == WorkItemStatus.BLOCKED and self.blocker_note is None:
-            raise ValueError("BLOCKED requires blocker_note")
+        if self.status == WorkItemStatus.WAITING:
+            if not all((self.waiting_party_label, self.waiting_owed, self.chase_date)):
+                raise ValueError(
+                    "WAITING requires a waiting party, expected response, and follow-up date"
+                )
+        if self.status == WorkItemStatus.BLOCKED:
+            if not all((self.blocker_description, self.resolution_owner)):
+                raise ValueError("BLOCKED requires a blocker and resolution owner")
+        if self.status == WorkItemStatus.COMPLETED and self.completion_outcome is None:
+            raise ValueError("COMPLETED requires a completion outcome")
+        if self.status == WorkItemStatus.CANCELLED and self.cancellation_reason is None:
+            raise ValueError("CANCELLED requires a cancellation reason")
         return self
 
 
@@ -159,6 +192,8 @@ class WorkItemEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_version: int = Field(ge=1)
+    bid_id: str | None = None
+    status: WorkItemStatus | None = None
     kind: WorkItemKind | None = None
     title: str | None = Field(default=None, max_length=300)
     details: str | None = Field(default=None, max_length=10_000)
@@ -169,6 +204,19 @@ class WorkItemEdit(BaseModel):
     next_action_date: date | None = None
     requester_label: str | None = None
     contribution_candidate: bool | None = None
+    waiting_on: str | None = Field(default=None, max_length=1_000)
+    waiting_party_kind: WaitingPartyKind | None = None
+    waiting_party_label: str | None = None
+    waiting_owed: str | None = None
+    requested_date: date | None = None
+    chase_date: date | None = None
+    blocker_note: str | None = Field(default=None, max_length=2_000)
+    blocker_description: str | None = None
+    resolution_owner: str | None = None
+    review_date: date | None = None
+    completion_outcome: str | None = None
+    completion_evidence: str | None = None
+    cancellation_reason: str | None = Field(default=None, max_length=2_000)
 
     @field_validator("title")
     @classmethod
@@ -177,7 +225,18 @@ class WorkItemEdit(BaseModel):
             return None
         return _trim_required(value, "title")
 
-    @field_validator("details")
+    @field_validator(
+        "details",
+        "waiting_on",
+        "waiting_party_label",
+        "waiting_owed",
+        "blocker_note",
+        "blocker_description",
+        "resolution_owner",
+        "completion_outcome",
+        "completion_evidence",
+        "cancellation_reason",
+    )
     @classmethod
     def normalize_details(cls, value: str | None) -> str | None:
         return _trim_optional(value)
@@ -192,6 +251,20 @@ class WorkItemEdit(BaseModel):
             raise ValueError("kind cannot be null")
         if "priority" in self.model_fields_set and self.priority is None:
             raise ValueError("priority cannot be null")
+        if "status" in self.model_fields_set and self.status is None:
+            raise ValueError("status cannot be null")
+        if self.status == WorkItemStatus.WAITING:
+            if not all((self.waiting_party_label, self.waiting_owed, self.chase_date)):
+                raise ValueError(
+                    "WAITING requires a waiting party, expected response, and follow-up date"
+                )
+        if self.status == WorkItemStatus.BLOCKED:
+            if not all((self.blocker_description, self.resolution_owner)):
+                raise ValueError("BLOCKED requires a blocker and resolution owner")
+        if self.status == WorkItemStatus.COMPLETED and self.completion_outcome is None:
+            raise ValueError("COMPLETED requires a completion outcome")
+        if self.status == WorkItemStatus.CANCELLED and self.cancellation_reason is None:
+            raise ValueError("CANCELLED requires a cancellation reason")
         return self
 
 
@@ -213,20 +286,38 @@ class WorkItemTransition(BaseModel):
     resolution_owner: str | None = None
     review_date: date | None = None
     completion_outcome: str | None = None
+    cancellation_reason: str | None = Field(default=None, max_length=2_000)
     completion_evidence: str | None = None
     contribution_candidate: bool | None = None
 
-    @field_validator("waiting_on", "blocker_note")
+    @field_validator(
+        "waiting_on",
+        "blocker_note",
+        "waiting_party_label",
+        "waiting_owed",
+        "blocker_description",
+        "resolution_owner",
+        "completion_outcome",
+        "cancellation_reason",
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         return _trim_optional(value)
 
     @model_validator(mode="after")
     def validate_conditional_fields(self) -> Self:
-        if self.status == WorkItemStatus.WAITING and self.waiting_on is None:
-            raise ValueError("WAITING requires waiting_on")
-        if self.status == WorkItemStatus.BLOCKED and self.blocker_note is None:
-            raise ValueError("BLOCKED requires blocker_note")
+        if self.status == WorkItemStatus.WAITING:
+            if not all((self.waiting_party_label, self.waiting_owed, self.chase_date)):
+                raise ValueError(
+                    "WAITING requires a waiting party, expected response, and follow-up date"
+                )
+        if self.status == WorkItemStatus.BLOCKED:
+            if not all((self.blocker_description, self.resolution_owner)):
+                raise ValueError("BLOCKED requires a blocker and resolution owner")
+        if self.status == WorkItemStatus.COMPLETED and self.completion_outcome is None:
+            raise ValueError("COMPLETED requires a completion outcome")
+        if self.status == WorkItemStatus.CANCELLED and self.cancellation_reason is None:
+            raise ValueError("CANCELLED requires a cancellation reason")
         return self
 
 
@@ -263,6 +354,7 @@ class WorkItem(BaseModel):
     resolution_owner: str | None = None
     review_date: date | None = None
     completion_outcome: str | None = None
+    cancellation_reason: str | None = Field(default=None, max_length=2_000)
     completion_evidence: str | None = None
     contribution_candidate: bool = False
 

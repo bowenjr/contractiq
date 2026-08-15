@@ -90,6 +90,7 @@ class WorkItemRepository:
                     resolution_owner TEXT,
                     review_date TEXT,
                     completion_outcome TEXT,
+                    cancellation_reason TEXT,
                     completion_evidence TEXT,
                     contribution_candidate INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY (bid_id) REFERENCES bids(bid_id),
@@ -143,6 +144,7 @@ class WorkItemRepository:
                 ("resolution_owner", "TEXT"),
                 ("review_date", "TEXT"),
                 ("completion_outcome", "TEXT"),
+                ("cancellation_reason", "TEXT"),
                 ("completion_evidence", "TEXT"),
                 ("contribution_candidate", "INTEGER NOT NULL DEFAULT 0"),
             ):
@@ -204,6 +206,7 @@ class WorkItemRepository:
                 date.fromisoformat(str(row["review_date"])) if row["review_date"] else None
             ),
             completion_outcome=cls._optional_str(row["completion_outcome"]),
+            cancellation_reason=cls._optional_str(row["cancellation_reason"]),
             completion_evidence=cls._optional_str(row["completion_evidence"]),
             contribution_candidate=bool(row["contribution_candidate"]),
         )
@@ -239,6 +242,7 @@ class WorkItemRepository:
             item.resolution_owner,
             item.review_date.isoformat() if item.review_date else None,
             item.completion_outcome,
+            item.cancellation_reason,
             item.completion_evidence,
             int(item.contribution_candidate),
         )
@@ -279,8 +283,9 @@ class WorkItemRepository:
                     category, responsibility_domain, next_action_date, requester_label,
                     waiting_party_kind, waiting_party_label, waiting_owed, requested_date,
                     chase_date, blocker_description, resolution_owner, review_date,
-                    completion_outcome, completion_evidence, contribution_candidate
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    completion_outcome, cancellation_reason, completion_evidence,
+                    contribution_candidate
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 self._values(item),
             )
@@ -339,7 +344,8 @@ class WorkItemRepository:
                     next_action_date = ?, requester_label = ?, waiting_party_kind = ?,
                     waiting_party_label = ?, waiting_owed = ?, requested_date = ?, chase_date = ?,
                     blocker_description = ?, resolution_owner = ?, review_date = ?,
-                    completion_outcome = ?, completion_evidence = ?, contribution_candidate = ?
+                    completion_outcome = ?, cancellation_reason = ?, completion_evidence = ?,
+                    contribution_candidate = ?
                 WHERE work_item_id = ? AND version = ?
                 """,
                 (
@@ -370,6 +376,7 @@ class WorkItemRepository:
                     item.resolution_owner,
                     item.review_date.isoformat() if item.review_date else None,
                     item.completion_outcome,
+                    item.cancellation_reason,
                     item.completion_evidence,
                     int(item.contribution_candidate),
                     item.work_item_id,

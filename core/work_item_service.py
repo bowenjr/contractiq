@@ -137,11 +137,8 @@ class WorkItemService:
             blocker_description=request.blocker_description,
             resolution_owner=request.resolution_owner,
             review_date=request.review_date,
-            completion_outcome=(
-                "Captured"
-                if request.status == WorkItemStatus.COMPLETED and request.completion_outcome is None
-                else request.completion_outcome
-            ),
+            completion_outcome=request.completion_outcome,
+            cancellation_reason=request.cancellation_reason,
             completion_evidence=request.completion_evidence,
             contribution_candidate=request.contribution_candidate,
             created_at=now,
@@ -194,9 +191,54 @@ class WorkItemService:
         normalized_actor = self._actor(actor)
         current = self.get_work_item(work_item_id)
         self._require_version(current, request.expected_version)
+        if (
+            "bid_id" in request.model_fields_set
+            and request.bid_id is not None
+            and self.bid_repository.get_bid(request.bid_id) is None
+        ):
+            raise ValueError(f"Bid not found: {request.bid_id}")
 
         updates = request.model_dump(exclude_unset=True)
         updates.pop("expected_version", None)
+        next_status = request.status or current.status
+        if "status" in request.model_fields_set:
+            updates.update(
+                {
+                    "waiting_on": request.waiting_on
+                    if next_status == WorkItemStatus.WAITING
+                    else None,
+                    "waiting_party_kind": request.waiting_party_kind
+                    if next_status == WorkItemStatus.WAITING
+                    else None,
+                    "waiting_party_label": request.waiting_party_label
+                    if next_status == WorkItemStatus.WAITING
+                    else None,
+                    "waiting_owed": request.waiting_owed
+                    if next_status == WorkItemStatus.WAITING
+                    else None,
+                    "requested_date": request.requested_date
+                    if next_status == WorkItemStatus.WAITING
+                    else None,
+                    "chase_date": request.chase_date
+                    if next_status == WorkItemStatus.WAITING
+                    else None,
+                    "blocker_note": request.blocker_note
+                    if next_status == WorkItemStatus.BLOCKED
+                    else None,
+                    "blocker_description": request.blocker_description
+                    if next_status == WorkItemStatus.BLOCKED
+                    else None,
+                    "resolution_owner": request.resolution_owner
+                    if next_status == WorkItemStatus.BLOCKED
+                    else None,
+                    "review_date": request.review_date
+                    if next_status == WorkItemStatus.BLOCKED
+                    else None,
+                    "completed_at": self._now()
+                    if next_status == WorkItemStatus.COMPLETED
+                    else None,
+                }
+            )
         updates.update(
             {
                 "updated_at": self._now(),
@@ -266,6 +308,9 @@ class WorkItemService:
                 "completion_outcome": request.completion_outcome
                 if request.status == WorkItemStatus.COMPLETED
                 else current.completion_outcome,
+                "cancellation_reason": request.cancellation_reason
+                if request.status == WorkItemStatus.CANCELLED
+                else current.cancellation_reason,
                 "completion_evidence": request.completion_evidence
                 if request.status == WorkItemStatus.COMPLETED
                 else current.completion_evidence,

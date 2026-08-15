@@ -20,6 +20,8 @@ def _item(
     priority: WorkItemPriority = WorkItemPriority.NORMAL,
     waiting_on: str | None = None,
     blocker_note: str | None = None,
+    next_action_date: date | None = None,
+    chase_date: date | None = None,
 ) -> WorkItemSnapshot:
     return WorkItemSnapshot(
         item=WorkItem(
@@ -32,6 +34,8 @@ def _item(
             due_date=due_date,
             waiting_on=waiting_on,
             blocker_note=blocker_note,
+            next_action_date=next_action_date,
+            chase_date=chase_date,
             created_at=NOW,
             updated_at=NOW,
             completed_at=NOW if status == WorkItemStatus.COMPLETED else None,
@@ -83,10 +87,7 @@ def test_fixed_date_boundaries_and_exclusions() -> None:
     assert [entry.item.title for entry in result.overdue] == ["Overdue"]
     assert [entry.item.title for entry in result.due_today] == ["Today"]
     assert [entry.item.title for entry in result.upcoming] == ["Tomorrow", "Horizon edge"]
-    assert [entry.item.title for entry in result.later_or_unscheduled] == [
-        "Later",
-        "Unscheduled",
-    ]
+    assert result.later_or_unscheduled == []
     assert all(
         entry.item.title not in {"Done", "Cancelled"}
         for bucket in (
@@ -155,9 +156,7 @@ def test_ordering_uses_priority_date_title_and_id_tie_breakers() -> None:
 
     result = project_my_day(items, [], AS_OF, 7)
 
-    assert [entry.item.work_item_id for entry in result.later_or_unscheduled] == [
-        f"WI-{UUID(int=value)}" for value in (9, 8, 5, 6, 7, 4, 3)
-    ]
+    assert result.later_or_unscheduled == []
 
 
 def test_readiness_holds_are_separate_and_unchanged() -> None:
@@ -183,3 +182,25 @@ def test_repeated_projection_with_identical_inputs_is_equal() -> None:
     readiness = [_hold()]
 
     assert project_my_day(items, readiness, AS_OF, 7) == project_my_day(items, readiness, AS_OF, 7)
+
+
+def test_multiple_attention_reasons_are_deduplicated_on_one_item() -> None:
+    item = _item(
+        10,
+        "Several reasons",
+        due_date=date(2026, 8, 4),
+        next_action_date=date(2026, 8, 3),
+        chase_date=date(2026, 8, 2),
+        status=WorkItemStatus.WAITING,
+        waiting_on="Supplier",
+    )
+
+    result = project_my_day([item], [], AS_OF, 7)
+
+    assert len(result.waiting) == 1
+    assert result.waiting[0].reasons == [
+        "DUE_OVERDUE",
+        "NEXT_ACTION_OVERDUE",
+        "FOLLOW_UP_OVERDUE",
+    ]
+    assert result.overdue == []

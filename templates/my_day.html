@@ -152,13 +152,14 @@
         <article class="work-row" data-work-item-id="{{ item.work_item_id }}">
           <div><div class="item-title">{{ item.title }}</div>{% if item.details %}<div class="item-detail">{{ item.details }}</div>{% endif %}</div>
           <div><div class="parent-id">{{ item.bid_id }}</div><div class="parent-name">{{ projected.bid_name }}</div></div>
-          <div><div class="meta-label">Kind</div><div class="meta-value">{{ item.kind.value|title }}</div></div>
+          <div><div class="meta-label">Category</div><div class="meta-value">{{ category_labels[item.category] }}</div></div>
           <div><span class="badge priority-{{ item.priority.value }}">{{ item.priority.value }}</span></div>
-          <div><span class="badge status-{{ item.status.value }}">{{ item.status.value.replace('_',' ') }}</span></div>
+          <div><span class="badge status-{{ item.status.value }}">{{ status_labels[item.status] }}</span></div>
           <div>
             <div class="due-line"><span>{{ item.due_date or 'No due date' }}</span>{% if projected.is_overdue %}<span class="badge overdue">OVERDUE</span>{% endif %}{% if projected.is_due_today %}<span class="badge status-WAITING">TODAY</span>{% endif %}</div>
             {% if item.waiting_on %}<div class="context"><strong>Waiting on:</strong> {{ item.waiting_on }}</div>{% endif %}
             {% if item.blocker_note %}<div class="context"><strong>Blocker:</strong> {{ item.blocker_note }}</div>{% endif %}
+            {% if projected.reasons %}<div class="context">{{ projected.reasons|join(' · ')|replace('_',' ')|title }}</div>{% endif %}
           </div>
           <div class="actions">
             <button class="btn btn-small" type="button" onclick="openEdit(this)"

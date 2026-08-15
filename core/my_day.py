@@ -75,6 +75,7 @@ class ProjectedWorkItem(BaseModel):
     bucket: MyDayBucket
     is_overdue: bool
     is_due_today: bool
+    reasons: list[str]
 
 
 class MyDayCounts(BaseModel):
@@ -124,6 +125,26 @@ _PRIORITY_RANK: dict[WorkItemPriority, int] = {
     WorkItemPriority.NORMAL: 2,
     WorkItemPriority.LOW: 3,
 }
+
+
+def _attention_reasons(item: WorkItem, as_of: date) -> list[str]:
+    reasons: list[str] = []
+    if item.status == WorkItemStatus.BLOCKED:
+        reasons.append("BLOCKED")
+    if item.due_date is not None and item.due_date < as_of:
+        reasons.append("DUE_OVERDUE")
+    elif item.due_date == as_of:
+        reasons.append("DUE_TODAY")
+    if item.next_action_date is not None and item.next_action_date < as_of:
+        reasons.append("NEXT_ACTION_OVERDUE")
+    elif item.next_action_date == as_of:
+        reasons.append("NEXT_ACTION_TODAY")
+    if item.status == WorkItemStatus.WAITING and item.chase_date is not None:
+        if item.chase_date < as_of:
+            reasons.append("FOLLOW_UP_OVERDUE")
+        elif item.chase_date == as_of:
+            reasons.append("FOLLOW_UP_TODAY")
+    return reasons
 
 
 def _bucket_for(item: WorkItem, as_of: date, horizon_days: int) -> MyDayBucket:
@@ -231,12 +252,25 @@ def project_my_day(
         item = snapshot.item
         if item.status in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}:
             continue
+        reasons = _attention_reasons(item, as_of)
+        upcoming = any(
+            value is not None and as_of < value <= as_of + timedelta(days=horizon_days)
+            for value in (item.due_date, item.next_action_date)
+        )
+        waiting_upcoming = (
+            item.status == WorkItemStatus.WAITING
+            and item.chase_date is not None
+            and as_of < item.chase_date <= as_of + timedelta(days=horizon_days)
+        )
+        if not reasons and not upcoming and not waiting_upcoming:
+            continue
         projected = ProjectedWorkItem(
             item=item,
             bid_name=snapshot.bid_name,
             bucket=_bucket_for(item, as_of, horizon_days),
-            is_overdue=item.due_date is not None and item.due_date < as_of,
-            is_due_today=item.due_date == as_of or item.next_action_date == as_of,
+            is_overdue=any(reason.endswith("OVERDUE") for reason in reasons),
+            is_due_today=any(reason.endswith("TODAY") for reason in reasons),
+            reasons=reasons,
         )
         buckets[projected.bucket].append(projected)
         active.append(projected)
