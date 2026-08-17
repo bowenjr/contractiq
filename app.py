@@ -9,6 +9,7 @@ import sqlite3
 import uuid
 from datetime import date, datetime
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import parse_qsl, quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -93,7 +94,13 @@ from core.negotiation import (
 )
 from core.negotiation_repository import NegotiationRepository
 from core.negotiation_service import NegotiationService
-from core.ops_foundation import RESPONSIBILITY_DOMAINS, OpsFoundationRepository
+from core.ops_foundation import (
+    RESPONSIBILITY_DOMAINS,
+    OpsFoundationRepository,
+    RoleProfileNotFoundError,
+    RoleProfileOverlapError,
+    StaleRoleProfileError,
+)
 from core.proposal_repository import ProposalRepository
 from core.proposal_service import ProposalService
 from core.proposals import ProposalFamily, ProposalProfile, ProposalReview, ProposalVersion
@@ -116,6 +123,8 @@ from core.requirements import (
     RequirementWorkState,
     ResponseDisposition,
 )
+from core.role_profile_service import RoleProfileService
+from core.role_profiles import ROLE_PROFILE_STATE_LABELS, RoleProfile
 from core.scenario_repository import ScenarioRepository
 from core.scenario_service import ScenarioService
 from core.schemas import Provenance
@@ -211,6 +220,7 @@ bid_repository = BidRepository(db)
 work_item_repository = WorkItemRepository(db)
 work_item_service = WorkItemService(work_item_repository, bid_repository)
 ops_repository = OpsFoundationRepository(db)
+role_profile_service = RoleProfileService(ops_repository)
 document_repository = DocumentRepository(db)
 requirement_repository = RequirementRepository(db)
 requirement_service = RequirementService(
@@ -921,51 +931,405 @@ async def save_work_item_detail(
 
 @app.get("/role-framework", response_class=HTMLResponse)
 async def role_framework(request: Request) -> HTMLResponse:
+    as_of = _working_date()
+    try:
+        effective = role_profile_service.effective_profile(as_of=as_of)
+        effective_error = None
+    except RoleProfileOverlapError as exc:
+        effective = None
+        effective_error = str(exc)
     return render(
         "role_framework.html",
-        profiles=ops_repository.profiles(),
-        effective=ops_repository.effective_profile(),
+        profiles=role_profile_service.list_profiles(),
+        effective=effective,
+        effective_error=effective_error,
         domains=list(ResponsibilityDomain),
         domain_labels=RESPONSIBILITY_DOMAIN_LABELS,
+        state_labels=ROLE_PROFILE_STATE_LABELS,
+        as_of=as_of,
     )
+
+
+def _role_profile_values(profile: RoleProfile | None = None) -> dict[str, object]:
+    if profile is None:
+        return {
+            "title": "",
+            "organization": "",
+            "mission": "",
+            "boundaries": "",
+            "coordination": "",
+            "outcomes": "",
+            "cadence": "",
+            "domains": [],
+            "effective_from": _working_date().isoformat(),
+            "effective_until": "",
+        }
+    return {
+        "title": profile.title,
+        "organization": profile.organization or "",
+        "mission": profile.mission,
+        "boundaries": profile.boundaries,
+        "coordination": profile.coordination,
+        "outcomes": profile.outcomes,
+        "cadence": profile.cadence,
+        "domains": [domain.value for domain in profile.domains],
+        "effective_from": profile.effective_from.isoformat(),
+        "effective_until": (profile.effective_until.isoformat() if profile.effective_until else ""),
+    }
+
+
+def _role_profile_detail_context(
+    profile: RoleProfile | None,
+    *,
+    values: dict[str, object] | None = None,
+    error: str | None = None,
+) -> dict[str, object]:
+    parent = (
+        role_profile_service.get_profile(profile.parent_profile_id)
+        if profile is not None and profile.parent_profile_id is not None
+        else None
+    )
+    return {
+        "profile": profile,
+        "values": values or _role_profile_values(profile),
+        "error": error,
+        "domains": list(ResponsibilityDomain),
+        "domain_labels": RESPONSIBILITY_DOMAIN_LABELS,
+        "state_labels": ROLE_PROFILE_STATE_LABELS,
+        "parent": parent,
+        "children": (role_profile_service.list_children(profile.profile_id) if profile else []),
+        "audit_entries": role_profile_service.list_audit(profile.profile_id) if profile else [],
+    }
+
+
+def _role_profile_form_values(
+    *,
+    title: str,
+    organization: str,
+    mission: str,
+    boundaries: str,
+    coordination: str,
+    outcomes: str,
+    cadence: str,
+    domains: list[str],
+    effective_from: str,
+    effective_until: str,
+) -> dict[str, object]:
+    return {
+        "title": title,
+        "organization": organization,
+        "mission": mission,
+        "boundaries": boundaries,
+        "coordination": coordination,
+        "outcomes": outcomes,
+        "cadence": cadence,
+        "domains": domains,
+        "effective_from": effective_from,
+        "effective_until": effective_until,
+    }
+
+
+@app.get("/role-framework/new", response_class=HTMLResponse)
+async def new_role_profile(request: Request) -> HTMLResponse:
+    return render(
+        "role_profile_detail.html",
+        **_role_profile_detail_context(None),
+    )
+
+
+@app.post("/role-framework", response_class=HTMLResponse)
+async def create_role_profile_html(
+    request: Request,
+    title: str = Form(...),
+    organization: str = Form(""),
+    mission: str = Form(""),
+    boundaries: str = Form(""),
+    coordination: str = Form(""),
+    outcomes: str = Form(""),
+    cadence: str = Form(""),
+    domains: Annotated[list[str] | None, Form()] = None,
+    effective_from: str = Form(...),
+    effective_until: str = Form(""),
+) -> HTMLResponse:
+    selected_domains = domains or []
+    values = _role_profile_form_values(
+        title=title,
+        organization=organization,
+        mission=mission,
+        boundaries=boundaries,
+        coordination=coordination,
+        outcomes=outcomes,
+        cadence=cadence,
+        domains=selected_domains,
+        effective_from=effective_from,
+        effective_until=effective_until,
+    )
+    try:
+        profile = role_profile_service.create_profile(
+            {
+                **values,
+                "organization": organization or None,
+                "effective_until": effective_until or None,
+            },
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError) as exc:
+        return render(
+            "role_profile_detail.html",
+            **_role_profile_detail_context(
+                None,
+                values=values,
+                error=validation_error_message(exc),
+            ),
+            status_code=422,
+        )
+    return RedirectResponse(f"/role-framework/{quote(profile.profile_id)}", status_code=303)
+
+
+@app.get("/role-framework/{profile_id}", response_class=HTMLResponse)
+async def role_profile_detail(request: Request, profile_id: str) -> HTMLResponse:
+    try:
+        profile = role_profile_service.get_profile(profile_id)
+    except RoleProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render(
+        "role_profile_detail.html",
+        **_role_profile_detail_context(profile),
+    )
+
+
+@app.post("/role-framework/{profile_id}", response_class=HTMLResponse)
+async def edit_role_profile_html(
+    request: Request,
+    profile_id: str,
+    expected_version_token: str = Form(...),
+    title: str = Form(...),
+    organization: str = Form(""),
+    mission: str = Form(""),
+    boundaries: str = Form(""),
+    coordination: str = Form(""),
+    outcomes: str = Form(""),
+    cadence: str = Form(""),
+    domains: Annotated[list[str] | None, Form()] = None,
+    effective_from: str = Form(...),
+    effective_until: str = Form(""),
+) -> HTMLResponse:
+    try:
+        current = role_profile_service.get_profile(profile_id)
+    except RoleProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    selected_domains = domains or []
+    values = _role_profile_form_values(
+        title=title,
+        organization=organization,
+        mission=mission,
+        boundaries=boundaries,
+        coordination=coordination,
+        outcomes=outcomes,
+        cadence=cadence,
+        domains=selected_domains,
+        effective_from=effective_from,
+        effective_until=effective_until,
+    )
+    try:
+        role_profile_service.edit_draft(
+            profile_id,
+            {
+                **values,
+                "organization": organization or None,
+                "effective_until": effective_until or None,
+                "expected_version_token": expected_version_token,
+            },
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError) as exc:
+        current = role_profile_service.get_profile(profile_id)
+        return render(
+            "role_profile_detail.html",
+            **_role_profile_detail_context(
+                current,
+                values=values,
+                error=validation_error_message(exc),
+            ),
+            status_code=422,
+        )
+    return RedirectResponse(f"/role-framework/{quote(profile_id)}", status_code=303)
+
+
+@app.post("/role-framework/{profile_id}/revise", response_class=HTMLResponse)
+async def revise_role_profile_html(
+    request: Request,
+    profile_id: str,
+    expected_version_token: str = Form(...),
+) -> HTMLResponse:
+    try:
+        child = role_profile_service.revise_profile(
+            profile_id,
+            {"expected_version_token": expected_version_token},
+            LOCAL_ACTOR,
+        )
+    except RoleProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValidationError, ValueError) as exc:
+        profile = role_profile_service.get_profile(profile_id)
+        return render(
+            "role_profile_detail.html",
+            **_role_profile_detail_context(
+                profile,
+                error=validation_error_message(exc),
+            ),
+            status_code=422,
+        )
+    return RedirectResponse(f"/role-framework/{quote(child.profile_id)}", status_code=303)
+
+
+@app.post("/role-framework/{profile_id}/publish", response_class=HTMLResponse)
+async def publish_role_profile_html(
+    request: Request,
+    profile_id: str,
+    expected_version_token: str = Form(...),
+    parent_expected_version_token: str = Form(""),
+) -> HTMLResponse:
+    try:
+        role_profile_service.publish_profile(
+            profile_id,
+            {
+                "expected_version_token": expected_version_token,
+                "parent_expected_version_token": parent_expected_version_token or None,
+            },
+            LOCAL_ACTOR,
+        )
+    except RoleProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValidationError, ValueError) as exc:
+        profile = role_profile_service.get_profile(profile_id)
+        return render(
+            "role_profile_detail.html",
+            **_role_profile_detail_context(
+                profile,
+                error=validation_error_message(exc),
+            ),
+            status_code=422,
+        )
+    return RedirectResponse(f"/role-framework/{quote(profile_id)}", status_code=303)
+
+
+@app.post("/role-framework/{profile_id}/retire", response_class=HTMLResponse)
+async def retire_role_profile_html(
+    request: Request,
+    profile_id: str,
+    expected_version_token: str = Form(...),
+) -> HTMLResponse:
+    try:
+        role_profile_service.retire_profile(
+            profile_id,
+            {"expected_version_token": expected_version_token},
+            LOCAL_ACTOR,
+        )
+    except RoleProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValidationError, ValueError) as exc:
+        profile = role_profile_service.get_profile(profile_id)
+        return render(
+            "role_profile_detail.html",
+            **_role_profile_detail_context(
+                profile,
+                error=validation_error_message(exc),
+            ),
+            status_code=422,
+        )
+    return RedirectResponse(f"/role-framework/{quote(profile_id)}", status_code=303)
 
 
 @app.get("/api/ops/role-profiles")
 async def list_role_profiles() -> JSONResponse:
+    try:
+        effective = role_profile_service.effective_profile(as_of=_working_date())
+    except RoleProfileOverlapError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return JSONResponse(
         {
-            "profiles": ops_repository.profiles(),
-            "effective": ops_repository.effective_profile(),
+            "profiles": [
+                _legacy_role_profile_json(profile)
+                for profile in role_profile_service.list_profiles()
+            ],
+            "effective": _legacy_role_profile_json(effective) if effective else None,
             "domains": list(RESPONSIBILITY_DOMAINS),
         }
     )
 
 
+def _legacy_role_profile_json(profile: RoleProfile) -> dict[str, object]:
+    """Preserve the accepted OPS-01 role-profile JSON response shape."""
+    return {
+        "profile_id": profile.profile_id,
+        "version_number": profile.version_number,
+        "title": profile.title,
+        "organization": profile.organization,
+        "mission": profile.mission,
+        "boundaries": profile.boundaries,
+        "coordination": profile.coordination,
+        "outcomes": profile.outcomes,
+        "cadence": profile.cadence,
+        "domains_json": json.dumps([domain.value for domain in profile.domains]),
+        "effective_from": profile.effective_from.isoformat(),
+        "effective_until": (
+            profile.effective_until.isoformat() if profile.effective_until else None
+        ),
+        "state": profile.state.value,
+        "created_by": profile.created_by,
+        "created_at": profile.created_at.isoformat(),
+        "parent_profile_id": profile.parent_profile_id,
+        "version_token": profile.version_token,
+        "provenance_json": (profile.provenance.model_dump_json() if profile.provenance else None),
+    }
+
+
+async def _role_profile_json_body(request: Request) -> dict[str, object]:
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail="A JSON object is required.") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="A JSON object is required.")
+    return body
+
+
 @app.post("/api/ops/role-profiles")
 async def create_role_profile(request: Request) -> JSONResponse:
-    body = await request.json()
+    body = await _role_profile_json_body(request)
     try:
-        profile_id = ops_repository.create_profile(body)
-        return JSONResponse({"profile_id": profile_id}, status_code=201)
-    except (KeyError, ValueError, sqlite3.IntegrityError) as exc:
-        raise HTTPException(status_code=422, detail="Role profile could not be saved.") from exc
+        profile = role_profile_service.create_profile(body, LOCAL_ACTOR)
+        return JSONResponse({"profile_id": profile.profile_id}, status_code=201)
+    except (ValidationError, ValueError, sqlite3.IntegrityError) as exc:
+        raise HTTPException(status_code=422, detail=validation_error_message(exc)) from exc
 
 
 @app.post("/api/ops/role-profiles/{profile_id}/publish")
-async def publish_role_profile(profile_id: str) -> JSONResponse:
+async def publish_role_profile(profile_id: str, request: Request) -> JSONResponse:
+    body = await _role_profile_json_body(request)
     try:
-        ops_repository.publish_profile(profile_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Role profile could not be published.") from exc
+        role_profile_service.publish_profile(profile_id, body, LOCAL_ACTOR)
+    except RoleProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StaleRoleProfileError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=validation_error_message(exc)) from exc
     return JSONResponse({"profile_id": profile_id, "state": "PUBLISHED"})
 
 
 @app.post("/api/ops/role-profiles/{profile_id}/retire")
-async def retire_role_profile(profile_id: str) -> JSONResponse:
+async def retire_role_profile(profile_id: str, request: Request) -> JSONResponse:
+    body = await _role_profile_json_body(request)
     try:
-        ops_repository.retire_profile(profile_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Role profile could not be retired.") from exc
+        role_profile_service.retire_profile(profile_id, body, LOCAL_ACTOR)
+    except RoleProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StaleRoleProfileError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=validation_error_message(exc)) from exc
     return JSONResponse({"profile_id": profile_id, "state": "RETIRED"})
 
 

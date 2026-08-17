@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% if profile %}{{ profile.title }}{% else %}New role profile{% endif %} — ContractIQ</title>
+  <style>
+    body{font:15px system-ui;margin:0;background:#f4f1eb;color:#1a1f2e}main{max-width:980px;margin:auto;padding:32px}.back,.link{color:#175cd3}.panel{background:#fff;border:1px solid #d4cfc6;border-radius:8px;padding:24px;margin:18px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field{display:flex;flex-direction:column;gap:5px}.full{grid-column:1/-1}.field label,.label{font-weight:650}.field input,.field textarea{font:inherit;padding:9px;border:1px solid #9ca3af;border-radius:5px}.field textarea{min-height:95px}.domains{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.domain{padding:8px;background:#faf8f4;border-radius:5px}.error{padding:12px;margin-bottom:16px;background:#fee2e2;color:#991b1b;border-radius:5px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}.btn{font:inherit;padding:9px 14px;border:1px solid #175cd3;border-radius:5px;background:#175cd3;color:#fff;text-decoration:none}.btn.secondary{background:#fff;color:#175cd3}.btn.danger{background:#991b1b;border-color:#991b1b}.muted{color:#6b7280}.readout{white-space:pre-wrap;padding:10px;background:#faf8f4;border-radius:5px;min-height:24px}.audit{padding:10px 0;border-bottom:1px solid #eee}.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#e8efff;font-weight:650}@media(max-width:700px){.grid,.domains{grid-template-columns:1fr}.full{grid-column:auto}}
+  </style>
+</head>
+<body><main>
+  <a class="back" href="/role-framework">← Back to Role Framework</a>
+  <h1>{% if profile %}{{ profile.title or 'Untitled legacy profile' }}{% else %}Create role profile{% endif %}</h1>
+  {% if profile %}<p class="muted">{{ profile.profile_id }} · Global version {{ profile.version_number }} · <span class="badge">{{ state_labels[profile.state] }}</span></p>{% else %}<p class="muted">New profiles begin as DRAFT and receive server-owned identity, version, provenance, and concurrency token.</p>{% endif %}
+
+  <section class="panel">
+    {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+    {% if not profile or profile.state.value == 'DRAFT' %}
+    <form method="post" action="{% if profile %}/role-framework/{{ profile.profile_id }}{% else %}/role-framework{% endif %}">
+      {% if profile %}<input type="hidden" name="expected_version_token" value="{{ profile.version_token }}">{% endif %}
+      <div class="grid">
+        <div class="field"><label for="title">Role title</label><input id="title" name="title" maxlength="300" required value="{{ values.title or '' }}"></div>
+        <div class="field"><label for="organization">Organization (optional)</label><input id="organization" name="organization" maxlength="300" value="{{ values.organization or '' }}"></div>
+        <div class="field full"><label for="mission">Mission{% if profile %} (required to publish){% endif %}</label><textarea id="mission" name="mission" maxlength="10000">{{ values.mission or '' }}</textarea></div>
+        <div class="field full"><label for="boundaries">Boundaries (optional)</label><textarea id="boundaries" name="boundaries" maxlength="10000">{{ values.boundaries or '' }}</textarea></div>
+        <div class="field full"><label for="coordination">Coordination (optional)</label><textarea id="coordination" name="coordination" maxlength="10000">{{ values.coordination or '' }}</textarea></div>
+        <div class="field full"><label for="outcomes">Outcomes (optional)</label><textarea id="outcomes" name="outcomes" maxlength="10000">{{ values.outcomes or '' }}</textarea></div>
+        <div class="field full"><label for="cadence">Cadence (optional)</label><textarea id="cadence" name="cadence" maxlength="10000">{{ values.cadence or '' }}</textarea></div>
+        <div class="field"><label for="effective-from">Effective from</label><input id="effective-from" name="effective_from" type="date" required value="{{ values.effective_from or '' }}"></div>
+        <div class="field"><label for="effective-until">Effective until (optional)</label><input id="effective-until" name="effective_until" type="date" value="{{ values.effective_until or '' }}"></div>
+        <fieldset class="field full"><legend class="label">Responsibility domains (at least one required to publish)</legend><div class="domains">{% for domain in domains %}<label class="domain"><input type="checkbox" name="domains" value="{{ domain.value }}"{% if domain.value in values.domains %} checked{% endif %}> {{ domain_labels[domain] }}</label>{% endfor %}</div></fieldset>
+      </div>
+      <div class="actions"><button class="btn" type="submit">{% if profile %}Save draft{% else %}Create draft{% endif %}</button><a class="btn secondary" href="/role-framework">Cancel</a></div>
+    </form>
+    {% else %}
+    <div class="grid">
+      <div><div class="label">Organization</div><div class="readout">{{ profile.organization or 'Not specified' }}</div></div>
+      <div><div class="label">Effective window</div><div class="readout">{{ profile.effective_from }} — {{ profile.effective_until or 'open' }}</div></div>
+      <div class="full"><div class="label">Mission</div><div class="readout">{{ profile.mission or 'Not specified' }}</div></div>
+      <div class="full"><div class="label">Boundaries</div><div class="readout">{{ profile.boundaries or 'Not specified' }}</div></div>
+      <div class="full"><div class="label">Coordination</div><div class="readout">{{ profile.coordination or 'Not specified' }}</div></div>
+      <div class="full"><div class="label">Outcomes</div><div class="readout">{{ profile.outcomes or 'Not specified' }}</div></div>
+      <div class="full"><div class="label">Cadence</div><div class="readout">{{ profile.cadence or 'Not specified' }}</div></div>
+      <div class="full"><div class="label">Responsibility domains</div><div class="domains">{% for domain in profile.domains %}<div class="domain">{{ domain_labels[domain] }}</div>{% else %}<div class="muted">No domains recorded.</div>{% endfor %}</div></div>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if profile %}
+  <section class="panel"><h2>Lifecycle actions</h2>
+    <div class="actions">
+      {% if profile.state.value == 'DRAFT' %}
+      <form method="post" action="/role-framework/{{ profile.profile_id }}/publish"><input type="hidden" name="expected_version_token" value="{{ profile.version_token }}">{% if parent and parent.state.value == 'PUBLISHED' %}<input type="hidden" name="parent_expected_version_token" value="{{ parent.version_token }}">{% endif %}<button class="btn" type="submit">Publish profile</button></form>
+      {% endif %}
+      {% if profile.state.value in ['PUBLISHED','RETIRED'] %}
+      <form method="post" action="/role-framework/{{ profile.profile_id }}/revise"><input type="hidden" name="expected_version_token" value="{{ profile.version_token }}"><button class="btn secondary" type="submit">Create revision</button></form>
+      {% endif %}
+      {% if profile.state.value == 'PUBLISHED' %}
+      <form method="post" action="/role-framework/{{ profile.profile_id }}/retire"><input type="hidden" name="expected_version_token" value="{{ profile.version_token }}"><button class="btn danger" type="submit">Retire profile</button></form>
+      {% endif %}
+    </div>
+    {% if profile.state.value == 'DRAFT' %}<p class="muted">Publication requires a mission, at least one domain, human provenance, and a non-overlapping effective window.</p>{% else %}<p class="muted">Published and retired authored content is immutable. Use Create revision to make a controlled child DRAFT.</p>{% endif %}
+  </section>
+
+  <section class="panel"><h2>Version relationships</h2>
+    <p><strong>Parent:</strong> {% if parent %}<a class="link" href="/role-framework/{{ parent.profile_id }}">v{{ parent.version_number }} · {{ parent.title }}</a>{% else %}Original profile{% endif %}</p>
+    <p><strong>Children:</strong></p>{% if children %}<ul>{% for child in children %}<li><a class="link" href="/role-framework/{{ child.profile_id }}">v{{ child.version_number }} · {{ child.title }} · {{ state_labels[child.state] }}</a></li>{% endfor %}</ul>{% else %}<p class="muted">No child revisions.</p>{% endif %}
+  </section>
+
+  <section class="panel"><h2>Provenance</h2>{% if profile.provenance and profile.provenance.human_confirmed %}<p>Human-authored by <strong>{{ profile.provenance.confirmed_by or profile.provenance.agent_name }}</strong> at {{ profile.provenance.confirmed_at or profile.provenance.created_at }}.</p>{% else %}<div class="error">Legacy provenance is missing, malformed, or unconfirmed. It has not been treated as human-confirmed.</div>{% endif %}</section>
+
+  <section class="panel"><h2>Audit history</h2>{% if audit_entries %}{% for entry in audit_entries %}<div class="audit"><strong>{{ entry.action|replace('_',' ')|title }}</strong><div>{{ entry.timestamp }} · {{ entry.actor }}</div><details><summary>Audit detail</summary><pre>{{ entry.detail }}</pre></details></div>{% endfor %}{% else %}<p class="muted">No role-profile audit events.</p>{% endif %}</section>
+  {% endif %}
+</main></body></html>

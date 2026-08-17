@@ -1,13 +1,75 @@
-# Handoff — OPS-02
+# Handoff — OPS-03
 
 ## Status
 ACCEPTED FOR CONTINUED DEVELOPMENT
 
 ## Branch and baseline
+- Branch: `ops-03-role-framework-authoring`
+- Published OPS-02 baseline: `73a1adf356e231338e02c4d0ca94e302d4d97ce1`
+- Recovery pointer: `backup/ops-03-pre-implementation-20260817`
+- Publication is limited to the OPS-03 feature branch; no merge, rebase, main-branch change, force-push, pull request, or OPS-04 work is authorized.
+
+## OPS-03 implementation
+- Added the authoritative specification at `docs/tasks/OPS-03-role-framework-authoring.md`.
+- Added typed Pydantic v2 role-profile models and a shared service boundary for browser and JSON operations.
+- Added browser creation, stable detail/edit, publication, revision, retirement, history, relationship, provenance, audit, and explicit-date effective-profile workflows.
+- DRAFT profiles require a bounded title and effective start but may remain narratively incomplete; publication additionally requires mission, at least one allowlisted responsibility domain, valid human-authored provenance, a valid effective window, and no prohibited overlap.
+- Responsibility domains use the existing 13-domain taxonomy, deduplicate in deterministic taxonomy order, and do not reclassify work items or alter the global taxonomy.
+- Published and retired authored content is immutable. Revise creates one child DRAFT, copies authorable content, allocates a globally unique version inside the write transaction, and consumes the parent's expected token.
+- Publishing a child of a PUBLISHED parent atomically closes the parent's effective window at the day before the child's start, publishes the child, rotates affected tokens, and writes publication and supersession audit evidence. A RETIRED parent is never reactivated.
+- Effective lookup accepts an explicit working date at the service boundary, returns zero or one PUBLISHED version, excludes RETIRED profiles, performs no writes, and reports invalid overlapping legacy data instead of silently choosing.
+- Existing JSON route paths and successful response shape were preserved; mutations now reject server-owned identity, version, actor, timestamp, token, and provenance inputs instead of trusting them.
+- No delete path, LLM/network call, work-item change, My Day/My Work change, schema migration, or persisted-domain redesign was added.
+
+## OPS-03 files created
+- `docs/tasks/OPS-03-role-framework-authoring.md`
+- `core/role_profiles.py`
+- `core/role_profile_service.py`
+- `templates/role_profile_detail.html`
+- `tests/unit/test_role_profiles.py`
+- `tests/unit/test_role_profile_service.py`
+- `tests/unit/test_role_profile_ui.py`
+- `scripts/validate_ops_03.py`
+- `scripts/asgi_acceptance_ops03.py`
+
+## OPS-03 files modified
+- `app.py` — shared service wiring plus state-appropriate HTML and compatible hardened JSON routes.
+- `core/ops_foundation.py` — typed role-profile hydration and transactional lifecycle, version, supersession, concurrency, and audit operations in the existing repository.
+- `templates/role_framework.html` — setup/effective/history browser entry point and create navigation.
+- `HANDOFF.md` — OPS-03 implementation evidence and narrow corrections to stale OPS-02 publication/projection wording.
+
+## OPS-03 automated evidence
+- Focused role/operations/navigation suite: `68 passed, 0 failed, 48 warnings`.
+- Full suite: `317 passed, 0 failed, 50 warnings` (all 300 published tests plus 17 OPS-03 tests).
+- `OPS-03 validation: PASS`.
+- `OPS-03 ASGI acceptance: PASS`; the dependency-free test exercises actual HTML POST/303/GET behavior and verifies repository state and rendered content using an isolated temporary database.
+- OPS-01 and OPS-02 validators and ASGI acceptance: PASS.
+- Every available TASK-07 through TASK-18 validator and applicable TASK-11 through TASK-18 ASGI acceptance script: PASS. No standalone TASK-06 validator exists in the repository.
+- Changed-file `ruff format --check`: PASS (9 files formatted).
+- Changed Python files other than `app.py`, `ruff check`: PASS.
+- Direct `ruff check app.py` retains exactly 10 inherited pre-OPS-03 findings; no new OPS-03 Ruff finding remains and repository-wide Ruff compliance is not claimed.
+- Strict mypy on the two new production modules with imported legacy modules silenced: PASS (`--strict --follow-imports=silent`). Repository-wide mypy compliance is not claimed.
+- `git diff --check`: PASS.
+- Remaining warnings are existing FastAPI `on_event` deprecation warnings.
+
+## OPS-03 database and safeguards
+- Existing `ops_role_profiles` and `audit_log` storage is reused; no migration was added.
+- Global version allocation, profile mutation, token rotation, and audit evidence execute within SQLite transactions using the existing database patterns.
+- Validators and tests use temporary isolated databases. Final publication does not compare the production database hash because accepted My Work testing intentionally changed production data; no database or backup is included in OPS-03 source control.
+- No dependency, lockfile, tool configuration, database, database backup, or TASK-06–18 specification changed.
+- `uv.lock` and `uv.lock.armoury-generated-20260811` remain untouched, untracked, and unstaged.
+
+## OPS-03 manual browser acceptance — 2026-08-17
+- Manual browser acceptance: PASS, user-verified on Armoury on 2026-08-17.
+- Accepted coverage included draft creation and retained editing, publication validation, controlled revision and supersession, retirement, stable version history, parent/child navigation, provenance, audit presentation, optimistic-concurrency feedback, and effective-profile behavior.
+- OPS-03 is accepted for publication and continued development. OPS-04 remains dormant.
+
+# Prior accepted OPS-02 record
+
+## OPS-02 publication
 - Branch: `ops-02-operational-command-center`
-- Baseline and current HEAD: `72eaf4b1bd56d5f9220925ed8f45f1dab86cbe05`
-- Recovery pointer: `backup/ops-02-pre-implementation-20260817`
-- No staging, commit, push, merge, rebase, main-branch change, or pull request occurred.
+- Published commit: `73a1adf356e231338e02c4d0ca94e302d4d97ce1`
+- Manual browser acceptance: PASS on Armoury, 2026-08-17.
 
 ## Files created
 - `docs/tasks/OPS-02-operational-command-center.md` — authoritative OPS-02 specification.
@@ -38,7 +100,7 @@ ACCEPTED FOR CONTINUED DEVELOPMENT
 - My Work is the authoritative operational register with allowlisted current/history/all, status, category, responsibility-domain, explicit context, bid, and attention filters using intersection semantics.
 - Bid context is batch-resolved to a human-readable project label plus stable identifier; standalone work remains first-class.
 - Active ordering reuses one pure My Day attention contract: blocked, overdue, today, other currently due attention, upcoming, scheduled, then unscheduled; priority, earliest actionable date, and stable ID break ties.
-- My Day preserves TASK-06 and TASK-09–18 control projections while work-item mutation is removed. Active and archived work links to `/my-work/{id}`, and Add Work links to `/my-work#quick-capture`.
+- My Day preserves the implemented TASK-06 readiness and TASK-09 plus TASK-11–15 control collections while work-item mutation is removed. TASK-16–18 routes remain available but do not have dedicated My Day attention categories. Active and archived work links to `/my-work/{id}`, and Add Work links to `/my-work#quick-capture`.
 - One work item retains all applicable attention reasons while appearing once. Completed and cancelled items remain outside active attention.
 - Safe allowlisted query reconstruction preserves appropriate My Work filters through editor/back navigation without accepting arbitrary return URLs.
 - Existing service mutation routing, atomic audit writes, optimistic concurrency, hard-delete protection, JSON APIs, Quick Capture PRG, and invalid-input retention are unchanged.
@@ -56,7 +118,7 @@ ACCEPTED FOR CONTINUED DEVELOPMENT
 - Manual browser re-acceptance: PASS, user-verified on Armoury on 2026-08-17.
 - The re-test covered status-scoped lifecycle controls, editable priority and contribution candidate, complete Waiting/Blocked/Completed/Cancelled persistence, independent dates, and stale-version feedback.
 - The initial failure was confirmed as lifecycle-specific values entered while status remained OPEN; the accepted repair prevents that ambiguous interaction without weakening lifecycle validation.
-- Publication commit is pending; this handoff is included in the intended OPS-02 publication commit.
+- OPS-02 was published at `73a1adf356e231338e02c4d0ca94e302d4d97ce1` after this acceptance.
 
 ## TASK-07 compatibility maintenance
 - The historical validator's synthetic WAITING fixture gained `waiting_party_label`, `waiting_owed`, and fixed `chase_date`.
