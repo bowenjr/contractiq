@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from types import ModuleType
 from typing import cast
@@ -44,6 +45,7 @@ def requirement_ui_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Modul
     module = importlib.util.module_from_spec(spec)
     sys.modules["app"] = module
     spec.loader.exec_module(module)
+    module._working_date = lambda: date(2026, 8, 5)
     return module
 
 
@@ -93,7 +95,7 @@ def test_empty_register_dashboard_and_navigation_render_without_alice(
     ) as health:
         page = asyncio.run(requirement_ui_app.requirements_register(request))
         dashboard = asyncio.run(requirement_ui_app.index(request))
-        my_day = asyncio.run(requirement_ui_app.my_day(request, "2026-08-05"))
+        my_day = asyncio.run(requirement_ui_app.my_day(request))
     assert page.status_code == dashboard.status_code == my_day.status_code == 200
     assert "No requirements match" in _html(page)
     assert "no data" in _html(page)

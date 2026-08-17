@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from types import ModuleType
 from typing import cast
@@ -58,6 +59,7 @@ def document_ui_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleTy
     module = importlib.util.module_from_spec(spec)
     sys.modules["app"] = module
     spec.loader.exec_module(module)
+    module._working_date = lambda: date(2026, 8, 5)
     return module
 
 
@@ -92,7 +94,7 @@ def test_documents_empty_page_and_navigation_are_available(
         document_ui_app.controlled_documents(cast(Request, object()), None, None, None)
     )
     dashboard = asyncio.run(document_ui_app.index(cast(Request, object())))
-    my_day = asyncio.run(document_ui_app.my_day(cast(Request, object()), "2026-08-05"))
+    my_day = asyncio.run(document_ui_app.my_day(cast(Request, object())))
     assert page.status_code == dashboard.status_code == my_day.status_code == 200
     assert "No controlled documents yet" in _html(page)
     assert "ContractIQ" in _html(page)

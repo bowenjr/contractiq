@@ -2,7 +2,14 @@ from datetime import UTC, date, datetime
 from uuid import UUID
 
 from core.enums import Actor, Gate
-from core.my_day import ReadinessSnapshot, WorkItemSnapshot, project_my_day
+from core.my_day import (
+    ReadinessSnapshot,
+    WorkItemSnapshot,
+    project_my_day,
+    work_item_attention_reasons,
+    work_item_attention_tier,
+    work_item_order_key,
+)
 from core.readiness import Blocker, ReadinessReport, ReadinessVerdict
 from core.schemas import Provenance
 from core.work_items import WorkItem, WorkItemPriority, WorkItemStatus
@@ -143,6 +150,24 @@ def test_blocked_and_waiting_take_precedence_but_keep_due_flags() -> None:
     assert result.counts.due_today == 1
 
 
+def test_blocked_due_today_retains_both_reasons_and_primary_tier() -> None:
+    blocked = _item(
+        20,
+        "Blocked today",
+        due_date=AS_OF,
+        status=WorkItemStatus.BLOCKED,
+        blocker_note="Approval missing",
+    )
+
+    result = project_my_day([blocked], [], AS_OF, 7)
+
+    assert len(result.blocked) == 1
+    assert result.blocked[0].reasons == ["BLOCKED", "DUE_TODAY"]
+    assert result.counts.blocked == 1
+    assert result.counts.due_today == 1
+    assert work_item_attention_tier(blocked.item, AS_OF) == 0
+
+
 def test_ordering_uses_priority_date_title_and_id_tie_breakers() -> None:
     items = [
         _item(9, "Zulu", priority=WorkItemPriority.CRITICAL),
@@ -204,3 +229,45 @@ def test_multiple_attention_reasons_are_deduplicated_on_one_item() -> None:
         "FOLLOW_UP_OVERDUE",
     ]
     assert result.overdue == []
+
+
+def test_shared_attention_ordering_uses_tier_priority_date_and_stable_id() -> None:
+    items = [
+        _item(7, "Unscheduled"),
+        _item(6, "Later", due_date=date(2026, 8, 20)),
+        _item(5, "Upcoming", next_action_date=date(2026, 8, 8)),
+        _item(4, "Legacy waiting", status=WorkItemStatus.WAITING, waiting_on="Customer"),
+        _item(3, "Today", due_date=AS_OF),
+        _item(2, "Overdue", next_action_date=date(2026, 8, 4)),
+        _item(
+            1,
+            "Blocked",
+            status=WorkItemStatus.BLOCKED,
+            blocker_note="Approval missing",
+        ),
+    ]
+
+    ordered = sorted(items, key=lambda entry: work_item_order_key(entry.item, AS_OF))
+
+    assert [entry.item.title for entry in ordered] == [
+        "Blocked",
+        "Overdue",
+        "Today",
+        "Legacy waiting",
+        "Upcoming",
+        "Later",
+        "Unscheduled",
+    ]
+    assert work_item_attention_reasons(items[3].item, AS_OF) == ["WAITING_ATTENTION"]
+
+    same_date = [
+        _item(11, "Normal", due_date=AS_OF),
+        _item(12, "Critical", due_date=AS_OF, priority=WorkItemPriority.CRITICAL),
+        _item(10, "Stable first", due_date=AS_OF),
+    ]
+    tied = sorted(same_date, key=lambda entry: work_item_order_key(entry.item, AS_OF))
+    assert [entry.item.work_item_id for entry in tied] == [
+        f"WI-{UUID(int=12)}",
+        f"WI-{UUID(int=10)}",
+        f"WI-{UUID(int=11)}",
+    ]

@@ -305,17 +305,35 @@ class WorkItemRepository:
         bid_id: str | None = None,
         *,
         active_only: bool = False,
+        statuses: frozenset[WorkItemStatus] | None = None,
+        category: WorkCategory | None = None,
+        responsibility_domain: ResponsibilityDomain | None = None,
+        standalone_only: bool = False,
     ) -> list[WorkItem]:
-        """List work items with optional parent and active-state filters."""
+        """List work items using parameterized, intersecting register filters."""
         clauses: list[str] = []
         values: list[object] = []
+        if bid_id is not None and standalone_only:
+            raise ValueError("bid_id and standalone_only are contradictory")
         if bid_id is not None:
             clauses.append("bid_id = ?")
             values.append(bid_id)
+        if standalone_only:
+            clauses.append("bid_id IS NULL")
         if active_only:
             placeholders = ",".join("?" for _ in ACTIVE_WORK_ITEM_STATUSES)
             clauses.append(f"status IN ({placeholders})")
             values.extend(sorted(status.value for status in ACTIVE_WORK_ITEM_STATUSES))
+        if statuses is not None:
+            placeholders = ",".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            values.extend(sorted(status.value for status in statuses))
+        if category is not None:
+            clauses.append("category = ?")
+            values.append(category.value)
+        if responsibility_domain is not None:
+            clauses.append("responsibility_domain = ?")
+            values.append(responsibility_domain.value)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._conn() as conn:
             rows = conn.execute(

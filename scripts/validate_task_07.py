@@ -112,6 +112,9 @@ def main() -> None:
                 "title": "Receive customer answers",
                 "status": "WAITING",
                 "waiting_on": "Customer procurement",
+                "waiting_party_label": "Customer procurement",
+                "waiting_owed": "Customer answers",
+                "chase_date": "2026-08-05",
                 "due_date": "2026-08-04",
             },
             "validation",
@@ -122,6 +125,8 @@ def main() -> None:
                 "title": "Resolve supplier pricing",
                 "status": "BLOCKED",
                 "blocker_note": "Supplier quote has not arrived",
+                "blocker_description": "Supplier quote has not arrived",
+                "resolution_owner": "Commercial team",
                 "due_date": "2026-08-03",
                 "priority": "CRITICAL",
             },
@@ -132,6 +137,7 @@ def main() -> None:
                 "bid_id": bid.bid_id,
                 "title": "Completed setup",
                 "status": "COMPLETED",
+                "completion_outcome": "Setup completed successfully",
             },
             "validation",
         )
@@ -151,7 +157,7 @@ def main() -> None:
         assert projection.blocked[0].is_overdue is True
         assert projection.waiting[0].is_overdue is True
         assert projection.counts.overdue == 3
-        assert projection.counts.due_today == 1
+        assert projection.counts.due_today == 2
         assert projection.counts.waiting == 1
         assert projection.counts.blocked == 1
         assert projection.counts.readiness_holds == 1
@@ -159,7 +165,11 @@ def main() -> None:
 
         completed = work_service.transition_work_item(
             overdue.work_item_id,
-            {"expected_version": overdue.version, "status": WorkItemStatus.COMPLETED},
+            {
+                "expected_version": overdue.version,
+                "status": WorkItemStatus.COMPLETED,
+                "completion_outcome": "Clarification submitted successfully",
+            },
             "validation",
         )
         assert completed.completed_at == NOW

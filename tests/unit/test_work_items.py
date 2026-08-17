@@ -12,10 +12,14 @@ from core.schemas import Bid
 from core.work_item_repository import StaleWorkItemError, WorkItemRepository
 from core.work_item_service import WorkItemService
 from core.work_items import (
+    WorkAttentionFilter,
+    WorkContextFilter,
     WorkItemCreate,
     WorkItemKind,
     WorkItemPriority,
     WorkItemStatus,
+    WorkRegisterFilter,
+    WorkRegisterView,
 )
 
 NOW = datetime(2026, 8, 5, 14, 30, tzinfo=UTC)
@@ -221,3 +225,20 @@ def test_edit_enforces_milestone_due_date_and_stale_version(
             {"expected_version": 1, "title": "Stale title"},
             "jason",
         )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"context": WorkContextFilter.BID},
+        {"context": WorkContextFilter.STANDALONE, "bid_id": "B-2026-0001"},
+        {"view": WorkRegisterView.CURRENT, "status": WorkItemStatus.COMPLETED},
+        {"view": WorkRegisterView.HISTORY, "status": WorkItemStatus.OPEN},
+        {"view": WorkRegisterView.HISTORY, "attention": WorkAttentionFilter.REQUIRED},
+    ],
+)
+def test_register_filter_rejects_contradictory_combinations(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        WorkRegisterFilter.model_validate(payload)

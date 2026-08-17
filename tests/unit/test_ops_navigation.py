@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import sys
+from datetime import date
 from types import ModuleType
 from typing import cast
 
@@ -24,6 +25,7 @@ def ui_app(tmp_path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules["app"] = module
     spec.loader.exec_module(module)
+    module._working_date = lambda: date(2026, 8, 5)
     return module
 
 
@@ -38,7 +40,7 @@ def test_home_exposes_operational_workspace_navigation(ui_app: ModuleType) -> No
 def test_operational_pages_share_navigation_and_quick_capture(ui_app: ModuleType) -> None:
     request = cast(Request, object())
     pages = [
-        _text(asyncio.run(ui_app.my_day(request, "2026-08-05"))),
+        _text(asyncio.run(ui_app.my_day(request))),
         _text(asyncio.run(ui_app.my_work(request))),
         _text(asyncio.run(ui_app.role_framework(request))),
     ]
@@ -49,5 +51,5 @@ def test_operational_pages_share_navigation_and_quick_capture(ui_app: ModuleType
         assert 'href="/requirements"' in page
     my_work = pages[1]
     assert "Quick Capture" in my_work
-    assert "Use Quick Capture above." in my_work
+    assert 'id="quick-capture"' in my_work
     assert "Use Quick Capture from My Day." not in my_work

@@ -14,7 +14,14 @@ from core.work_item_repository import (
     WorkItemRepository,
 )
 from core.work_item_service import WorkItemService
-from core.work_items import WorkItem, WorkItemKind, WorkItemPriority, WorkItemStatus
+from core.work_items import (
+    ResponsibilityDomain,
+    WorkCategory,
+    WorkItem,
+    WorkItemKind,
+    WorkItemPriority,
+    WorkItemStatus,
+)
 
 NOW = datetime(2026, 8, 5, 12, tzinfo=UTC)
 
@@ -188,3 +195,41 @@ def test_supported_repository_has_no_hard_delete_operation(tmp_db: Database) -> 
 
     assert not hasattr(repository, "delete")
     assert not hasattr(repository, "hard_delete")
+
+
+def test_list_filters_are_parameterized_intersections(
+    tmp_db: Database,
+    bid_repo: BidRepository,
+    valid_bid: Bid,
+) -> None:
+    bid_repo.create_bid(valid_bid)
+    repository = WorkItemRepository(tmp_db)
+    service = WorkItemService(repository, bid_repo, now_factory=lambda: NOW)
+    standalone = service.create_work_item(
+        {
+            "title": "Standalone",
+            "category": "CUSTOMER_REQUEST",
+            "responsibility_domain": "CUSTOMER_SOLUTION",
+        },
+        "jason",
+    )
+    service.create_work_item(
+        {
+            "bid_id": valid_bid.bid_id,
+            "title": "Bid work",
+            "category": "COMMERCIAL_REVIEW",
+            "responsibility_domain": "QUOTATION_COMMERCIAL",
+        },
+        "jason",
+    )
+
+    results = repository.list(
+        statuses=frozenset({WorkItemStatus.OPEN}),
+        category=WorkCategory.CUSTOMER_REQUEST,
+        responsibility_domain=ResponsibilityDomain.CUSTOMER_SOLUTION,
+        standalone_only=True,
+    )
+
+    assert results == [standalone]
+    with pytest.raises(ValueError, match="contradictory"):
+        repository.list(bid_id=valid_bid.bid_id, standalone_only=True)

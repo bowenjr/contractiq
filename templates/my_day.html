@@ -122,7 +122,6 @@
     <a class="nav-item" href="/role-framework">Role Framework</a>
     <a class="nav-item" href="/requirements">Contract Controls</a>
     <a class="nav-item" href="/documents">Documents</a>
-    <a class="nav-item" href="/requirements">Requirements</a>
     <div class="nav-label">Reference</div>
     <a class="nav-item" href="/knowledge">Knowledge Base</a>
   </nav>
@@ -132,7 +131,7 @@
 <main>
   <header class="topbar">
     <div><h1>My Day</h1><div class="as-of">Operational view as of <time datetime="{{ projection.as_of }}">{{ projection.as_of.strftime('%A, %B %-d, %Y') }}</time></div></div>
-    <button class="btn btn-gold" type="button" onclick="openModal('create-modal')">+ Add work item</button>
+    <a class="btn btn-gold" href="/my-work#quick-capture">+ Add work item</a>
   </header>
   <div class="content">
     <section class="summary" aria-label="My Day summary">
@@ -150,8 +149,8 @@
       {% if items %}
         {% for projected in items %}{% set item = projected.item %}
         <article class="work-row" data-work-item-id="{{ item.work_item_id }}">
-          <div><div class="item-title">{{ item.title }}</div>{% if item.details %}<div class="item-detail">{{ item.details }}</div>{% endif %}</div>
-          <div><div class="parent-id">{{ item.bid_id }}</div><div class="parent-name">{{ projected.bid_name }}</div></div>
+          <div><a class="item-title" href="/my-work/{{ item.work_item_id }}">{{ item.title }}</a>{% if item.details %}<div class="item-detail">{{ item.details }}</div>{% endif %}</div>
+          <div><div class="parent-id">{{ item.bid_id or 'Standalone' }}</div><div class="parent-name">{{ projected.bid_name }}</div></div>
           <div><div class="meta-label">Category</div><div class="meta-value">{{ category_labels[item.category] }}</div></div>
           <div><span class="badge priority-{{ item.priority.value }}">{{ item.priority.value }}</span></div>
           <div><span class="badge status-{{ item.status.value }}">{{ status_labels[item.status] }}</span></div>
@@ -162,13 +161,7 @@
             {% if projected.reasons %}<div class="context">{{ projected.reasons|join(' · ')|replace('_',' ')|title }}</div>{% endif %}
           </div>
           <div class="actions">
-            <button class="btn btn-small" type="button" onclick="openEdit(this)"
-              data-id="{{ item.work_item_id }}" data-version="{{ item.version }}" data-kind="{{ item.kind.value }}"
-              data-title="{{ item.title }}" data-details="{{ item.details or '' }}" data-priority="{{ item.priority.value }}"
-              data-due="{{ item.due_date or '' }}">Edit</button>
-            <button class="btn btn-small" type="button" onclick="openTransition(this)"
-              data-id="{{ item.work_item_id }}" data-version="{{ item.version }}" data-status="{{ item.status.value }}"
-              data-waiting="{{ item.waiting_on or '' }}" data-blocker="{{ item.blocker_note or '' }}">Status</button>
+            <a class="btn btn-small" href="/my-work/{{ item.work_item_id }}">View/Edit</a>
           </div>
         </article>
         {% endfor %}
@@ -234,15 +227,13 @@
       {% if archived_items %}
         {% for snapshot in archived_items %}{% set item = snapshot.item %}
         <article class="work-row">
-          <div><div class="item-title">{{ item.title }}</div><div class="item-detail">Retained for audit history</div></div>
-          <div><div class="parent-id">{{ item.bid_id }}</div><div class="parent-name">{{ snapshot.bid_name }}</div></div>
+          <div><a class="item-title" href="/my-work/{{ item.work_item_id }}?register_view=history">{{ item.title }}</a><div class="item-detail">Retained for audit history</div></div>
+          <div><div class="parent-id">{{ item.bid_id or 'Standalone' }}</div><div class="parent-name">{{ snapshot.bid_name }}</div></div>
           <div><div class="meta-label">Kind</div><div class="meta-value">{{ item.kind.value|title }}</div></div>
           <div><span class="badge priority-{{ item.priority.value }}">{{ item.priority.value }}</span></div>
           <div><span class="badge status-{{ item.status.value }}">{{ item.status.value }}</span></div>
           <div>{{ item.due_date or 'No due date' }}</div>
-          <div class="actions"><button class="btn btn-small" type="button" onclick="openTransition(this)"
-            data-id="{{ item.work_item_id }}" data-version="{{ item.version }}" data-status="{{ item.status.value }}"
-            data-waiting="" data-blocker="">Reopen / status</button></div>
+          <div class="actions"><a class="btn btn-small" href="/my-work/{{ item.work_item_id }}?register_view=history">View/Edit</a></div>
         </article>
         {% endfor %}
       {% else %}<div class="empty">No completed or cancelled work items yet.</div>{% endif %}
@@ -251,128 +242,5 @@
   </div>
 </main>
 
-<div class="modal-backdrop" id="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-title">
-  <div class="modal"><h2 id="create-title">Add operational work</h2><div class="form-error" id="create-error" role="alert" aria-live="assertive" tabindex="-1"></div>
-    <form id="create-form">
-      <div class="grid">
-        <div class="field full"><label for="create-bid">Bid / opportunity <span class="required">*</span></label><select id="create-bid" required>{% for bid in bids %}<option value="{{ bid.bid_id }}">{{ bid.bid_id }} · {{ bid.project_name }}</option>{% endfor %}</select></div>
-        <div class="field"><label for="create-kind">Kind <span class="required">*</span></label><select id="create-kind" required>{% for kind in kinds %}<option value="{{ kind.value }}">{{ kind.value|title }}</option>{% endfor %}</select></div>
-        <div class="field"><label for="create-priority">Priority <span class="required">*</span></label><select id="create-priority" required>{% for priority in priorities %}<option value="{{ priority.value }}"{% if priority.value == 'NORMAL' %} selected{% endif %}>{{ priority.value }}</option>{% endfor %}</select></div>
-        <div class="field full"><label for="create-title-input">Title <span class="required">*</span></label><input id="create-title-input" maxlength="300" required></div>
-        <div class="field full"><label for="create-details">Details</label><textarea id="create-details" maxlength="10000"></textarea></div>
-        <div class="field"><label for="create-due">Due date</label><input id="create-due" type="date"></div>
-        <div class="field"><label for="create-status">Initial status <span class="required">*</span></label><select id="create-status" onchange="toggleConditional('create')"><option>OPEN</option><option>IN_PROGRESS</option><option>WAITING</option><option>BLOCKED</option></select></div>
-        <div class="field full" id="create-waiting-wrap" hidden><label for="create-waiting">Waiting on <span class="required">*</span></label><input id="create-waiting" maxlength="1000"></div>
-        <div class="field full" id="create-blocker-wrap" hidden><label for="create-blocker">Blocker note <span class="required">*</span></label><textarea id="create-blocker" maxlength="2000"></textarea></div>
-      </div>
-      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal('create-modal')">Cancel</button><button class="btn btn-primary" type="submit"{% if not bids %} disabled{% endif %}>Create</button></div>
-    </form>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-title-heading">
-  <div class="modal"><h2 id="edit-title-heading">Edit work item</h2><div class="form-error" id="edit-error" role="alert" aria-live="assertive" tabindex="-1"></div>
-    <form id="edit-form"><input id="edit-id" type="hidden"><input id="edit-version" type="hidden">
-      <div class="grid">
-        <div class="field"><label for="edit-kind">Kind</label><select id="edit-kind">{% for kind in kinds %}<option value="{{ kind.value }}">{{ kind.value|title }}</option>{% endfor %}</select></div>
-        <div class="field"><label for="edit-priority">Priority</label><select id="edit-priority">{% for priority in priorities %}<option value="{{ priority.value }}">{{ priority.value }}</option>{% endfor %}</select></div>
-        <div class="field full"><label for="edit-title-input">Title</label><input id="edit-title-input" maxlength="300" required></div>
-        <div class="field full"><label for="edit-details">Details</label><textarea id="edit-details" maxlength="10000"></textarea></div>
-        <div class="field"><label for="edit-due">Due date</label><input id="edit-due" type="date"></div>
-      </div>
-      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal('edit-modal')">Cancel</button><button class="btn btn-primary" type="submit">Save changes</button></div>
-    </form>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="status-modal" role="dialog" aria-modal="true" aria-labelledby="status-title">
-  <div class="modal"><h2 id="status-title">Change work status</h2><div class="form-error" id="status-error" role="alert" aria-live="assertive" tabindex="-1"></div>
-    <form id="status-form"><input id="status-id" type="hidden"><input id="status-version" type="hidden">
-      <div class="field"><label for="status-value">New status</label><select id="status-value" onchange="toggleConditional('status')">{% for status in statuses %}<option value="{{ status.value }}">{{ status.value.replace('_',' ') }}</option>{% endfor %}</select></div>
-      <div class="field" id="status-waiting-wrap" hidden><label for="status-waiting">Waiting on <span class="required">*</span></label><input id="status-waiting" maxlength="1000"></div>
-      <div class="field" id="status-blocker-wrap" hidden><label for="status-blocker">Blocker note <span class="required">*</span></label><textarea id="status-blocker" maxlength="2000"></textarea></div>
-      <div class="modal-actions"><button class="btn" type="button" onclick="closeModal('status-modal')">Cancel</button><button class="btn btn-primary" type="submit">Apply status</button></div>
-    </form>
-  </div>
-</div>
-
-<script>
-  'use strict';
-  const actor = {{ actor|tojson }};
-  function openModal(id) { document.getElementById(id).classList.add('open'); }
-  function closeModal(id) { document.getElementById(id).classList.remove('open'); clearError(id.replace('-modal','')); }
-  function clearError(prefix) { const el = document.getElementById(prefix + '-error'); if (el) { el.textContent = ''; el.classList.remove('show'); } }
-  function showError(prefix, message) { const el = document.getElementById(prefix + '-error'); el.textContent = message; el.classList.add('show'); el.focus(); }
-  function toggleConditional(prefix) {
-    const status = document.getElementById(prefix + (prefix === 'create' ? '-status' : '-value')).value;
-    document.getElementById(prefix + '-waiting-wrap').hidden = status !== 'WAITING';
-    document.getElementById(prefix + '-blocker-wrap').hidden = status !== 'BLOCKED';
-    document.getElementById(prefix + '-waiting').required = status === 'WAITING';
-    document.getElementById(prefix + '-blocker').required = status === 'BLOCKED';
-  }
-  async function send(url, method, body, prefix) {
-    clearError(prefix);
-    let response;
-    try { response = await fetch(url, {method, headers: {'Content-Type':'application/json'}, body: JSON.stringify({...body, actor})}); }
-    catch (_) { showError(prefix, 'ContractIQ could not reach the local application service.'); return; }
-    const payload = await response.json();
-    if (!response.ok) { showError(prefix, payload.detail || 'The work item could not be saved.'); return; }
-    window.location.reload();
-  }
-  document.getElementById('create-form').addEventListener('submit', event => {
-    event.preventDefault();
-    send('/api/work-items', 'POST', {
-      bid_id: document.getElementById('create-bid').value,
-      kind: document.getElementById('create-kind').value,
-      title: document.getElementById('create-title-input').value,
-      details: document.getElementById('create-details').value || null,
-      priority: document.getElementById('create-priority').value,
-      due_date: document.getElementById('create-due').value || null,
-      status: document.getElementById('create-status').value,
-      waiting_on: document.getElementById('create-waiting').value || null,
-      blocker_note: document.getElementById('create-blocker').value || null
-    }, 'create');
-  });
-  function openEdit(button) {
-    document.getElementById('edit-id').value = button.dataset.id;
-    document.getElementById('edit-version').value = button.dataset.version;
-    document.getElementById('edit-kind').value = button.dataset.kind;
-    document.getElementById('edit-title-input').value = button.dataset.title;
-    document.getElementById('edit-details').value = button.dataset.details;
-    document.getElementById('edit-priority').value = button.dataset.priority;
-    document.getElementById('edit-due').value = button.dataset.due;
-    openModal('edit-modal');
-  }
-  document.getElementById('edit-form').addEventListener('submit', event => {
-    event.preventDefault(); const id = document.getElementById('edit-id').value;
-    send('/api/work-items/' + encodeURIComponent(id), 'PATCH', {
-      expected_version: Number(document.getElementById('edit-version').value),
-      kind: document.getElementById('edit-kind').value,
-      title: document.getElementById('edit-title-input').value,
-      details: document.getElementById('edit-details').value || null,
-      priority: document.getElementById('edit-priority').value,
-      due_date: document.getElementById('edit-due').value || null
-    }, 'edit');
-  });
-  function openTransition(button) {
-    document.getElementById('status-id').value = button.dataset.id;
-    document.getElementById('status-version').value = button.dataset.version;
-    document.getElementById('status-value').value = button.dataset.status;
-    document.getElementById('status-waiting').value = button.dataset.waiting;
-    document.getElementById('status-blocker').value = button.dataset.blocker;
-    toggleConditional('status'); openModal('status-modal');
-  }
-  document.getElementById('status-form').addEventListener('submit', event => {
-    event.preventDefault(); const id = document.getElementById('status-id').value;
-    send('/api/work-items/' + encodeURIComponent(id) + '/transition', 'POST', {
-      expected_version: Number(document.getElementById('status-version').value),
-      status: document.getElementById('status-value').value,
-      waiting_on: document.getElementById('status-waiting').value || null,
-      blocker_note: document.getElementById('status-blocker').value || null
-    }, 'status');
-  });
-  document.querySelectorAll('.modal-backdrop').forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) closeModal(modal.id); }));
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelectorAll('.modal-backdrop.open').forEach(modal => closeModal(modal.id)); });
-</script>
 </body>
 </html>

@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import uvicorn
@@ -140,18 +140,20 @@ from core.work_item_repository import (
 )
 from core.work_item_service import MyDayService, WorkItemService, validation_error_message
 from core.work_items import (
-    ACTIVE_WORK_ITEM_STATUSES,
     RESPONSIBILITY_DOMAIN_LABELS,
     WAITING_PARTY_KIND_LABELS,
     WORK_CATEGORY_LABELS,
     WORK_ITEM_STATUS_LABELS,
     ResponsibilityDomain,
     WaitingPartyKind,
+    WorkAttentionFilter,
     WorkCategory,
+    WorkContextFilter,
     WorkItem,
-    WorkItemKind,
     WorkItemPriority,
     WorkItemStatus,
+    WorkRegisterFilter,
+    WorkRegisterView,
 )
 
 # ── App Setup ──────────────────────────────────────────────────────────────
@@ -592,8 +594,8 @@ def _mutation_error(exc: Exception) -> HTTPException:
 
 
 @app.get("/my-day", response_class=HTMLResponse)
-async def my_day(request: Request, as_of: str | None = None) -> HTMLResponse:
-    projection_date = _parse_as_of(as_of)
+async def my_day(request: Request) -> HTMLResponse:
+    projection_date = _working_date()
     projection = my_day_service.get_my_day(as_of=projection_date)
     bids = bid_repository.list_bids()
     bid_names = {bid.bid_id: bid.project_name for bid in bids}
@@ -614,14 +616,9 @@ async def my_day(request: Request, as_of: str | None = None) -> HTMLResponse:
     return render(
         "my_day.html",
         projection=projection,
-        bids=bids,
         archived_items=archived_items,
-        kinds=list(WorkItemKind),
-        priorities=list(WorkItemPriority),
-        statuses=list(WorkItemStatus),
         category_labels=WORK_CATEGORY_LABELS,
         status_labels=WORK_ITEM_STATUS_LABELS,
-        actor=LOCAL_ACTOR,
     )
 
 
@@ -631,20 +628,110 @@ async def list_work_items(bid_id: str | None = None) -> JSONResponse:
 
 
 @app.get("/my-work", response_class=HTMLResponse)
-async def my_work(request: Request) -> HTMLResponse:
-    items = work_item_repository.list()
+async def my_work(
+    request: Request,
+    view: str = "current",
+    status: str | None = None,
+    category: str | None = None,
+    domain: str | None = None,
+    context: str = "any",
+    bid_id: str | None = None,
+    attention: str = "any",
+) -> HTMLResponse:
+    raw_filters = {
+        "view": view,
+        "status": status or "",
+        "category": category or "",
+        "domain": domain or "",
+        "context": context,
+        "bid_id": bid_id or "",
+        "attention": attention,
+    }
+    try:
+        filters = WorkRegisterFilter.model_validate(
+            {
+                "view": view,
+                "status": status or None,
+                "category": category or None,
+                "domain": domain or None,
+                "context": context,
+                "bid_id": bid_id or None,
+                "attention": attention,
+            }
+        )
+        entries = work_item_service.get_work_register(filters, as_of=_working_date())
+    except (ValidationError, ValueError) as exc:
+        return render(
+            "my_work.html",
+            register_entries=[],
+            metrics=ops_repository.metrics(),
+            categories=list(WorkCategory),
+            category_labels=WORK_CATEGORY_LABELS,
+            domains=list(ResponsibilityDomain),
+            domain_labels=RESPONSIBILITY_DOMAIN_LABELS,
+            statuses=list(WorkItemStatus),
+            status_labels=WORK_ITEM_STATUS_LABELS,
+            views=list(WorkRegisterView),
+            contexts=list(WorkContextFilter),
+            attention_options=list(WorkAttentionFilter),
+            bids=bid_repository.list_bids(),
+            selected=raw_filters,
+            filter_error=(
+                validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc)
+            ),
+            filter_query="",
+            editor_query="",
+            capture={},
+            capture_error=None,
+            status_code=422,
+        )
+    selected = filters.model_dump(mode="json")
+    selected = {key: value or "" for key, value in selected.items()}
+    filter_query = _work_register_query(filters)
     return render(
         "my_work.html",
-        active_items=[item for item in items if item.status in ACTIVE_WORK_ITEM_STATUSES],
-        history_items=[item for item in items if item.status not in ACTIVE_WORK_ITEM_STATUSES],
+        register_entries=entries,
         metrics=ops_repository.metrics(),
         categories=list(WorkCategory),
         category_labels=WORK_CATEGORY_LABELS,
+        domains=list(ResponsibilityDomain),
         domain_labels=RESPONSIBILITY_DOMAIN_LABELS,
+        statuses=list(WorkItemStatus),
         status_labels=WORK_ITEM_STATUS_LABELS,
+        views=list(WorkRegisterView),
+        contexts=list(WorkContextFilter),
+        attention_options=list(WorkAttentionFilter),
+        bids=bid_repository.list_bids(),
+        selected=selected,
+        filter_error=None,
+        filter_query=filter_query,
+        editor_query=_editor_register_query(filters),
         capture={},
         capture_error=None,
     )
+
+
+def _work_register_query(filters: WorkRegisterFilter) -> str:
+    values = filters.model_dump(mode="json")
+    pairs = [
+        (key, str(value))
+        for key, value in values.items()
+        if value is not None
+        and value != ""
+        and not (
+            (key == "view" and value == WorkRegisterView.CURRENT.value)
+            or (key == "context" and value == WorkContextFilter.ANY.value)
+            or (key == "attention" and value == WorkAttentionFilter.ANY.value)
+        )
+    ]
+    return urlencode(pairs)
+
+
+def _editor_register_query(filters: WorkRegisterFilter) -> str:
+    query = _work_register_query(filters)
+    if not query:
+        return ""
+    return urlencode([(f"register_{key}", value) for key, value in parse_qsl(query)])
 
 
 @app.post("/my-work", response_class=HTMLResponse)
@@ -665,16 +752,28 @@ async def quick_capture_work(
             LOCAL_ACTOR,
         )
     except (ValidationError, ValueError) as exc:
-        items = work_item_repository.list()
+        filters = WorkRegisterFilter()
         return render(
             "my_work.html",
-            active_items=[item for item in items if item.status in ACTIVE_WORK_ITEM_STATUSES],
-            history_items=[item for item in items if item.status not in ACTIVE_WORK_ITEM_STATUSES],
+            register_entries=work_item_service.get_work_register(
+                filters,
+                as_of=_working_date(),
+            ),
             metrics=ops_repository.metrics(),
             categories=list(WorkCategory),
             category_labels=WORK_CATEGORY_LABELS,
+            domains=list(ResponsibilityDomain),
             domain_labels=RESPONSIBILITY_DOMAIN_LABELS,
+            statuses=list(WorkItemStatus),
             status_labels=WORK_ITEM_STATUS_LABELS,
+            views=list(WorkRegisterView),
+            contexts=list(WorkContextFilter),
+            attention_options=list(WorkAttentionFilter),
+            bids=bid_repository.list_bids(),
+            selected=filters.model_dump(mode="json"),
+            filter_error=None,
+            filter_query="",
+            editor_query="",
             capture=capture,
             capture_error=validation_error_message(exc),
             status_code=422,
@@ -685,9 +784,13 @@ async def quick_capture_work(
 def _work_item_editor_context(
     item: WorkItem,
     *,
+    register_filters: WorkRegisterFilter | None = None,
     values: dict[str, object] | None = None,
     error: str | None = None,
 ) -> dict[str, object]:
+    filters = register_filters or WorkRegisterFilter()
+    register_query = _work_register_query(filters)
+    back_href = "/my-work" + (f"?{register_query}" if register_query else "")
     return {
         "item": item,
         "values": values or item.model_dump(mode="json"),
@@ -698,27 +801,81 @@ def _work_item_editor_context(
         "domain_labels": RESPONSIBILITY_DOMAIN_LABELS,
         "statuses": list(WorkItemStatus),
         "status_labels": WORK_ITEM_STATUS_LABELS,
+        "priorities": list(WorkItemPriority),
         "waiting_kinds": list(WaitingPartyKind),
         "waiting_kind_labels": WAITING_PARTY_KIND_LABELS,
         "bids": bid_repository.list_bids(),
+        "back_href": back_href,
+        "editor_query": _editor_register_query(filters),
     }
 
 
 @app.get("/my-work/{work_item_id}", response_class=HTMLResponse)
-async def work_item_detail(request: Request, work_item_id: str) -> HTMLResponse:
+async def work_item_detail(
+    request: Request,
+    work_item_id: str,
+    register_view: str = "current",
+    register_status: str | None = None,
+    register_category: str | None = None,
+    register_domain: str | None = None,
+    register_context: str = "any",
+    register_bid_id: str | None = None,
+    register_attention: str = "any",
+) -> HTMLResponse:
     try:
         item = work_item_service.get_work_item(work_item_id)
     except WorkItemNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return render("work_item_detail.html", **_work_item_editor_context(item))
+    try:
+        filters = WorkRegisterFilter.model_validate(
+            {
+                "view": register_view,
+                "status": register_status,
+                "category": register_category,
+                "domain": register_domain,
+                "context": register_context,
+                "bid_id": register_bid_id,
+                "attention": register_attention,
+            }
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=validation_error_message(exc)) from exc
+    return render(
+        "work_item_detail.html",
+        **_work_item_editor_context(item, register_filters=filters),
+    )
 
 
 @app.post("/my-work/{work_item_id}", response_class=HTMLResponse)
-async def save_work_item_detail(request: Request, work_item_id: str) -> HTMLResponse:
+async def save_work_item_detail(
+    request: Request,
+    work_item_id: str,
+    register_view: str = "current",
+    register_status: str | None = None,
+    register_category: str | None = None,
+    register_domain: str | None = None,
+    register_context: str = "any",
+    register_bid_id: str | None = None,
+    register_attention: str = "any",
+) -> HTMLResponse:
     try:
         current = work_item_service.get_work_item(work_item_id)
     except WorkItemNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        filters = WorkRegisterFilter.model_validate(
+            {
+                "view": register_view,
+                "status": register_status,
+                "category": register_category,
+                "domain": register_domain,
+                "context": register_context,
+                "bid_id": register_bid_id,
+                "attention": register_attention,
+            }
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=validation_error_message(exc)) from exc
     form = await request.form()
     values = {key: str(value) for key, value in form.items()}
     nullable = {
@@ -751,12 +908,15 @@ async def save_work_item_detail(request: Request, work_item_id: str) -> HTMLResp
             "work_item_detail.html",
             **_work_item_editor_context(
                 current,
+                register_filters=filters,
                 values=values,
                 error=validation_error_message(exc),
             ),
             status_code=422,
         )
-    return RedirectResponse(f"/my-work/{quote(work_item_id)}", status_code=303)
+    query = _editor_register_query(filters)
+    location = f"/my-work/{quote(work_item_id)}" + (f"?{query}" if query else "")
+    return RedirectResponse(location, status_code=303)
 
 
 @app.get("/role-framework", response_class=HTMLResponse)
@@ -765,7 +925,8 @@ async def role_framework(request: Request) -> HTMLResponse:
         "role_framework.html",
         profiles=ops_repository.profiles(),
         effective=ops_repository.effective_profile(),
-        domains=RESPONSIBILITY_DOMAINS,
+        domains=list(ResponsibilityDomain),
+        domain_labels=RESPONSIBILITY_DOMAIN_LABELS,
     )
 
 

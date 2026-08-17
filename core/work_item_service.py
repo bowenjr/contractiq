@@ -21,6 +21,10 @@ from core.my_day import (
     RequirementAttentionSnapshot,
     WorkItemSnapshot,
     project_my_day,
+    work_item_actionable_dates,
+    work_item_attention_reasons,
+    work_item_attention_tier,
+    work_item_order_key,
 )
 from core.readiness import ReadinessReport
 from core.readiness_service import evaluate_readiness
@@ -33,11 +37,18 @@ from core.work_item_repository import (
     WorkItemRepository,
 )
 from core.work_items import (
+    ACTIVE_WORK_ITEM_STATUSES,
+    HISTORY_WORK_ITEM_STATUSES,
+    WorkAttentionFilter,
+    WorkContextFilter,
     WorkItem,
     WorkItemCreate,
     WorkItemEdit,
     WorkItemStatus,
     WorkItemTransition,
+    WorkRegisterEntry,
+    WorkRegisterFilter,
+    WorkRegisterView,
 )
 
 WorkItemCreateData = WorkItemCreate | Mapping[str, object]
@@ -172,6 +183,77 @@ class WorkItemService:
         if item is None:
             raise WorkItemNotFoundError(f"Work item not found: {work_item_id}")
         return item
+
+    def get_work_register(
+        self,
+        filters: WorkRegisterFilter,
+        *,
+        as_of: date,
+        horizon_days: int = 7,
+    ) -> list[WorkRegisterEntry]:
+        """Return one deterministic, context-resolved operational register projection."""
+        if horizon_days < 1:
+            raise ValueError("horizon_days must be at least one")
+        if filters.context == WorkContextFilter.BID:
+            if filters.bid_id is None or self.bid_repository.get_bid(filters.bid_id) is None:
+                raise ValueError(f"Bid not found: {filters.bid_id}")
+
+        statuses: frozenset[WorkItemStatus] | None
+        if filters.status is not None:
+            statuses = frozenset({filters.status})
+        elif filters.view == WorkRegisterView.CURRENT:
+            statuses = ACTIVE_WORK_ITEM_STATUSES
+        elif filters.view == WorkRegisterView.HISTORY:
+            statuses = HISTORY_WORK_ITEM_STATUSES
+        else:
+            statuses = None
+
+        items = self.repository.list(
+            bid_id=filters.bid_id if filters.context == WorkContextFilter.BID else None,
+            statuses=statuses,
+            category=filters.category,
+            responsibility_domain=filters.domain,
+            standalone_only=filters.context == WorkContextFilter.STANDALONE,
+        )
+        bid_names = {bid.bid_id: bid.project_name for bid in self.bid_repository.list_bids()}
+        entries: list[WorkRegisterEntry] = []
+        for item in items:
+            reasons = (
+                work_item_attention_reasons(item, as_of)
+                if item.status in ACTIVE_WORK_ITEM_STATUSES
+                else []
+            )
+            if filters.attention == WorkAttentionFilter.REQUIRED and not reasons:
+                continue
+            if filters.attention == WorkAttentionFilter.NONE and reasons:
+                continue
+            actionable_dates = work_item_actionable_dates(item)
+            entries.append(
+                WorkRegisterEntry(
+                    item=item,
+                    context_label=(
+                        "Standalone work"
+                        if item.bid_id is None
+                        else f"{bid_names.get(item.bid_id, 'Unknown bid')} · {item.bid_id}"
+                    ),
+                    attention_reasons=reasons,
+                    attention_tier=(
+                        work_item_attention_tier(item, as_of, horizon_days)
+                        if item.status in ACTIVE_WORK_ITEM_STATUSES
+                        else 7
+                    ),
+                    relevant_actionable_date=min(actionable_dates, default=None),
+                )
+            )
+
+        active = [entry for entry in entries if entry.item.status in ACTIVE_WORK_ITEM_STATUSES]
+        history = [entry for entry in entries if entry.item.status in HISTORY_WORK_ITEM_STATUSES]
+        active.sort(key=lambda entry: work_item_order_key(entry.item, as_of, horizon_days))
+        history.sort(
+            key=lambda entry: (entry.item.updated_at, entry.item.work_item_id),
+            reverse=True,
+        )
+        return active + history
 
     @staticmethod
     def _require_version(item: WorkItem, expected_version: int) -> None:
@@ -658,8 +740,10 @@ class MyDayService:
         )
 
 
-def validation_error_message(exc: ValidationError) -> str:
+def validation_error_message(exc: ValidationError | ValueError) -> str:
     """Return concise field-aware validation text for UI and scripts."""
+    if not isinstance(exc, ValidationError):
+        return str(exc)
     errors = cast(list[dict[str, object]], exc.errors(include_url=False))
     parts: list[str] = []
     for error in errors:

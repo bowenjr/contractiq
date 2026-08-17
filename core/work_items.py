@@ -77,6 +77,24 @@ class WaitingPartyKind(str, Enum):
     OTHER = "OTHER"
 
 
+class WorkRegisterView(str, Enum):
+    CURRENT = "current"
+    HISTORY = "history"
+    ALL = "all"
+
+
+class WorkContextFilter(str, Enum):
+    ANY = "any"
+    STANDALONE = "standalone"
+    BID = "bid"
+
+
+class WorkAttentionFilter(str, Enum):
+    ANY = "any"
+    REQUIRED = "required"
+    NONE = "none"
+
+
 WORK_CATEGORY_LABELS: dict[WorkCategory, str] = {
     value: value.value.replace("_", " ").title() for value in WorkCategory
 }
@@ -99,6 +117,7 @@ ACTIVE_WORK_ITEM_STATUSES = frozenset(
         WorkItemStatus.BLOCKED,
     }
 )
+HISTORY_WORK_ITEM_STATUSES = frozenset({WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED})
 
 
 def _trim_required(value: str, field_name: str) -> str:
@@ -395,3 +414,43 @@ class WorkItem(BaseModel):
         if self.updated_at < self.created_at:
             raise ValueError("updated_at cannot precede created_at")
         return self
+
+
+class WorkRegisterFilter(BaseModel):
+    """Validated, allowlisted query contract for the operational register."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    view: WorkRegisterView = WorkRegisterView.CURRENT
+    status: WorkItemStatus | None = None
+    category: WorkCategory | None = None
+    domain: ResponsibilityDomain | None = None
+    context: WorkContextFilter = WorkContextFilter.ANY
+    bid_id: str | None = None
+    attention: WorkAttentionFilter = WorkAttentionFilter.ANY
+
+    @model_validator(mode="after")
+    def validate_combination(self) -> Self:
+        if self.context == WorkContextFilter.BID and self.bid_id is None:
+            raise ValueError("context=bid requires bid_id")
+        if self.context != WorkContextFilter.BID and self.bid_id is not None:
+            raise ValueError("bid_id is only valid with context=bid")
+        if self.view == WorkRegisterView.CURRENT and self.status in HISTORY_WORK_ITEM_STATUSES:
+            raise ValueError("current view cannot filter by a history status")
+        if self.view == WorkRegisterView.HISTORY and self.status in ACTIVE_WORK_ITEM_STATUSES:
+            raise ValueError("history view cannot filter by an active status")
+        if self.view == WorkRegisterView.HISTORY and self.attention != WorkAttentionFilter.ANY:
+            raise ValueError("attention filtering is only valid for current or all views")
+        return self
+
+
+class WorkRegisterEntry(BaseModel):
+    """Presentation-ready work record with resolved context and attention state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item: WorkItem
+    context_label: str
+    attention_reasons: list[str]
+    attention_tier: int = Field(ge=0, le=7)
+    relevant_actionable_date: date | None = None

@@ -127,7 +127,16 @@ _PRIORITY_RANK: dict[WorkItemPriority, int] = {
 }
 
 
-def _attention_reasons(item: WorkItem, as_of: date) -> list[str]:
+def work_item_actionable_dates(item: WorkItem) -> tuple[date, ...]:
+    """Return applicable operational dates without consulting a clock."""
+    values = [item.due_date, item.next_action_date]
+    if item.status == WorkItemStatus.WAITING:
+        values.append(item.chase_date)
+    return tuple(value for value in values if value is not None)
+
+
+def work_item_attention_reasons(item: WorkItem, as_of: date) -> list[str]:
+    """Return every current attention reason once in stable display order."""
     reasons: list[str] = []
     if item.status == WorkItemStatus.BLOCKED:
         reasons.append("BLOCKED")
@@ -144,7 +153,43 @@ def _attention_reasons(item: WorkItem, as_of: date) -> list[str]:
             reasons.append("FOLLOW_UP_OVERDUE")
         elif item.chase_date == as_of:
             reasons.append("FOLLOW_UP_TODAY")
+    elif item.status == WorkItemStatus.WAITING:
+        reasons.append("WAITING_ATTENTION")
     return reasons
+
+
+def work_item_attention_tier(item: WorkItem, as_of: date, horizon_days: int = 7) -> int:
+    """Apply the single deterministic active-work ranking contract."""
+    reasons = work_item_attention_reasons(item, as_of)
+    if item.status == WorkItemStatus.BLOCKED:
+        return 0
+    if any(reason.endswith("OVERDUE") for reason in reasons):
+        return 1
+    if any(reason.endswith("TODAY") for reason in reasons):
+        return 2
+    if reasons:
+        return 3
+    dates = work_item_actionable_dates(item)
+    if any(as_of < value <= as_of + timedelta(days=horizon_days) for value in dates):
+        return 4
+    if dates:
+        return 5
+    return 6
+
+
+def work_item_order_key(
+    item: WorkItem,
+    as_of: date,
+    horizon_days: int = 7,
+) -> tuple[int, int, date, str]:
+    """Return the shared My Day/My Work ordering key."""
+    dates = work_item_actionable_dates(item)
+    return (
+        work_item_attention_tier(item, as_of, horizon_days),
+        _PRIORITY_RANK[item.priority],
+        min(dates, default=date.max),
+        item.work_item_id,
+    )
 
 
 def _bucket_for(item: WorkItem, as_of: date, horizon_days: int) -> MyDayBucket:
@@ -167,16 +212,6 @@ def _bucket_for(item: WorkItem, as_of: date, horizon_days: int) -> MyDayBucket:
     ) <= item.next_action_date <= as_of + timedelta(days=horizon_days):
         return MyDayBucket.UPCOMING
     return MyDayBucket.LATER_OR_UNSCHEDULED
-
-
-def _sort_key(projected: ProjectedWorkItem) -> tuple[int, date, str, str]:
-    item = projected.item
-    return (
-        _PRIORITY_RANK[item.priority],
-        item.due_date or date.max,
-        item.title.casefold(),
-        item.work_item_id,
-    )
 
 
 _REQUIREMENT_SIGNIFICANCE_RANK: dict[RequirementSignificance, int] = {
@@ -252,7 +287,7 @@ def project_my_day(
         item = snapshot.item
         if item.status in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}:
             continue
-        reasons = _attention_reasons(item, as_of)
+        reasons = work_item_attention_reasons(item, as_of)
         upcoming = any(
             value is not None and as_of < value <= as_of + timedelta(days=horizon_days)
             for value in (item.due_date, item.next_action_date)
@@ -276,7 +311,7 @@ def project_my_day(
         active.append(projected)
 
     for entries in buckets.values():
-        entries.sort(key=_sort_key)
+        entries.sort(key=lambda entry: work_item_order_key(entry.item, as_of, horizon_days))
 
     readiness_holds = [
         snapshot for snapshot in readiness if snapshot.report.verdict == ReadinessVerdict.HOLD
