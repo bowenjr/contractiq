@@ -1,7 +1,157 @@
-# Handoff — OPS-03
+# Handoff — OPS-05B Stabilization
 
 ## Status
 ACCEPTED FOR CONTINUED DEVELOPMENT
+
+## Manual browser acceptance — 2026-08-25
+
+- OPS-05B manual browser acceptance: PASS, user-verified on Armoury on 2026-08-25.
+- The frozen bid-stage Vendor Document Requirements and handover workflow is functionally accepted for publication.
+- Observed minor UI and usability improvements are explicitly deferred and are not publication blockers.
+- No post-acceptance redesign, polish or feature change was made.
+
+## Branch, baseline and recovery
+
+- Branch: `ops-05-vendor-document-control`.
+- HEAD/baseline: `0b6cc283b2e5e51bd5979b74405d119b4156e477`.
+- Recovery pointer: `backup/ops-05-pre-implementation-20260817` at the baseline.
+- Retained pre-OPS-05B redesign stash: `ba1729da4e854e076f7b29e08178bdb5d73f7434`.
+- Retained pre-usability-remediation stash: `d85fb955e3945a8c4c453096a27c185686071289`.
+- Nothing is staged, committed or pushed.
+
+## Implementation summary
+
+- OPS-05B is a Bid-owned, bid-stage Vendor Document Requirement List (VDRL) verification and handover workflow. ContractIQ ends at formal handover; execution belongs to another person or system.
+- Added browser Bid list, controlled Bid creation with atomic audit and PRG, and a stable Bid workspace.
+- Added Bid-owned supplier/equipment packages, preserved original customer VDRL requirements, separate manufacturer verification, commercial impact, Bid disposition, readiness reasons, atomic bulk updates, atomic CSV preview/import and handover CSV.
+- Customer requirement values are immutable after creation. Manufacturer silence remains `NOT_REVIEWED` or `AWAITING_MANUFACTURER`; it is never inferred as compliance.
+- Readiness is deterministic and blocks unresolved silence, clarification, non-compliance, unapproved exceptions, missing manufacturer/owner/evidence and unknown exception-related commercial impact.
+- Package creation requires an existing Bid. There is no normal standalone-package path, Project conversion, post-award submission/review/resubmission/closeout workflow, InEight integration, external network behavior or automatic My Work creation.
+- The generic identity-free VDRL template is automatic and read-only. Raw configuration is secondary administration, not routine Bid work.
+- The handover CSV preserves Bid/package identity, the original customer requirement, requested stages/timing, manufacturer status, response source/date/notes, commitment, evidence, exception, commercial impact, Bid disposition, owner, unresolved action and handover note.
+- The superseded post-award implementation is absent from active code/routes/templates and remains recoverable only in the retained stashes.
+
+## Completed role-alignment review reconciliation
+
+- Read `/home/bowen/reviews/contractiq-role-alignment-review-20260821.md` without modifying it.
+- Claude's stale `AttentionCode` collection failure was already corrected in the frozen worktree; the vendor tests use `VerificationStatus`, `CommercialImpact`, `BidDisposition`, readiness, bulk verification, import and handover models.
+- Claude's navigation failure was already corrected in the frozen worktree; the exact formerly failing test passes unchanged.
+- No additional architecture or navigation redesign was performed.
+- Stabilization added explicit manufacturer response source/date/notes columns to the handover CSV and corresponding unit, validator and HTML-ASGI acceptance assertions.
+
+## Files created
+
+- `core/vendor_document_control.py` — typed Pydantic v2 Bid-stage VDRL models and deterministic readiness.
+- `core/vendor_document_repository.py` — additive unpublished SQLite schema, immutable originals, atomic writes, audit and concurrency.
+- `core/vendor_document_service.py` — Bid-owned package/requirement workflow, verification, CSV import, readiness and handover.
+- `docs/tasks/OPS-05-vendor-document-control.md` — authoritative OPS-05B specification and role boundary.
+- `scripts/asgi_acceptance_ops05.py` — isolated dependency-free browser acceptance.
+- `scripts/validate_ops_05.py` — isolated deterministic OPS-05B validator.
+- `templates/bids.html` — browser Bid list/create surface.
+- `templates/vendor_document_package.html` — Bid-linked VDRL compliance workspace.
+- `templates/vendor_document_register.html` — filtered cross-Bid compliance register.
+- `templates/vendor_documents.html` — Bid-stage queue and package creation surface.
+- `tests/unit/test_vendor_document_control.py` — domain/repository/service/migration regression coverage.
+
+## Files modified
+
+- `app.py` — Bid browser routes and bid-stage Vendor Document Requirements HTML routes.
+- `core/bid_repository.py` — atomic Bid creation plus audit.
+- `templates/bid_detail.html` — linked Vendor Document Requirements section.
+- `templates/index.html`, `templates/my_day.html`, `templates/my_work.html`, `templates/role_framework.html`, `templates/documents.html`, `templates/document_detail.html`, `templates/requirements.html`, `templates/requirement_detail.html` — settled operational navigation labels and links only.
+- `tests/unit/test_bid_repository.py` — atomic Bid/audit coverage.
+- `tests/unit/test_ops_navigation.py` — settled navigation coverage.
+- `HANDOFF.md` — this stabilization record; prior accepted history remains below.
+
+## Removed from the active unpublished implementation
+
+- The recovered pre-redesign files `templates/vendor_document_detail.html`, `templates/vendor_document_reports.html`, `docs/tasks/OPS-05R-vendor-document-usability-remediation.md` and `docs/tasks/OPS-05U-vendor-document-workflow-integration.md` are not present in the active worktree. They were untracked and remain recoverable in the retained stashes.
+- Actual execution submissions, revision/review-return cycles, resubmission attention, execution milestone fulfillment, document cancellation/discard and closeout routes are not active.
+
+## Test results
+
+- Direct navigation regression: `1 passed, 0 failed, 2 warnings`.
+- Vendor/Bid focused tests: `33 passed, 0 failed`.
+- Focused operational/navigation suite: `61 passed, 0 failed, 38 warnings`.
+- Full unexcluded pytest suite: `336 passed, 0 failed` (336 collected; only existing FastAPI `on_event` deprecation warnings).
+- OPS-05B validator: PASS.
+- OPS-05B dependency-free ASGI acceptance: PASS.
+- OPS-01, OPS-02 and OPS-03 validators and ASGI acceptances: PASS.
+- TASK-07 through TASK-18 validators: PASS, including TASK-08R.
+- TASK-11 through TASK-18 ASGI acceptances: PASS.
+- Migration initialization/restart/integrity/foreign-key test: `1 passed`.
+- Strict scoped mypy on `core/bid_repository.py` and the three vendor production modules, with imported legacy-module diagnostics silenced: PASS (`Success: no issues found in 4 source files`).
+- Ruff format check: PASS (`10 files already formatted`).
+- Ruff check on changed Python excluding `app.py`: PASS.
+- Direct `app.py` Ruff: exactly 10 inherited findings. `git blame --contents` attributes all flagged lines to earlier commits; OPS-05B adds none. Repository-wide Ruff compliance is not claimed.
+- `git diff --check`: PASS.
+- Repository-wide mypy compliance is not claimed.
+
+## Validation command output
+
+```text
+OPS-05B validation: PASS
+OPS-05B ASGI acceptance: PASS
+OPS-01 validation / ASGI acceptance: PASS / PASS
+OPS-02 validation / ASGI acceptance: PASS / PASS
+OPS-03 validation / ASGI acceptance: PASS / PASS
+TASK-07 through TASK-18 validators: PASS
+TASK-11 through TASK-18 ASGI acceptance: PASS
+```
+
+## Migration and production-data safeguards
+
+- Unpublished additive migration: `ops_05_bid_stage_vdrl_v1`.
+- New isolated-database tables: `vendor_vdrl_templates`, `vendor_bid_packages`, `vendor_bid_requirements`, `vendor_document_schema_migrations`.
+- Production verification before redesign found no OPS-05 table or migration marker. No production migration was run.
+- Production `data/contractiq.db` SHA-256 before and after verification: `65111b90ad39b7db9944027907208524350018b7df3adceeab060c5c100fe1ea`.
+- Temporary initialization, restart, `PRAGMA integrity_check` and `PRAGMA foreign_key_check` passed.
+- No database or backup is staged or tracked by this work.
+- `uv.lock` and `uv.lock.armoury-generated-20260811` remain untouched, untracked and unstaged.
+- `.claude/settings.local.json` remained clean during stabilization; no automatic permission change required restoration.
+
+## Decisions I made
+
+- The completed role-alignment review is authoritative input, not a request for another redesign. Its two P0 failures were verified against the frozen worktree and were already corrected.
+- Existing clarification/deviation domains do not expose a safe authoritative relationship for these specialized rows, so OPS-05B stores explicit references and handover actions rather than creating competing records.
+- Manufacturer response source/date/notes were added to the handover export because those existing fields are material handover evidence.
+
+## Deviations from the task spec
+
+- None in product scope. A supplemental `python app.py` smoke check reached ContractIQ's startup banner but the managed sandbox denied opening a listening socket. The required ASGI acceptances passed without network access, and no background server was started.
+
+## Concerns for review
+
+- Manual browser acceptance remains required. Do not treat the automated evidence as user acceptance.
+- TASK-12 remains unchanged. Any later consolidation with vendor-document requirements requires separate program authorization.
+- The inherited FastAPI `on_event` warnings and 10 inherited `app.py` Ruff findings remain outside OPS-05B.
+
+## Manual browser acceptance
+
+Start ContractIQ with a fresh isolated database and document root:
+
+```bash
+cd /home/bowen/dev/projects/contractiq
+CONTRACTIQ_DB_PATH=/tmp/contractiq-ops05b-manual-20260821.db \
+CONTRACTIQ_DOCUMENT_ROOT=/tmp/contractiq-ops05b-manual-documents-20260821 \
+UV_CACHE_DIR=/tmp/contractiq-uv-cache \
+uv run uvicorn app:app --host 127.0.0.1 --port 8015
+```
+
+Open `http://127.0.0.1:8015/`, then:
+
+1. Open **Bids**, create a realistic Bid, and confirm its workspace opens after the redirect.
+2. Open **Vendor Document Requirements** from that Bid and create a linked supplier/equipment package.
+3. Add customer VDRL requirements manually, then preview a CSV. Confirm a declared 33/marked 37 mismatch is rejected without importing rows.
+4. Assign manufacturer and internal owner in bulk. Confirm the selected rows update together.
+5. Record compliant, exception, clarification-required and cannot-comply responses. Leave one row silent and confirm it remains unresolved.
+6. Confirm every readiness blocker links to the affected requirement and no exception/non-compliance is ready without the required evidence and approved Bid disposition.
+7. Export the handover CSV and verify original customer requirements, manufacturer responses/commitments, evidence, exceptions, commercial impact, disposition, owners and unresolved actions.
+8. Confirm breadcrumbs and links always return to the parent Bid and no post-award submission, customer-review, resubmission or execution-project workflow is advertised.
+
+Stop with `Ctrl-C`. Do not use the production database for this acceptance.
+
+# Prior accepted OPS-03 record
 
 ## Branch and baseline
 - Branch: `ops-03-role-framework-authoring`

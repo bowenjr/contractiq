@@ -171,27 +171,57 @@ class BidRepository:
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
 
+    @classmethod
+    def _insert_bid(cls, conn: sqlite3.Connection, bid: Bid) -> None:
+        conn.execute(
+            """
+            INSERT INTO bids (
+                bid_id, customer, customer_type, project_name, location,
+                sales_owner, bc_owner, executive_sponsor, release_date,
+                customer_due_date, internal_due_date, anticipated_award_date,
+                estimated_value, currency, margin_range, win_probability,
+                classification, current_gate, status, risk_triggers,
+                inference_policy, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            cls._bid_values(bid),
+        )
+
     def create_bid(self, bid: Bid) -> None:
-        if self.bid_exists(bid.bid_id):
-            raise ValueError(f"Bid already exists: {bid.bid_id}")
         try:
             with self._conn() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO bids (
-                        bid_id, customer, customer_type, project_name, location,
-                        sales_owner, bc_owner, executive_sponsor, release_date,
-                        customer_due_date, internal_due_date, anticipated_award_date,
-                        estimated_value, currency, margin_range, win_probability,
-                        classification, current_gate, status, risk_triggers,
-                        inference_policy, created_at, updated_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    self._bid_values(bid),
-                )
+                self._insert_bid(conn, bid)
                 conn.commit()
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"Bid already exists: {bid.bid_id}") from exc
+
+    def create_bid_with_audit(self, bid: Bid, audit: AuditEntry) -> None:
+        """Create a browser-authored bid and its audit evidence atomically."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._insert_bid(conn, bid)
+                conn.execute(
+                    "INSERT INTO audit_log(entry_id,bid_id,actor,action,detail,timestamp) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        audit.entry_id,
+                        audit.bid_id,
+                        audit.actor,
+                        audit.action,
+                        audit.detail,
+                        audit.timestamp.isoformat(),
+                    ),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as exc:
+                conn.rollback()
+                if self.bid_exists(bid.bid_id):
+                    raise ValueError(f"Bid already exists: {bid.bid_id}") from exc
+                raise ValueError("Bid / Project creation could not be committed") from exc
+            except Exception:
+                conn.rollback()
+                raise
 
     def get_bid(self, bid_id: str) -> Bid | None:
         with self._conn() as conn:

@@ -35,6 +35,10 @@ def test_home_exposes_operational_workspace_navigation(ui_app: ModuleType) -> No
     assert 'href="/my-work"' in page
     assert 'href="/role-framework"' in page
     assert 'href="/requirements">Contract Controls' in page
+    assert 'href="/bids"' in page
+    assert ">Bids<" in page
+    assert 'href="/vendor-documents"' in page
+    assert "Vendor Document Requirements" in page
 
 
 def test_operational_pages_share_navigation_and_quick_capture(ui_app: ModuleType) -> None:
@@ -43,12 +47,16 @@ def test_operational_pages_share_navigation_and_quick_capture(ui_app: ModuleType
         _text(asyncio.run(ui_app.my_day(request))),
         _text(asyncio.run(ui_app.my_work(request))),
         _text(asyncio.run(ui_app.role_framework(request))),
+        _text(asyncio.run(ui_app.bids_projects())),
+        _text(asyncio.run(ui_app.vendor_documents_dashboard())),
     ]
     for page in pages:
         assert 'href="/my-day"' in page
         assert 'href="/my-work"' in page
         assert 'href="/role-framework"' in page
         assert 'href="/requirements"' in page
+        assert 'href="/bids"' in page
+        assert 'href="/vendor-documents"' in page
     my_work = pages[1]
     assert "Quick Capture" in my_work
     assert 'id="quick-capture"' in my_work

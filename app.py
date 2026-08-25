@@ -16,10 +16,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from core.analysis_engine import AnalysisEngine
 from core.approval_authority import (
@@ -72,6 +79,7 @@ from core.document_repository import (
     StaleDocumentError,
 )
 from core.document_service import DocumentService
+from core.enums import BidLevel, BidStatus, CustomerType, Gate, InferencePolicy
 from core.excel_generator import ExcelGenerator
 from core.knowledge_bootstrap import bootstrap_knowledge
 from core.knowledge_engine import KnowledgeEngine
@@ -127,7 +135,7 @@ from core.role_profile_service import RoleProfileService
 from core.role_profiles import ROLE_PROFILE_STATE_LABELS, RoleProfile
 from core.scenario_repository import ScenarioRepository
 from core.scenario_service import ScenarioService
-from core.schemas import Provenance
+from core.schemas import AuditEntry, Bid, Provenance
 from core.scope_interfaces import InterfaceRecord, ScopeItem
 from core.scope_repository import ScopeInterfaceRepository
 from core.scope_service import ScopeInterfaceService
@@ -142,6 +150,22 @@ from core.supplier_assurance import (
 )
 from core.supplier_repository import SupplierRepository
 from core.supplier_service import SupplierService
+from core.vendor_document_control import (
+    BidDisposition,
+    BulkRequirementTarget,
+    BulkVerificationUpdate,
+    CommercialImpact,
+    CustomerRequirementCreate,
+    RequirementVerificationUpdate,
+    SupplierPackageCreate,
+    TimingAnchor,
+    VerificationStatus,
+)
+from core.vendor_document_repository import (
+    VendorDocumentNotFoundError,
+    VendorDocumentRepository,
+)
+from core.vendor_document_service import VendorDocumentService
 from core.work_item_repository import (
     StaleWorkItemError,
     WorkItemNotFoundError,
@@ -234,6 +258,9 @@ supplier_repository = SupplierRepository(db)
 supplier_service = SupplierService(db, supplier_repository)
 deliverable_repository = DeliverableRepository(db)
 deliverable_service = DeliverableService(deliverable_repository)
+vendor_document_repository = VendorDocumentRepository(db)
+vendor_document_service = VendorDocumentService(vendor_document_repository, bid_repository)
+vendor_document_service.ensure_standard_template()
 commercial_repository = CommercialRepository(db)
 commercial_service = CommercialService(commercial_repository)
 contract_risk_repository = ContractRiskRepository(db)
@@ -1508,6 +1535,99 @@ async def requirement_detail(request: Request, requirement_id: str) -> HTMLRespo
     )
 
 
+def _bids_browser_context(
+    *, error: str | None = None, entered: dict[str, object] | None = None
+) -> dict[str, object]:
+    return {
+        "bids": bid_repository.list_bids(),
+        "customer_types": list(CustomerType),
+        "classifications": list(BidLevel),
+        "error": error,
+        "entered": entered or {},
+    }
+
+
+def _next_browser_bid_id() -> str:
+    year = _working_date().year
+    prefix = f"B-{year}-"
+    used = {
+        int(bid.bid_id.removeprefix(prefix))
+        for bid in bid_repository.list_bids()
+        if bid.bid_id.startswith(prefix) and bid.bid_id.removeprefix(prefix).isdigit()
+    }
+    for number in range(1, 10_000):
+        if number not in used:
+            return f"{prefix}{number:04d}"
+    raise ValueError(f"No bid identifiers remain available for {year}")
+
+
+@app.get("/bids", response_class=HTMLResponse)
+async def bids_projects() -> HTMLResponse:
+    return render("bids.html", **_bids_browser_context())
+
+
+@app.post("/bids", response_class=HTMLResponse)
+async def create_bid_project(request: Request) -> Response:
+    form = dict(await request.form())
+    now = datetime.now(WORKING_TIMEZONE)
+    try:
+        required = {
+            "project_name": "Bid title",
+            "customer": "Customer",
+            "customer_type": "Customer type",
+            "sales_owner": "Sales owner",
+            "bc_owner": "Bids & Contracts owner",
+            "release_date": "Release date",
+            "customer_due_date": "Customer due date",
+            "internal_due_date": "Internal due date",
+            "estimated_value": "Estimated value",
+            "classification": "Classification",
+        }
+        missing = [label for key, label in required.items() if not str(form.get(key) or "").strip()]
+        if missing:
+            raise ValueError(f"Required field(s): {', '.join(missing)}")
+        payload = {key: value for key, value in form.items() if value not in ("", None)}
+        payload.update(
+            {
+                "bid_id": _next_browser_bid_id(),
+                "currency": str(form.get("currency") or "CAD").strip().upper(),
+                "current_gate": Gate.G0,
+                "status": BidStatus.ACTIVE,
+                "risk_triggers": [],
+                "inference_policy": InferencePolicy.LOCAL_ONLY,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        bid = Bid.model_validate(payload)
+        bid_repository.create_bid_with_audit(
+            bid,
+            AuditEntry(
+                entry_id=f"AUD-{uuid.uuid4()}",
+                bid_id=bid.bid_id,
+                actor=LOCAL_ACTOR,
+                action="bid_project_created",
+                detail=json.dumps(
+                    {"bid_id": bid.bid_id, "project_name": bid.project_name},
+                    sort_keys=True,
+                ),
+                timestamp=now,
+            ),
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "bids.html",
+            status_code=422,
+            **_bids_browser_context(
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered=form,
+            ),
+        )
+    return RedirectResponse(f"/bids/{bid.bid_id}", status_code=303)
+
+
 @app.get("/bids/{bid_id}", response_class=HTMLResponse)
 async def bid_detail(request: Request, bid_id: str) -> HTMLResponse:
     bid = bid_repository.get_bid(bid_id)
@@ -1528,6 +1648,11 @@ async def bid_detail(request: Request, bid_id: str) -> HTMLResponse:
         ),
         readiness=evaluate_readiness(bid_repository, db, bid_id),
         documents=document_service.list_register_entries(bid_id=bid_id),
+        vendor_packages=[
+            package
+            for package in vendor_document_repository.list_packages()
+            if package.bid_id == bid_id
+        ],
     )
 
 
@@ -1670,6 +1795,342 @@ async def review_deliverable_submission(submission_id: str, request: Request) ->
         return JSONResponse(value.model_dump(mode="json"), status_code=201)
     except (ValidationError, ValueError) as exc:
         raise _mutation_error(exc) from exc
+
+
+def _vdrl_dashboard_context(
+    *,
+    bid_id: str | None = None,
+    error: str | None = None,
+    entered: dict[str, object] | None = None,
+) -> dict[str, object]:
+    bids = bid_repository.list_bids()
+    if bid_id is not None and bid_repository.get_bid(bid_id) is None:
+        raise HTTPException(status_code=422, detail="Selected Bid does not exist")
+    packages = vendor_document_repository.list_packages(bid_id)
+    package_rows = [
+        {
+            "package": package,
+            "bid": bid_repository.get_bid(package.bid_id),
+            "readiness": vendor_document_service.readiness(package.package_id),
+        }
+        for package in packages
+    ]
+    return {
+        "bids": bids,
+        "packages": package_rows,
+        "rows": vendor_document_service.register_rows(bid_id=bid_id),
+        "selected_bid_id": bid_id or "",
+        "error": error,
+        "entered": entered or {},
+        "template": vendor_document_service.ensure_standard_template(),
+        "admin": False,
+    }
+
+
+@app.get("/vendor-documents", response_class=HTMLResponse)
+async def vendor_documents_dashboard(bid_id: str | None = None) -> HTMLResponse:
+    return render("vendor_documents.html", **_vdrl_dashboard_context(bid_id=bid_id))
+
+
+@app.get("/vendor-documents/admin/templates", response_class=HTMLResponse)
+async def vendor_document_template_admin() -> HTMLResponse:
+    return render(
+        "vendor_documents.html",
+        **(_vdrl_dashboard_context() | {"admin": True}),
+    )
+
+
+@app.post("/vendor-documents/packages", response_class=HTMLResponse)
+async def create_vendor_package(request: Request) -> HTMLResponse:
+    form = dict(await request.form())
+    try:
+        package = vendor_document_service.create_package(
+            SupplierPackageCreate.model_validate(
+                {key: value for key, value in form.items() if value not in ("", None)}
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "vendor_documents.html",
+            status_code=422,
+            **_vdrl_dashboard_context(
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered=form,
+            ),
+        )
+    return RedirectResponse(f"/vendor-documents/packages/{package.package_id}", status_code=303)
+
+
+def _vdrl_package_context(
+    package_id: str,
+    *,
+    error: str | None = None,
+    entered: dict[str, object] | None = None,
+    import_preview: object | None = None,
+    import_csv: str = "",
+    import_digest: str = "",
+) -> dict[str, object]:
+    try:
+        package = vendor_document_service.package(package_id)
+    except VendorDocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    bid = bid_repository.get_bid(package.bid_id)
+    if bid is None:
+        raise HTTPException(status_code=500, detail="Package Bid context is missing")
+    requirements = vendor_document_repository.list_requirements(package_id)
+    return {
+        "package": package,
+        "bid": bid,
+        "requirements": requirements,
+        "rows": vendor_document_service.register_rows(package_id=package_id),
+        "readiness": vendor_document_service.readiness(package_id),
+        "verification_statuses": list(VerificationStatus),
+        "commercial_impacts": list(CommercialImpact),
+        "bid_dispositions": list(BidDisposition),
+        "timing_anchors": list(TimingAnchor),
+        "template": vendor_document_service.ensure_standard_template(),
+        "audit": vendor_document_repository.audit(package.bid_id),
+        "error": error,
+        "entered": entered or {},
+        "import_preview": import_preview,
+        "import_csv": import_csv,
+        "import_digest": import_digest,
+    }
+
+
+@app.get("/vendor-documents/packages/{package_id}", response_class=HTMLResponse)
+async def vendor_document_package_workspace(package_id: str) -> HTMLResponse:
+    return render("vendor_document_package.html", **_vdrl_package_context(package_id))
+
+
+@app.post("/vendor-documents/packages/{package_id}/requirements", response_class=HTMLResponse)
+async def create_vendor_requirement(package_id: str, request: Request) -> HTMLResponse:
+    submitted = await request.form()
+    form = dict(submitted)
+    form["package_id"] = package_id
+    form["requested_stages"] = submitted.getlist("requested_stages")
+    try:
+        vendor_document_service.create_requirement(
+            CustomerRequirementCreate.model_validate(
+                {key: value for key, value in form.items() if value not in ("", None)}
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "vendor_document_package.html",
+            status_code=422,
+            **_vdrl_package_context(
+                package_id,
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered=form,
+            ),
+        )
+    return RedirectResponse(
+        f"/vendor-documents/packages/{package_id}#compliance-register", status_code=303
+    )
+
+
+@app.post("/vendor-documents/requirements/{requirement_id}", response_class=HTMLResponse)
+async def update_vendor_requirement(requirement_id: str, request: Request) -> HTMLResponse:
+    current = vendor_document_repository.get_requirement(requirement_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Customer requirement not found")
+    submitted = await request.form()
+    form = dict(submitted)
+    form["committed_stages"] = submitted.getlist("committed_stages")
+    form["disposition_approved"] = "disposition_approved" in submitted
+    try:
+        vendor_document_service.update_verification(
+            requirement_id,
+            RequirementVerificationUpdate.model_validate(
+                {key: value for key, value in form.items() if value not in ("", None)}
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "vendor_document_package.html",
+            status_code=422,
+            **_vdrl_package_context(
+                current.package_id,
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered={"verification_requirement_id": requirement_id, **form},
+            ),
+        )
+    return RedirectResponse(
+        f"/vendor-documents/packages/{current.package_id}#requirement-{requirement_id}",
+        status_code=303,
+    )
+
+
+@app.post("/vendor-documents/packages/{package_id}/bulk", response_class=HTMLResponse)
+async def bulk_update_vendor_requirements(package_id: str, request: Request) -> HTMLResponse:
+    submitted = await request.form()
+    form = dict(submitted)
+    try:
+        targets = []
+        for encoded in submitted.getlist("requirement_target"):
+            requirement_id, separator, version = str(encoded).partition("|")
+            if not separator:
+                raise ValueError("Invalid requirement selection")
+            targets.append(
+                BulkRequirementTarget(requirement_id=requirement_id, expected_version=int(version))
+            )
+        command = BulkVerificationUpdate.model_validate(
+            {
+                "targets": targets,
+                "proposed_manufacturer": form.get("proposed_manufacturer") or None,
+                "internal_owner": form.get("internal_owner") or None,
+                "verification_status": form.get("verification_status") or None,
+            }
+        )
+        vendor_document_service.bulk_update(package_id, command, LOCAL_ACTOR)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "vendor_document_package.html",
+            status_code=422,
+            **_vdrl_package_context(
+                package_id,
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered=form,
+            ),
+        )
+    return RedirectResponse(
+        f"/vendor-documents/packages/{package_id}#compliance-register", status_code=303
+    )
+
+
+@app.post("/vendor-documents/packages/{package_id}/import/preview", response_class=HTMLResponse)
+async def preview_vendor_requirement_import(package_id: str, request: Request) -> HTMLResponse:
+    form = await request.form()
+    uploaded = form.get("csv_file")
+    try:
+        if not isinstance(uploaded, StarletteUploadFile):
+            raise ValueError("Choose a CSV file")
+        csv_text = (await uploaded.read()).decode("utf-8-sig")
+        preview = vendor_document_service.preview_import(package_id, csv_text)
+        digest = vendor_document_service.import_digest(csv_text)
+    except (UnicodeDecodeError, ValueError) as exc:
+        return render(
+            "vendor_document_package.html",
+            status_code=422,
+            **_vdrl_package_context(package_id, error=str(exc)),
+        )
+    return render(
+        "vendor_document_package.html",
+        status_code=200 if preview.valid else 422,
+        **_vdrl_package_context(
+            package_id,
+            error="CSV preview contains errors" if not preview.valid else None,
+            import_preview=preview,
+            import_csv=csv_text,
+            import_digest=digest,
+        ),
+    )
+
+
+@app.post("/vendor-documents/packages/{package_id}/import/confirm", response_class=HTMLResponse)
+async def confirm_vendor_requirement_import(package_id: str, request: Request) -> HTMLResponse:
+    form = dict(await request.form())
+    csv_text = str(form.get("csv_text") or "")
+    digest = str(form.get("csv_digest") or "")
+    try:
+        vendor_document_service.confirm_import(package_id, csv_text, digest, LOCAL_ACTOR)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        preview = vendor_document_service.preview_import(package_id, csv_text)
+        return render(
+            "vendor_document_package.html",
+            status_code=422,
+            **_vdrl_package_context(
+                package_id,
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                import_preview=preview,
+                import_csv=csv_text,
+                import_digest=digest,
+            ),
+        )
+    return RedirectResponse(
+        f"/vendor-documents/packages/{package_id}#compliance-register", status_code=303
+    )
+
+
+@app.get("/vendor-documents/register", response_class=HTMLResponse)
+async def vendor_document_register(
+    bid_id: str | None = None,
+    package_id: str | None = None,
+    requirement_code: str | None = None,
+    stage: str | None = None,
+    verification_status: str | None = None,
+    manufacturer: str | None = None,
+    owner: str | None = None,
+    commercial_impact: str | None = None,
+    attention: str | None = None,
+) -> HTMLResponse:
+    try:
+        status_value = VerificationStatus(verification_status) if verification_status else None
+        impact_value = CommercialImpact(commercial_impact) if commercial_impact else None
+        attention_value = None if not attention else attention == "required"
+        if attention not in {None, "", "required", "none"}:
+            raise ValueError("attention must be required or none")
+        rows = vendor_document_service.register_rows(
+            bid_id=bid_id,
+            package_id=package_id,
+            requirement_code=requirement_code,
+            stage=stage,
+            verification_status=status_value,
+            manufacturer=manufacturer,
+            owner=owner,
+            commercial_impact=impact_value,
+            attention=attention_value,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return render(
+        "vendor_document_register.html",
+        rows=rows,
+        bids=bid_repository.list_bids(),
+        packages=vendor_document_repository.list_packages(bid_id),
+        verification_statuses=list(VerificationStatus),
+        commercial_impacts=list(CommercialImpact),
+        selected={
+            "bid_id": bid_id or "",
+            "package_id": package_id or "",
+            "requirement_code": requirement_code or "",
+            "stage": stage or "",
+            "verification_status": verification_status or "",
+            "manufacturer": manufacturer or "",
+            "owner": owner or "",
+            "commercial_impact": commercial_impact or "",
+            "attention": attention or "",
+        },
+    )
+
+
+@app.get("/vendor-documents/packages/{package_id}/handover.csv")
+async def vendor_document_handover(package_id: str) -> Response:
+    try:
+        content = vendor_document_service.handover_csv(package_id)
+    except VendorDocumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="vendor-vdrl-handover-{package_id}.csv"'
+        },
+    )
 
 
 @app.get("/commercial", response_class=HTMLResponse)

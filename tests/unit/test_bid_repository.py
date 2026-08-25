@@ -64,6 +64,48 @@ def test_create_duplicate_bid_raises_value_error(
         bid_repo.create_bid(valid_bid)
 
 
+def test_create_bid_with_audit_is_atomic(
+    bid_repo: BidRepository,
+    valid_bid: Bid,
+) -> None:
+    created = AuditEntry(
+        entry_id="AUD-BROWSER-CREATE",
+        bid_id=valid_bid.bid_id,
+        actor="jason",
+        action="bid_project_created",
+        detail="Created through browser",
+        timestamp=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+    )
+
+    bid_repo.create_bid_with_audit(valid_bid, created)
+
+    assert bid_repo.get_bid(valid_bid.bid_id) == valid_bid
+    assert bid_repo.list_audit(bid_id=valid_bid.bid_id) == [created]
+
+
+def test_create_bid_with_audit_rolls_back_when_audit_insert_fails(
+    bid_repo: BidRepository,
+    valid_bid: Bid,
+) -> None:
+    existing = AuditEntry(
+        entry_id="AUD-DUPLICATE",
+        bid_id=None,
+        actor="system",
+        action="fixture",
+        detail="Occupies the audit identifier",
+        timestamp=datetime(2026, 8, 20, 8, 0, tzinfo=UTC),
+    )
+    bid_repo.append_audit(existing)
+    candidate = valid_bid.model_copy(update={"bid_id": "B-2026-0042"})
+    duplicate_audit = existing.model_copy(update={"bid_id": candidate.bid_id})
+
+    with pytest.raises(ValueError, match="could not be committed"):
+        bid_repo.create_bid_with_audit(candidate, duplicate_audit)
+
+    assert bid_repo.get_bid(candidate.bid_id) is None
+    assert bid_repo.list_audit() == [existing]
+
+
 def test_list_bids_returns_all_and_filters_by_status(
     bid_repo: BidRepository,
     valid_bid: Bid,
