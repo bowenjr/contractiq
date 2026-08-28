@@ -14,7 +14,7 @@
   </style>
 </head>
 <body><main>
-  <nav class="nav" aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/my-day">My Day</a><a href="/my-work">My Work</a><a href="/bids">Bids</a><a href="/vendor-documents">Vendor Document Requirements</a><a href="/role-framework" aria-current="page">Role Framework</a><a href="/requirements">Contract Controls</a><a href="/documents">Documents</a><a href="/knowledge">Knowledge Base</a></nav>
+  {% set current_nav = 'administration' %}{% include '_primary_navigation.html' %}
   <div class="header"><div><h1>Role Framework</h1><p class="muted">Controlled role purpose, boundaries, outcomes, cadence, and responsibility domains.</p></div><a class="btn" href="/role-framework/new">Create role profile</a></div>
 
   {% if effective_error %}<div class="error" role="alert"><strong>Effective-profile conflict:</strong> {{ effective_error }}</div>{% endif %}

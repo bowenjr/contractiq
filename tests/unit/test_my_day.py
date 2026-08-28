@@ -202,6 +202,17 @@ def test_readiness_holds_are_separate_and_unchanged() -> None:
     assert result.counts.readiness_holds == 1
 
 
+def test_any_future_non_clear_readiness_verdict_is_blocker_attention() -> None:
+    escalated = _hold().model_copy(
+        update={"report": _hold().report.model_copy(update={"verdict": ReadinessVerdict.ESCALATE})}
+    )
+
+    result = project_my_day([], [escalated], AS_OF, 7)
+
+    assert result.readiness_holds == [escalated]
+    assert result.counts.readiness_holds == 1
+
+
 def test_repeated_projection_with_identical_inputs_is_equal() -> None:
     items = [_item(1, "Same", due_date=AS_OF)]
     readiness = [_hold()]

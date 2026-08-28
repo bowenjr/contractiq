@@ -115,17 +115,11 @@
 <aside class="sidebar">
   <div class="brand"><div class="brand-name">Contract<span>IQ</span></div><div class="brand-sub">Bids &amp; Contracts Manager</div></div>
   <nav aria-label="Primary navigation">
-    <div class="nav-label">Workspace</div>
-    <a class="nav-item" href="/">Dashboard</a>
     <a class="nav-item active" href="/my-day" aria-current="page">My Day</a>
-    <a class="nav-item" href="/my-work">My Work</a>
     <a class="nav-item" href="/bids">Bids</a>
-    <a class="nav-item" href="/vendor-documents">Vendor Document Requirements</a>
-    <a class="nav-item" href="/role-framework">Role Framework</a>
-    <a class="nav-item" href="/requirements">Contract Controls</a>
-    <a class="nav-item" href="/documents">Documents</a>
-    <div class="nav-label">Reference</div>
-    <a class="nav-item" href="/knowledge">Knowledge Base</a>
+    <a class="nav-item" href="/my-work">My Work</a>
+    <a class="nav-item" href="/reports-center">Reports</a>
+    <a class="nav-item" href="/administration">Administration</a>
   </nav>
   <div class="offline-note"><strong>Local operations ready</strong>My Day does not require Alice or cloud services.</div>
 </aside>
@@ -133,7 +127,7 @@
 <main>
   <header class="topbar">
     <div><h1>My Day</h1><div class="as-of">Operational view as of <time datetime="{{ projection.as_of }}">{{ projection.as_of.strftime('%A, %B %-d, %Y') }}</time></div></div>
-    <a class="btn btn-gold" href="/my-work#quick-capture">+ Add work item</a>
+    <div><a class="btn" href="/bids#create-bid">+ New Bid</a> <a class="btn btn-gold" href="/my-work#quick-capture">+ Add work item</a></div>
   </header>
   <div class="content">
     <section class="summary" aria-label="My Day summary">
@@ -171,56 +165,52 @@
       </div>
     {% endmacro %}
 
-    {% set sections = [
-      ('Blocked', projection.blocked, 'No blocked work items.'),
-      ('Waiting', projection.waiting, 'Nothing is waiting on another party.'),
-      ('Overdue', projection.overdue, 'No unblocked overdue work.'),
-      ('Due today', projection.due_today, 'Nothing else is due today.'),
-      ('Upcoming seven days', projection.upcoming, 'No work is due in the next seven days.'),
-      ('Later or unscheduled', projection.later_or_unscheduled, 'No later or unscheduled active work.')
-    ] %}
-    {% for heading, items, empty_message in sections %}
-    <section class="section" aria-labelledby="section-{{ loop.index }}">
-      <div class="section-head"><h2 id="section-{{ loop.index }}">{{ heading }}</h2><span class="section-count">{{ items|length }}</span></div>
-      {{ work_rows(items, empty_message) }}
+    <section class="section" aria-labelledby="critical-heading">
+      <div class="section-head"><h2 id="critical-heading">Critical deadlines</h2><span class="section-count">{{ critical_deadlines|length }}</span></div>
+      {{ work_rows(critical_deadlines, 'No Bid deadlines require attention.') }}
     </section>
-    {% endfor %}
 
-    <section class="section" aria-labelledby="requirements-heading">
-      <div class="section-head"><h2 id="requirements-heading">Requirement attention</h2><span class="section-count">{{ projection.requirement_attention|length }} · authoritative register, no duplicate work items</span></div>
+    <section class="section" aria-labelledby="blockers-heading">
+      <div class="section-head"><h2 id="blockers-heading">Bid blockers</h2><span class="section-count">{{ bid_blockers|length + projection.readiness_holds|length + projection.requirement_attention|length + blocking_supplier_attention|length + projection.deliverable_attention|length + projection.commercial_attention|length + projection.contract_risk_attention|length }}</span></div>
+      {{ work_rows(bid_blockers, 'No blocked Bid work items.') }}
       <div class="panel">
-      {% if projection.requirement_attention %}{% for projected in projection.requirement_attention %}{% set requirement = projected.requirement %}
-        <a class="work-row" href="/requirements/{{ requirement.requirement_id }}" style="color:inherit;text-decoration:none">
-          <div><div class="item-title">{{ requirement.title }}</div><div class="item-detail">{{ requirement.requirement_id }}</div></div>
-          <div><div class="parent-id">{{ requirement.bid_id }}</div><div class="parent-name">{{ projected.bid_name }}</div></div>
-          <div><div class="meta-label">Significance</div><div class="meta-value">{{ requirement.significance.value }}</div></div>
-          <div><span class="badge priority-HIGH">{{ requirement.disposition.value }}</span></div>
-          <div><span class="badge status-{{ requirement.work_state.value }}">{{ requirement.work_state.value }}</span></div>
-          <div><div class="due-line"><span>{{ requirement.due_date or 'No due date' }}</span>{% if projected.is_overdue %}<span class="badge overdue">OVERDUE</span>{% endif %}{% if projected.is_due_today %}<span class="badge status-WAITING">TODAY</span>{% endif %}</div><div class="context">{{ projected.reasons|join(' · ') }}</div></div>
-          <div class="actions"><span class="btn btn-small">Open requirement</span></div>
-        </a>{% endfor %}
-      {% else %}<div class="empty">No overdue, due-today, or high-attention requirements.</div>{% endif %}
-      </div>
-    </section>
-
-    <section class="section" aria-labelledby="supplier-heading">
-      <div class="section-head"><h2 id="supplier-heading">Supplier assurance attention</h2><span class="section-count">{{ projection.supplier_attention|length }} · read-only register projection</span></div>
-      <div class="panel">{% if projection.supplier_attention %}{% for row in projection.supplier_attention %}<a class="work-row" href="/suppliers?bid_id={{ row.bid_id }}" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code }}</div><div class="item-detail">{{ row.entity_id }}</div></div><div><span class="badge status-{{ row.severity }}">{{ row.severity }}</span></div></a>{% endfor %}{% else %}<div class="empty">No supplier assurance attention.</div>{% endif %}</div>
-    </section>
-
-    <section class="section" aria-labelledby="readiness-heading">
-      <div class="section-head"><h2 id="readiness-heading">Readiness holds</h2><span class="section-count">{{ projection.readiness_holds|length }} · read-only from TASK-06</span></div>
-      <div class="panel">
-      {% if projection.readiness_holds %}
-        {% for snapshot in projection.readiness_holds %}
-        <article class="hold">
+      {% for snapshot in projection.readiness_holds %}
+        <a class="hold" href="/bids/{{ snapshot.bid_id }}" style="display:block;color:inherit;text-decoration:none">
           <div class="hold-title"><span>{{ snapshot.bid_id }} · {{ snapshot.bid_name }}</span><span class="badge status-BLOCKED">HOLD</span></div>
           <div class="hold-summary">{{ snapshot.report.summary }}</div>
-          <ul>{% for blocker in snapshot.report.blockers if not blocker.overridden %}<li><strong>{{ blocker.gate.value|upper }}</strong> — {{ blocker.description }}{% if blocker.detail %}: {{ blocker.detail }}{% endif %}</li>{% endfor %}</ul>
-        </article>
-        {% endfor %}
-      {% else %}<div class="empty">No bids are currently on readiness hold.</div>{% endif %}
+          <div class="context">Consequence: the Bid cannot advance until the listed controls are resolved or formally overridden. Owner: {{ bid_owners.get(snapshot.bid_id, 'Bid owner') }}.</div>
+        </a>
+      {% endfor %}
+      {% for projected in projection.requirement_attention %}{% set requirement = projected.requirement %}
+        <a class="work-row" href="/requirements/{{ requirement.requirement_id }}" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ requirement.title }}</div><div class="item-detail">Customer requirement · {{ requirement.requirement_id }}</div></div><div><div class="parent-id">{{ requirement.bid_id }}</div><div class="parent-name">{{ projected.bid_name }}</div></div><div><strong>{{ projected.reasons|join(' · ')|replace('_',' ')|title }}</strong><div class="context">Consequence: customer compliance remains unresolved.</div></div><div>Owner: {{ requirement.owner or bid_owners.get(requirement.bid_id, 'Unassigned') }}</div><div>{{ requirement.due_date or 'No due date' }}</div><div class="actions"><span class="btn btn-small">Open requirement</span></div></a>
+      {% endfor %}
+      {% for row in blocking_supplier_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/manufacturers-coverage#supplier-assurance" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code|replace('_',' ')|title }}</div><div class="item-detail">Manufacturer or supplier coverage · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: supplier support remains unresolved.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-{{ row.severity }}">{{ row.severity }}</span></div></a>{% endfor %}
+      {% for row in projection.deliverable_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/proposal-negotiation#deliverables" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code|replace('_',' ')|title }}</div><div class="item-detail">Bid deliverable · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: a required Bid deliverable remains incomplete.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-{{ row.severity }}">{{ row.severity }}</span></div></a>{% endfor %}
+      {% for row in projection.commercial_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/commercial-contract#commercial" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code|replace('_',' ')|title }}</div><div class="item-detail">Commercial control · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: pricing or commercial completeness remains unresolved.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-{{ row.severity }}">{{ row.severity }}</span></div></a>{% endfor %}
+      {% for row in projection.contract_risk_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/commercial-contract#contract-risk" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code|replace('_',' ')|title }}</div><div class="item-detail">Contract exposure · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: contract risk remains unresolved.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-{{ row.severity }}">{{ row.severity }}</span></div></a>{% endfor %}
+      {% if not projection.readiness_holds and not projection.requirement_attention and not blocking_supplier_attention and not projection.deliverable_attention and not projection.commercial_attention and not projection.contract_risk_attention %}<div class="empty">No control-register blockers require attention.</div>{% endif %}
       </div>
+    </section>
+
+    <section class="section" aria-labelledby="waiting-heading">
+      <div class="section-head"><h2 id="waiting-heading">Waiting on others</h2><span class="section-count">{{ waiting_on_others|length + waiting_supplier_attention|length }}</span></div>
+      {{ work_rows(waiting_on_others, 'No Bid work item is currently waiting on another party.') }}
+      <div class="panel">{% for row in waiting_supplier_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/manufacturers-coverage#supplier-assurance" style="color:inherit;text-decoration:none"><div><div class="item-title">Manufacturer or supplier response outstanding</div><div class="item-detail">{{ row.code|replace('_',' ')|title }} · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Owing party: manufacturer or supplier</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div>Consequence: coverage cannot be confirmed from silence.</div></a>{% else %}<div class="empty">No manufacturer or supplier response is outstanding.</div>{% endfor %}</div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions-heading">
+      <div class="section-head"><h2 id="decisions-heading">Decisions and approvals needed</h2><span class="section-count">{{ projection.approval_attention|length }}</span></div>
+      <div class="panel">{% for row in projection.approval_attention %}<a class="work-row" href="/decisions?bid_id={{ row.bid_id }}" style="color:inherit;text-decoration:none"><div><div class="item-title">Decision or approval needed</div><div class="item-detail">{{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>{{ row.code|replace('_',' ')|title }}</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div>Consequence: the Bid cannot advance through its required approval.</div></a>{% else %}<div class="empty">No decision or approval currently needs attention.</div>{% endfor %}</div>
+    </section>
+
+    <section class="section" aria-labelledby="handover-heading">
+      <div class="section-head"><h2 id="handover-heading">Award or handover attention</h2><span class="section-count">{{ award_handover_bids|length }}</span></div>
+      <div class="panel">{% for bid in award_handover_bids %}<a class="work-row" href="/bids/{{ bid.bid_id }}/award-handover" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ bid.project_name }}</div><div class="item-detail">Awarded Bid requires handover review</div></div><div>{{ bid.bid_id }} · {{ bid.customer }}</div><div>Owner: {{ bid.bc_owner }}</div><div>Anticipated award: {{ bid.anticipated_award_date or 'Not recorded' }}</div></a>{% else %}<div class="empty">No awarded Bid currently needs handover attention.</div>{% endfor %}</div>
+    </section>
+
+    <section class="section" aria-labelledby="standalone-heading">
+      <div class="section-head"><h2 id="standalone-heading">Standalone personal work</h2><span class="section-count">{{ standalone_work|length }}</span></div>
+      {{ work_rows(standalone_work, 'No standalone personal work requires attention.') }}
     </section>
 
     <details class="history">

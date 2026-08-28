@@ -92,7 +92,7 @@ async def main() -> None:
 
             status, _, bids_page = await request(app.app, "GET", "/bids")
             assert status == 200
-            assert b"Create bid" in bids_page
+            assert b"Create Bid" in bids_page
             status, headers, _ = await request(
                 app.app,
                 "POST",
@@ -116,11 +116,13 @@ async def main() -> None:
             assert status == 303
             bid_path = headers["location"]
             bid_id = bid_path.rsplit("/", 1)[-1]
-            status, _, bid_page = await request(app.app, "GET", bid_path)
+            status, _, bid_page = await request(
+                app.app, "GET", f"{bid_path}/manufacturers-coverage"
+            )
             assert status == 200
             assert b"Vendor Document Requirements" in bid_page
             assert b"Add supplier/equipment package" in bid_page
-            assert b"post-award submissions" in bid_page
+            assert b"post-award execution" not in bid_page
 
             packages_before = len(app.vendor_document_repository.list_packages())
             audits_before = len(app.bid_repository.list_audit(bid_id=bid_id))
@@ -307,7 +309,9 @@ async def main() -> None:
             ):
                 assert expected in handover
 
-            status, _, bid_reload = await request(app.app, "GET", bid_path)
+            status, _, bid_reload = await request(
+                app.app, "GET", f"{bid_path}/manufacturers-coverage"
+            )
             assert status == 200
             assert package.package_name.encode() in bid_reload
             assert package_path.encode() in bid_reload

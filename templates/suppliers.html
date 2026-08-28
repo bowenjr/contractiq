@@ -1,4 +1,5 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Suppliers · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head><body><main class="page-shell">
+  {% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
   <div class="page-heading"><div><p class="eyebrow">Assurance register</p><h1>Suppliers</h1><p class="muted">Bid-scoped requests, evidence, coverage, and independent review.</p></div></div>
   <section class="card"><h2>Supplier identities</h2><table><thead><tr><th>Supplier</th><th>Manufacturer snapshot</th><th>Lifecycle</th><th>Bid</th></tr></thead><tbody>
   {% for supplier in suppliers %}<tr><td><a href="/supplier-detail/{{ supplier.supplier_id }}">{{ supplier.supplier_name }}</a></td><td>{{ supplier.manufacturer_name or "—" }}</td><td>{{ supplier.lifecycle_state }}</td><td>{{ supplier.bid_id }}</td></tr>{% else %}<tr><td colspan="4" class="muted">No bid-scoped suppliers recorded.</td></tr>{% endfor %}

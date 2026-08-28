@@ -109,6 +109,7 @@ class MyDayProjection(BaseModel):
     due_today: list[ProjectedWorkItem]
     upcoming: list[ProjectedWorkItem]
     later_or_unscheduled: list[ProjectedWorkItem]
+    readiness_reports: list[ReadinessSnapshot]
     readiness_holds: list[ReadinessSnapshot]
     requirement_attention: list[ProjectedRequirementAttention]
     supplier_attention: list[dict[str, str]] = Field(default_factory=list)
@@ -313,10 +314,15 @@ def project_my_day(
     for entries in buckets.values():
         entries.sort(key=lambda entry: work_item_order_key(entry.item, as_of, horizon_days))
 
+    readiness_reports = sorted(
+        readiness,
+        key=lambda snapshot: (snapshot.bid_name.casefold(), snapshot.bid_id),
+    )
     readiness_holds = [
-        snapshot for snapshot in readiness if snapshot.report.verdict == ReadinessVerdict.HOLD
+        snapshot
+        for snapshot in readiness_reports
+        if snapshot.report.verdict != ReadinessVerdict.CLEAR
     ]
-    readiness_holds.sort(key=lambda snapshot: (snapshot.bid_name.casefold(), snapshot.bid_id))
     requirement_attention = _project_requirement_attention(
         requirement_snapshots or [],
         as_of,
@@ -331,6 +337,7 @@ def project_my_day(
         due_today=buckets[MyDayBucket.DUE_TODAY],
         upcoming=buckets[MyDayBucket.UPCOMING],
         later_or_unscheduled=buckets[MyDayBucket.LATER_OR_UNSCHEDULED],
+        readiness_reports=readiness_reports,
         readiness_holds=readiness_holds,
         requirement_attention=requirement_attention,
         supplier_attention=supplier_attention or [],

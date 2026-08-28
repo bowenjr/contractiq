@@ -98,8 +98,9 @@ def test_documents_empty_page_and_navigation_are_available(
     assert page.status_code == dashboard.status_code == my_day.status_code == 200
     assert "No controlled documents yet" in _html(page)
     assert "ContractIQ" in _html(page)
-    assert 'href="/documents"' in _html(dashboard)
-    assert 'href="/documents"' in _html(my_day)
+    assert 'href="/bids"' in _html(dashboard)
+    assert 'href="/bids"' in _html(my_day)
+    assert "Controlled Documents" not in _html(dashboard)
 
 
 def test_ui_registers_displays_versions_downloads_and_verifies(

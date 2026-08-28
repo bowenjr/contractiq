@@ -39,6 +39,17 @@ from core.approval_authority import (
 )
 from core.approval_repository import ApprovalRepository
 from core.approval_service import ApprovalService
+from core.bid_control_center import (
+    BidControlCenterService,
+    BidDeadlineAttention,
+    BidNotFoundError,
+    BidPortfolioFilters,
+    BidPortfolioView,
+    BidReadinessFilter,
+    BidWorkspaceAttention,
+    BidWorkspaceSection,
+    workspace_path,
+)
 from core.bid_repository import BidRepository
 from core.commercial import AssessmentVersion, CommercialItem, CommercialLink, CommercialReview
 from core.commercial_repository import CommercialRepository
@@ -91,7 +102,7 @@ from core.managed_document_storage import (
     ManagedFileTooLargeError,
     ManagedStorageFailureError,
 )
-from core.my_day import WorkItemSnapshot
+from core.my_day import ProjectedWorkItem, WorkItemSnapshot, work_item_order_key
 from core.negotiation import (
     Concession,
     ConditionalTrade,
@@ -278,6 +289,41 @@ my_day_service = MyDayService(
     bid_repository,
     db,
     requirement_repository=requirement_repository,
+)
+
+
+def _load_bid_workspace_attention(bid_id: str, as_of: date) -> BidWorkspaceAttention:
+    approval_attention = [
+        {
+            "bid_id": bid_id,
+            "entity_id": str(row["case_id"]),
+            "code": "APPROVAL_PENDING",
+            "severity": "HIGH",
+        }
+        for row in approval_repository.cases(bid_id)
+        if row["lifecycle_state"] in {"ACTIVE", "DRAFT"}
+    ]
+    supplier_attention = [
+        {
+            "bid_id": gap.bid_id,
+            "entity_id": gap.entity_id,
+            "code": gap.code,
+            "severity": gap.severity,
+        }
+        for gap in supplier_service.gaps(bid_id, as_of)
+    ]
+    return BidWorkspaceAttention(
+        approval_attention=approval_attention,
+        supplier_attention=supplier_attention,
+    )
+
+
+bid_control_center_service = BidControlCenterService(
+    bid_repository,
+    work_item_repository,
+    lambda as_of: my_day_service.get_my_day(as_of=as_of),
+    lambda bid_id: evaluate_readiness(bid_repository, db, bid_id),
+    _load_bid_workspace_attention,
 )
 managed_document_storage = ManagedDocumentStorage(
     MANAGED_DOCUMENT_ROOT,
@@ -550,16 +596,9 @@ def _run_analysis_background(doc_id: str) -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    documents = db.get_all_documents()
-    return render(
-        "index.html",
-        contracts=documents,
-        requirement_coverage=requirement_service.coverage(
-            bid_id=None,
-            as_of_date=_working_date(),
-        ),
-    )
+async def index(request: Request) -> HTMLResponse:
+    """Open the role-aligned operational home without a second dashboard."""
+    return await my_day(request)
 
 
 def _working_date() -> date:
@@ -574,6 +613,27 @@ def _parse_as_of(value: str | None) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="as_of must use YYYY-MM-DD") from exc
+
+
+def _bid_return_context(
+    bid_id: str | None,
+    section: BidWorkspaceSection,
+) -> dict[str, object]:
+    bid = bid_repository.get_bid(bid_id) if bid_id else None
+    section_labels = {
+        BidWorkspaceSection.REQUIREMENTS_SCOPE: "Requirements & Scope",
+        BidWorkspaceSection.MANUFACTURERS_COVERAGE: "Manufacturers & Coverage",
+        BidWorkspaceSection.COMMERCIAL_CONTRACT: "Commercial & Contract",
+        BidWorkspaceSection.PROPOSAL_NEGOTIATION: "Proposal & Negotiation",
+    }
+    return {
+        "bid_context": bid,
+        "bid_return_path": workspace_path(bid.bid_id, section) if bid else None,
+        "bid_section_label": section_labels.get(
+            section,
+            section.value.replace("-", " ").title(),
+        ),
+    }
 
 
 def _json_item(
@@ -636,6 +696,49 @@ async def my_day(request: Request) -> HTMLResponse:
     projection = my_day_service.get_my_day(as_of=projection_date)
     bids = bid_repository.list_bids()
     bid_names = {bid.bid_id: bid.project_name for bid in bids}
+    bid_owners = {bid.bid_id: bid.bc_owner for bid in bids}
+    projected_items: list[ProjectedWorkItem] = []
+    seen_work_items: set[str] = set()
+    for bucket in (
+        projection.blocked,
+        projection.waiting,
+        projection.overdue,
+        projection.due_today,
+        projection.upcoming,
+        projection.later_or_unscheduled,
+    ):
+        for item in bucket:
+            if item.item.work_item_id not in seen_work_items:
+                seen_work_items.add(item.item.work_item_id)
+                projected_items.append(item)
+    projected_items.sort(
+        key=lambda item: work_item_order_key(item.item, projection_date, projection.horizon_days)
+    )
+    standalone_work = [item for item in projected_items if item.item.bid_id is None]
+    bid_blockers = [
+        item
+        for item in projected_items
+        if item.item.bid_id is not None and item.item.status is WorkItemStatus.BLOCKED
+    ]
+    waiting_on_others = [
+        item
+        for item in projected_items
+        if item.item.bid_id is not None and item.item.status is WorkItemStatus.WAITING
+    ]
+    critical_deadlines = [
+        item
+        for item in projected_items
+        if item.item.bid_id is not None
+        and item.item.status not in {WorkItemStatus.BLOCKED, WorkItemStatus.WAITING}
+    ]
+    waiting_supplier_attention = [
+        item
+        for item in projection.supplier_attention
+        if "NO_RESPONSE" in item.get("code", "") or "SILENT" in item.get("code", "")
+    ]
+    blocking_supplier_attention = [
+        item for item in projection.supplier_attention if item not in waiting_supplier_attention
+    ]
     archived_items = [
         WorkItemSnapshot(
             item=item,
@@ -653,6 +756,14 @@ async def my_day(request: Request) -> HTMLResponse:
     return render(
         "my_day.html",
         projection=projection,
+        critical_deadlines=critical_deadlines,
+        bid_blockers=bid_blockers,
+        waiting_on_others=waiting_on_others,
+        waiting_supplier_attention=waiting_supplier_attention,
+        blocking_supplier_attention=blocking_supplier_attention,
+        standalone_work=standalone_work,
+        bid_owners=bid_owners,
+        award_handover_bids=[bid for bid in bids if bid.status is BidStatus.WON],
         archived_items=archived_items,
         category_labels=WORK_CATEGORY_LABELS,
         status_labels=WORK_ITEM_STATUS_LABELS,
@@ -1501,6 +1612,7 @@ async def requirements_register(
         },
         as_of_date=projection_date,
         actor=LOCAL_ACTOR,
+        **_bid_return_context(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE),
     )
 
 
@@ -1536,13 +1648,45 @@ async def requirement_detail(request: Request, requirement_id: str) -> HTMLRespo
 
 
 def _bids_browser_context(
-    *, error: str | None = None, entered: dict[str, object] | None = None
+    *,
+    filters: BidPortfolioFilters | None = None,
+    filter_values: dict[str, str] | None = None,
+    error: str | None = None,
+    filter_error: bool = False,
+    entered: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    selected = filters or BidPortfolioFilters()
+    selected_values = filter_values or {
+        "view": selected.view.value,
+        "status": selected.status.value if selected.status else "",
+        "classification": selected.classification.value if selected.classification else "",
+        "readiness": selected.readiness.value,
+        "owner": selected.owner or "",
+        "deadline": selected.deadline.value,
+    }
+    portfolio = bid_control_center_service.portfolio(selected, as_of=_working_date())
+    portfolio_views = list(BidPortfolioView)
+    bid_statuses = list(BidStatus)
+    readiness_filters = list(BidReadinessFilter)
+    deadline_filters = list(BidDeadlineAttention)
     return {
-        "bids": bid_repository.list_bids(),
+        "portfolio": portfolio,
+        "bids": [row.bid for row in portfolio.rows],
+        "filters": selected,
+        "filter_values": selected_values,
+        "portfolio_views": portfolio_views,
+        "portfolio_view_values": [item.value for item in portfolio_views],
+        "bid_statuses": bid_statuses,
+        "bid_status_values": [item.value for item in bid_statuses],
+        "readiness_filters": readiness_filters,
+        "readiness_filter_values": [item.value for item in readiness_filters],
+        "deadline_filters": deadline_filters,
+        "deadline_filter_values": [item.value for item in deadline_filters],
+        "classification_values": [item.value for item in BidLevel],
         "customer_types": list(CustomerType),
         "classifications": list(BidLevel),
         "error": error,
+        "filter_error": filter_error,
         "entered": entered or {},
     }
 
@@ -1562,8 +1706,47 @@ def _next_browser_bid_id() -> str:
 
 
 @app.get("/bids", response_class=HTMLResponse)
-async def bids_projects() -> HTMLResponse:
-    return render("bids.html", **_bids_browser_context())
+async def bids_projects(
+    view: str = "current",
+    status: str | None = None,
+    classification: str | None = None,
+    readiness: str = "any",
+    owner: str | None = None,
+    deadline: str = "any",
+) -> HTMLResponse:
+    raw_filters = {
+        "view": view,
+        "status": status or "",
+        "classification": classification or "",
+        "readiness": readiness,
+        "owner": owner or "",
+        "deadline": deadline,
+    }
+    try:
+        filters = BidPortfolioFilters.model_validate(
+            {
+                "view": view,
+                "status": status or None,
+                "classification": classification or None,
+                "readiness": readiness,
+                "owner": owner or None,
+                "deadline": deadline,
+            }
+        )
+    except ValidationError as exc:
+        return render(
+            "bids.html",
+            status_code=422,
+            **_bids_browser_context(
+                filter_values=raw_filters,
+                error=validation_error_message(exc),
+                filter_error=True,
+            ),
+        )
+    return render(
+        "bids.html",
+        **_bids_browser_context(filters=filters, filter_values=raw_filters),
+    )
 
 
 @app.post("/bids", response_class=HTMLResponse)
@@ -1630,28 +1813,98 @@ async def create_bid_project(request: Request) -> Response:
 
 @app.get("/bids/{bid_id}", response_class=HTMLResponse)
 async def bid_detail(request: Request, bid_id: str) -> HTMLResponse:
-    bid = bid_repository.get_bid(bid_id)
-    if bid is None:
-        raise HTTPException(status_code=404, detail=f"Bid not found: {bid_id}")
+    return _render_bid_workspace(bid_id, BidWorkspaceSection.OVERVIEW)
+
+
+def _bid_workspace_context(
+    bid_id: str,
+    section: BidWorkspaceSection,
+) -> dict[str, object]:
     as_of_date = _working_date()
-    requirements = requirement_service.list_requirements(
-        bid_id=bid_id,
-        as_of_date=as_of_date,
-    )
-    return render(
-        "bid_detail.html",
-        bid=bid,
-        requirements=requirements,
-        coverage=requirement_service.coverage(
-            bid_id=bid_id,
-            as_of_date=as_of_date,
+    workspace = bid_control_center_service.workspace(bid_id, as_of=as_of_date)
+    requirements = requirement_service.list_requirements(bid_id=bid_id, as_of_date=as_of_date)
+    scope_items = scope_repository.list_scope_items(bid_id)
+    return {
+        "workspace": workspace,
+        "bid": workspace.bid,
+        "readiness": workspace.readiness,
+        "section": section,
+        "workspace_sections": list(BidWorkspaceSection),
+        "requirements": requirements,
+        "coverage": requirement_service.coverage(bid_id=bid_id, as_of_date=as_of_date),
+        "documents": document_service.list_register_entries(bid_id=bid_id),
+        "scope_items": scope_items,
+        "interfaces": scope_repository.list_interfaces(bid_id),
+        "scope_projection": scope_service.projection(bid_id, as_of_date),
+        "vendor_packages": vendor_document_repository.list_packages(bid_id),
+        "supplier_metrics": supplier_service.metrics(bid_id),
+        "commercial_metrics": commercial_service.metrics(
+            bid_id,
+            as_of_date,
+            [item.model_dump(mode="json") for item in scope_items],
         ),
-        readiness=evaluate_readiness(bid_repository, db, bid_id),
-        documents=document_service.list_register_entries(bid_id=bid_id),
-        vendor_packages=[
-            package
-            for package in vendor_document_repository.list_packages()
-            if package.bid_id == bid_id
+        "contract_risk_metrics": contract_risk_service.metrics(bid_id, as_of_date),
+        "approval_metrics": approval_service.metrics(
+            bid_id,
+            datetime.combine(as_of_date, datetime.min.time(), tzinfo=WORKING_TIMEZONE),
+        ),
+        "deliverable_metrics": deliverable_service.metrics(bid_id, as_of_date),
+        "proposal_metrics": proposal_service.metrics(bid_id),
+        "negotiation_metrics": negotiation_service.metrics(bid_id),
+    }
+
+
+def _render_bid_workspace(
+    bid_id: str,
+    section: BidWorkspaceSection,
+) -> HTMLResponse:
+    try:
+        context = _bid_workspace_context(bid_id, section)
+    except BidNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("bid_detail.html", **context)
+
+
+@app.get("/bids/{bid_id}/requirements-scope", response_class=HTMLResponse)
+async def bid_requirements_scope(bid_id: str) -> HTMLResponse:
+    return _render_bid_workspace(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE)
+
+
+@app.get("/bids/{bid_id}/manufacturers-coverage", response_class=HTMLResponse)
+async def bid_manufacturers_coverage(bid_id: str) -> HTMLResponse:
+    return _render_bid_workspace(bid_id, BidWorkspaceSection.MANUFACTURERS_COVERAGE)
+
+
+@app.get("/bids/{bid_id}/commercial-contract", response_class=HTMLResponse)
+async def bid_commercial_contract(bid_id: str) -> HTMLResponse:
+    return _render_bid_workspace(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT)
+
+
+@app.get("/bids/{bid_id}/proposal-negotiation", response_class=HTMLResponse)
+async def bid_proposal_negotiation(bid_id: str) -> HTMLResponse:
+    return _render_bid_workspace(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION)
+
+
+@app.get("/bids/{bid_id}/award-handover", response_class=HTMLResponse)
+async def bid_award_handover(bid_id: str) -> HTMLResponse:
+    return _render_bid_workspace(bid_id, BidWorkspaceSection.AWARD_HANDOVER)
+
+
+@app.get("/administration", response_class=HTMLResponse)
+async def administration() -> HTMLResponse:
+    """Expose configuration and controlled reference functions away from Bid work."""
+    return render("administration.html")
+
+
+@app.get("/reports-center", response_class=HTMLResponse)
+async def reports_center() -> HTMLResponse:
+    """List only exports that existing authoritative services can produce."""
+    bids = {bid.bid_id: bid for bid in bid_repository.list_bids()}
+    packages = vendor_document_repository.list_packages()
+    return render(
+        "reports_center.html",
+        report_packages=[
+            {"package": package, "bid": bids.get(package.bid_id)} for package in packages
         ],
     )
 
@@ -1667,6 +1920,7 @@ async def scope_interfaces_register(bid_id: str | None = None) -> HTMLResponse:
         interfaces=interfaces,
         coverage=coverage,
         bid_id=bid_id,
+        **_bid_return_context(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE),
     )
 
 
@@ -1683,6 +1937,7 @@ async def deliverables_register(
         bid_id=bid_id or "",
         metrics=deliverable_service.metrics(bid_id, projection_date),
         gaps=deliverable_service.gaps(bid_id, projection_date),
+        **_bid_return_context(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
     )
 
 
@@ -2151,6 +2406,7 @@ async def commercial_register(bid_id: str | None = None, as_of: str | None = Non
         bid_id=bid_id or "",
         gaps=commercial_service.gaps(bid_id, projection_date, scope_rows),
         metrics=commercial_service.metrics(bid_id, projection_date, scope_rows),
+        **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
 
 
@@ -2266,6 +2522,7 @@ async def contract_risks_register(
         bid_id=bid_id or "",
         gaps=contract_risk_service.gaps(bid_id, projection_date),
         metrics=contract_risk_service.metrics(bid_id, projection_date),
+        **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
 
 
@@ -2287,6 +2544,7 @@ async def decisions_register(bid_id: str | None = None) -> HTMLResponse:
         policies=approval_repository.policies(),
         cases=approval_repository.cases(bid_id),
         gaps=approval_service.gaps(bid_id),
+        **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
 
 
@@ -2390,6 +2648,7 @@ async def commercial_scenarios_register(bid_id: str | None = None) -> HTMLRespon
         "commercial_scenarios.html",
         families=scenario_repository.families(bid_id),
         bid_id=bid_id or "",
+        **_bid_return_context(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
         metrics=scenario_service.metrics(bid_id),
     )
 
@@ -2460,6 +2719,7 @@ async def negotiations_register(bid_id: str | None = None) -> HTMLResponse:
         plans=negotiation_repository.plans(bid_id),
         metrics=negotiation_service.metrics(bid_id),
         bid_id=bid_id or "",
+        **_bid_return_context(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
     )
 
 
@@ -2548,6 +2808,7 @@ async def proposals_register(bid_id: str | None = None) -> HTMLResponse:
         families=proposal_repository.families(bid_id),
         metrics=proposal_service.metrics(bid_id),
         bid_id=bid_id or "",
+        **_bid_return_context(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
     )
 
 
@@ -2715,6 +2976,7 @@ async def suppliers_register(bid_id: str | None = None) -> HTMLResponse:
         suppliers=supplier_service.suppliers(bid_id),
         requests=supplier_service.requests(bid_id),
         bid_id=bid_id,
+        **_bid_return_context(bid_id, BidWorkspaceSection.MANUFACTURERS_COVERAGE),
     )
 
 
@@ -3078,6 +3340,7 @@ async def controlled_documents(
         selected_category=category or "",
         selected_lifecycle=lifecycle or "",
         actor=LOCAL_ACTOR,
+        **_bid_return_context(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE),
     )
 
 

@@ -1,0 +1,7 @@
+<nav aria-label="Primary navigation">
+  <a href="/my-day"{% if current_nav == 'my-day' %} aria-current="page"{% endif %}>My Day</a> ·
+  <a href="/bids"{% if current_nav == 'bids' %} aria-current="page"{% endif %}>Bids</a> ·
+  <a href="/my-work"{% if current_nav == 'my-work' %} aria-current="page"{% endif %}>My Work</a> ·
+  <a href="/reports-center"{% if current_nav == 'reports' %} aria-current="page"{% endif %}>Reports</a> ·
+  <a href="/administration"{% if current_nav == 'administration' %} aria-current="page"{% endif %}>Administration</a>
+</nav>

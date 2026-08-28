@@ -99,7 +99,8 @@ def test_empty_register_dashboard_and_navigation_render_without_alice(
     assert page.status_code == dashboard.status_code == my_day.status_code == 200
     assert "No requirements match" in _html(page)
     assert "no data" in _html(page)
-    assert 'href="/requirements"' in _html(dashboard)
+    assert 'href="/bids"' in _html(dashboard)
+    assert "Requirements" not in _html(dashboard)
     assert "Requirement attention" in _html(my_day)
     health.assert_not_called()
 
@@ -143,7 +144,7 @@ def test_ui_creates_explicit_and_internal_and_hides_storage_identity(
     )
     page = _html(register)
     assert "Mandatory submission" in page and "Internal review" in page
-    assert "TASK-06 readiness" in page and "does not clear" in page
+    assert "Bid readiness" in page and "does not clear" in page
     assert str(requirement_ui_app.MANAGED_DOCUMENT_ROOT) not in page
     assert "versions/" not in page
     detail = asyncio.run(
@@ -158,10 +159,10 @@ def test_ui_creates_explicit_and_internal_and_hides_storage_identity(
     assert "requirement created" in detail_text.lower()
     assert str(requirement_ui_app.MANAGED_DOCUMENT_ROOT) not in detail_text
     assert internal["source_document_version_id"] is None
-    bid_page = asyncio.run(requirement_ui_app.bid_detail(cast(Request, object()), valid_bid.bid_id))
-    assert "canonical bid context" in _html(bid_page)
+    bid_page = asyncio.run(requirement_ui_app.bid_requirements_scope(valid_bid.bid_id))
+    assert "Bid workspace" in _html(bid_page)
     assert "Mandatory submission" in _html(bid_page)
-    assert "TASK-06 readiness remains authoritative" in _html(bid_page)
+    assert "Gate and readiness rail" in _html(bid_page)
 
 
 def test_ui_workflow_review_withdrawal_and_stale_error(

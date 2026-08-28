@@ -111,8 +111,8 @@ def test_empty_my_day_and_existing_navigation_render(ui_app: ModuleType) -> None
 
     assert page.status_code == 200
     assert "Operational view as of" in page_text
-    assert "No blocked work items." in page_text
-    assert "No bids are currently on readiness hold." in page_text
+    assert "No blocked Bid work items." in page_text
+    assert "No control-register blockers require attention." in page_text
     assert 'href="/my-work#quick-capture"' in page_text
     assert 'id="create-form"' not in page_text
     assert "fetch('/api/work-items" not in page_text
@@ -289,6 +289,8 @@ def test_task06_hold_is_read_only_and_my_day_does_not_contact_alice(
     valid_bid: Bid,
 ) -> None:
     ui_app.bid_repository.create_bid(valid_bid)
+    before_bid = ui_app.bid_repository.get_bid(valid_bid.bid_id)
+    before_audit = ui_app.bid_repository.list_audit(valid_bid.bid_id)
 
     with patch.object(
         ui_app.llm_client,
@@ -298,9 +300,11 @@ def test_task06_hold_is_read_only_and_my_day_does_not_contact_alice(
         response = asyncio.run(ui_app.my_day(cast(Request, object())))
 
     assert response.status_code == 200
-    assert "read-only from TASK-06" in _html(response)
     assert "Bid is on HOLD" in _html(response)
     assert valid_bid.bid_id in _html(response)
+    assert f'href="/bids/{valid_bid.bid_id}"' in _html(response)
+    assert ui_app.bid_repository.get_bid(valid_bid.bid_id) == before_bid
+    assert ui_app.bid_repository.list_audit(valid_bid.bid_id) == before_audit
     health_check.assert_not_called()
 
 
