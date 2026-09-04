@@ -60,6 +60,8 @@ async def request(
 
 
 async def _create_bid(application: Any, level: str, title: str) -> str:
+    estimated_value = "50000" if level == "level_1" else "1000000"
+    customer_type = "end_user" if level == "level_1" else "epcm"
     status, headers, _ = await request(
         application,
         "POST",
@@ -67,13 +69,13 @@ async def _create_bid(application: Any, level: str, title: str) -> str:
         {
             "project_name": title,
             "customer": "Example EPCM",
-            "customer_type": "epcm",
+            "customer_type": customer_type,
             "sales_owner": "Sales Lead",
             "bc_owner": "Jason",
             "release_date": "2026-08-20",
             "customer_due_date": "2026-09-30",
             "internal_due_date": "2026-09-25",
-            "estimated_value": "2500000",
+            "estimated_value": estimated_value,
             "currency": "CAD",
             "classification": level,
         },

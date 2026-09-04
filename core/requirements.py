@@ -47,6 +47,16 @@ class RequirementSignificance(str, Enum):  # noqa: UP042
     INFORMATIONAL = "INFORMATIONAL"
 
 
+REQUIREMENT_SIGNIFICANCE_LABELS: dict[RequirementSignificance, str] = {
+    RequirementSignificance.DISQUALIFYING: (
+        "Bid-disqualifying — failure to comply could disqualify the Bid"
+    ),
+    RequirementSignificance.MANDATORY: "Mandatory — must be addressed in the Bid",
+    RequirementSignificance.SCORED: "Scored — affects the customer evaluation",
+    RequirementSignificance.INFORMATIONAL: "Informational — record for context",
+}
+
+
 class RequirementStage(str, Enum):  # noqa: UP042
     BID = "BID"
     POST_AWARD = "POST_AWARD"
@@ -131,7 +141,12 @@ class RequirementCreate(BaseModel):
     significance: RequirementSignificance
     lifecycle_stage: RequirementStage = RequirementStage.BID
     owner: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
+    contributor: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
+    reviewer: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
     due_date: date | None = None
+    disposition: ResponseDisposition = ResponseDisposition.UNASSESSED
+    response_text: str | None = Field(default=None, max_length=RESPONSE_MAX)
+    work_state: RequirementWorkState = RequirementWorkState.OPEN
     source_document_version_id: str | None = None
     source_clause: str | None = Field(default=None, max_length=LOCATOR_MAX)
     source_page_start: int | None = Field(default=None, ge=1)
@@ -147,6 +162,9 @@ class RequirementCreate(BaseModel):
     @field_validator(
         "interpretation",
         "owner",
+        "contributor",
+        "reviewer",
+        "response_text",
         "source_document_version_id",
         "source_clause",
         "source_locator_note",
@@ -181,6 +199,7 @@ class RequirementCreate(BaseModel):
                 raise ValueError("EXPLICIT requirements require a source locator")
         if self.source_document_version_id is None and any(value is not None for value in locators):
             raise ValueError("source locator fields require a controlled source version")
+        _validate_workflow(self.disposition, self.response_text, self.work_state)
         return self
 
 
@@ -197,6 +216,8 @@ class RequirementMetadataEdit(BaseModel):
     significance: RequirementSignificance | None = None
     lifecycle_stage: RequirementStage | None = None
     owner: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
+    contributor: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
+    reviewer: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
     due_date: date | None = None
 
     @field_validator("title", "statement")
@@ -206,7 +227,7 @@ class RequirementMetadataEdit(BaseModel):
             return None
         return _trim_required(value, str(getattr(info, "field_name", "value")))
 
-    @field_validator("interpretation", "owner")
+    @field_validator("interpretation", "owner", "contributor", "reviewer")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         return _trim_optional(value)
@@ -294,6 +315,7 @@ class Requirement(BaseModel):
     lifecycle_state: RequirementLifecycle
     superseded_by_requirement_id: str | None = None
     owner: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
+    contributor: str | None = Field(default=None, max_length=ACTOR_LABEL_MAX)
     due_date: date | None = None
     source_document_id: str | None = None
     source_document_version_id: str | None = None
@@ -323,6 +345,7 @@ class Requirement(BaseModel):
     @field_validator(
         "interpretation",
         "owner",
+        "contributor",
         "source_document_id",
         "source_document_version_id",
         "source_clause",

@@ -6,6 +6,7 @@ from core.bid_control_center import (
     BidPortfolioView,
     BidReadinessFilter,
     classification_controls,
+    governance_level_guides,
     project_bid_portfolio,
     project_bid_workspace,
 )
@@ -59,6 +60,17 @@ def test_classification_controls_scale_without_new_policy(valid_bid: Bid) -> Non
     assert one[Gate.G4].required is False
     assert three[Gate.G1].required is True
     assert three[Gate.G4].required is True
+
+
+def test_every_governance_level_has_business_guidance() -> None:
+    guides = governance_level_guides()
+    assert [guide.level for guide in guides] == list(BidLevel)
+    for guide in guides:
+        assert guide.name
+        assert guide.meaning
+        assert guide.controls
+        assert guide.adjacent_difference
+        assert guide.next_action
 
 
 def test_portfolio_uses_deterministic_role_order_and_stable_tie_break(valid_bid: Bid) -> None:

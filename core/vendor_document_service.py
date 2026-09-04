@@ -13,6 +13,8 @@ from uuid import UUID, uuid4
 
 from core.bid_repository import BidRepository
 from core.enums import Actor
+from core.export_controls import csv_safe_row
+from core.handover import assess_manufacturer_handover
 from core.schemas import AuditEntry, Provenance
 from core.vendor_document_control import (
     BidDisposition,
@@ -543,19 +545,45 @@ class VendorDocumentService:
     def handover_csv(self, package_id: str) -> str:
         package = self.package(package_id)
         bid = self.bid_repository.get_bid(package.bid_id)
-        readiness = self.readiness(package_id)
         output = io.StringIO()
         writer = csv.writer(output, lineterminator="\n")
-        writer.writerow(["Vendor Document Handover"])
-        writer.writerow(["Bid", f"{bid.bid_id} — {bid.project_name}" if bid else package.bid_id])
-        writer.writerow(["Package", f"{package.package_code} — {package.package_name}"])
-        writer.writerow(["Customer/EPCM", package.customer_epcm or ""])
-        writer.writerow(["Manufacturer", package.proposed_manufacturer])
+        writer.writerow(csv_safe_row(["Vendor Document Handover"]))
         writer.writerow(
-            ["Source VDRL", package.source_vdrl_reference or "", package.source_revision or ""]
+            csv_safe_row(["Bid", f"{bid.bid_id} — {bid.project_name}" if bid else package.bid_id])
         )
-        writer.writerow(["Ready for handover", "YES" if readiness.ready else "NO"])
-        writer.writerow(["Blocking reasons", len(readiness.blockers)])
+        writer.writerow(
+            csv_safe_row(["Package", f"{package.package_code} — {package.package_name}"])
+        )
+        writer.writerow(csv_safe_row(["Customer/EPCM", package.customer_epcm or ""]))
+        writer.writerow(csv_safe_row(["Manufacturer", package.proposed_manufacturer]))
+        writer.writerow(
+            csv_safe_row(
+                ["Source VDRL", package.source_vdrl_reference or "", package.source_revision or ""]
+            )
+        )
+        assessments = {
+            item.requirement_id: assess_manufacturer_handover(
+                required=item.required,
+                applicable=item.applicable,
+                verification_status=item.verification_status,
+                response_source=item.response_source,
+                response_received_date=item.response_received_date,
+                internal_owner=item.internal_owner,
+                commercial_impact=item.commercial_impact,
+                bid_disposition=item.bid_disposition,
+                disposition_approved=item.disposition_approved,
+                unresolved_action=item.unresolved_action,
+            )
+            for item in self.repository.list_requirements(package_id)
+        }
+        shared_ready = bool(assessments) and all(item.ready for item in assessments.values())
+        shared_blockers = tuple(
+            dict.fromkeys(
+                reason for item in assessments.values() for reason in item.blocking_reasons
+            )
+        )
+        writer.writerow(["Overall handover readiness", "Ready" if shared_ready else "Not ready"])
+        writer.writerow(["Blocking reasons", " | ".join(shared_blockers)])
         writer.writerow([])
         writer.writerow(
             [
@@ -565,6 +593,12 @@ class VendorDocumentService:
                 "Requested stages",
                 "Requested timing",
                 "Manufacturer verification",
+                "Manufacturer response status",
+                "Response evidence status",
+                "Internal accountability status",
+                "Commercial and disposition status",
+                "Handover readiness",
+                "Handover blocking reasons",
                 "Manufacturer response source",
                 "Manufacturer response date",
                 "Manufacturer notes",
@@ -579,28 +613,37 @@ class VendorDocumentService:
             ]
         )
         for item in self.repository.list_requirements(package_id):
+            assessment = assessments[item.requirement_id]
             writer.writerow(
-                [
-                    item.customer_requirement_code,
-                    item.deliverable_title,
-                    item.description,
-                    " | ".join(item.requested_stages),
-                    item.original_contractual_timing or item.original_contractual_date or "",
-                    item.verification_status.value,
-                    item.response_source or "",
-                    item.response_received_date or "",
-                    item.manufacturer_notes or "",
-                    " | ".join(item.committed_stages)
-                    + (f"; {item.committed_timing}" if item.committed_timing else ""),
-                    item.evidence_reference or "",
-                    item.proposed_exception or "",
-                    item.commercial_impact.value,
-                    item.bid_disposition.value
-                    + (" (approved)" if item.disposition_approved else ""),
-                    item.unresolved_action or "",
-                    item.internal_owner or "",
-                    item.handover_note or "",
-                ]
+                csv_safe_row(
+                    [
+                        item.customer_requirement_code,
+                        item.deliverable_title,
+                        item.description,
+                        " | ".join(item.requested_stages),
+                        item.original_contractual_timing or item.original_contractual_date or "",
+                        item.verification_status.value,
+                        assessment.response_status,
+                        assessment.evidence_status,
+                        assessment.accountability_status,
+                        assessment.commercial_disposition_status,
+                        assessment.readiness_label,
+                        " | ".join(assessment.blocking_reasons),
+                        item.response_source or "",
+                        item.response_received_date or "",
+                        item.manufacturer_notes or "",
+                        " | ".join(item.committed_stages)
+                        + (f"; {item.committed_timing}" if item.committed_timing else ""),
+                        item.evidence_reference or "",
+                        item.proposed_exception or "",
+                        item.commercial_impact.value,
+                        item.bid_disposition.value
+                        + (" (approved)" if item.disposition_approved else ""),
+                        item.unresolved_action or "",
+                        item.internal_owner or "",
+                        item.handover_note or "",
+                    ]
+                )
             )
         return output.getvalue()
 

@@ -3,8 +3,11 @@
 <head><meta charset="utf-8"><title>Deliverables · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <main class="page-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
 {% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
 <div class="page-heading"><div><p class="eyebrow">Vendor data control</p><h1>Deliverables</h1><p class="muted">Authoritative bid-scoped obligations, evidence, and review.</p></div></div>
+{% if form_error %}<div class="error" role="alert">{{ form_error }}</div>{% endif %}
+{% if bid_id %}<section class="card" id="author"><h2>Add pre-award deliverable</h2><form method="post" action="/deliverables"><input type="hidden" name="bid_id" value="{{ bid_id }}"><label>Title<input name="title" required value="{{ entered.title if entered else '' }}"></label><label>Description<textarea name="description" required>{{ entered.description if entered else '' }}</textarea></label><label>Category<input name="category" required value="{{ entered.category if entered else '' }}"></label><label>Criticality<select name="criticality">{% for value in deliverable_criticalities %}<option value="{{ value.value }}">{{ value.value|replace('_',' ')|title }}</option>{% endfor %}</select></label><label>Direction<select name="direction">{% for value in deliverable_directions %}<option value="{{ value.value }}">{{ value.value|replace('_',' ')|title }}</option>{% endfor %}</select></label><label>Owner<input name="owner"></label><button type="submit">Add pre-award deliverable</button></form></section>{% endif %}
 <form method="get" class="card"><label>Bid <select name="bid_id"><option value="">All bids</option>{% for bid in bids %}<option value="{{ bid.bid_id }}"{% if bid_id == bid.bid_id %} selected{% endif %}>{{ bid.project_name }}</option>{% endfor %}</select></label><button type="submit">Filter</button></form>
 <section class="card">
 <div class="cards"><div><strong>{{ metrics.total_deliverables }}</strong><span>Deliverables</span></div><div><strong>{{ metrics.open_gaps }}</strong><span>Open gaps</span></div><div><strong>{{ metrics.blocking_gaps }}</strong><span>Blocking</span></div></div>

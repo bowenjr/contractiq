@@ -39,6 +39,7 @@ class RequirementRepository:
     def __init__(self, db: Database) -> None:
         self.db = db
         self._apply_requirements_v1()
+        self._apply_ops07_contributor()
 
     def _conn(self) -> sqlite3.Connection:
         return cast(sqlite3.Connection, self.db._conn())
@@ -219,6 +220,17 @@ class RequirementRepository:
         finally:
             conn.close()
 
+    def _apply_ops07_contributor(self) -> None:
+        """Add the nullable OPS-07 contributor without backfilling existing rows."""
+        with self._conn() as conn:
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(requirements)")}
+            if "contributor" not in columns:
+                conn.execute("ALTER TABLE requirements ADD COLUMN contributor TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_requirements_contributor "
+                "ON requirements(contributor, lifecycle_state)"
+            )
+
     @staticmethod
     def _optional_str(value: object) -> str | None:
         return None if value is None else str(value)
@@ -239,6 +251,7 @@ class RequirementRepository:
             lifecycle_state=RequirementLifecycle(str(row["lifecycle_state"])),
             superseded_by_requirement_id=cls._optional_str(row["superseded_by_requirement_id"]),
             owner=cls._optional_str(row["owner"]),
+            contributor=cls._optional_str(row["contributor"]),
             due_date=date.fromisoformat(due_date) if due_date is not None else None,
             source_document_id=cls._optional_str(row["source_document_id"]),
             source_document_version_id=cls._optional_str(row["source_document_version_id"]),
@@ -280,6 +293,7 @@ class RequirementRepository:
             requirement.lifecycle_state.value,
             requirement.superseded_by_requirement_id,
             requirement.owner,
+            requirement.contributor,
             requirement.due_date.isoformat() if requirement.due_date is not None else None,
             requirement.source_document_id,
             requirement.source_document_version_id,
@@ -330,13 +344,13 @@ class RequirementRepository:
                 """INSERT INTO requirements (
                     requirement_id, bid_id, title, statement, interpretation,
                     origin, category, significance, lifecycle_stage, lifecycle_state,
-                    superseded_by_requirement_id, owner, due_date, source_document_id,
+                    superseded_by_requirement_id, owner, contributor, due_date, source_document_id,
                     source_document_version_id, source_clause, source_page_start,
                     source_page_end, source_locator_note, source_excerpt, disposition,
                     response_text, evidence_description, proposal_location, work_state,
                     review_state, reviewer, review_note, created_at, updated_at, version,
                     provenance_json
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 self._values(requirement),
             )
             self._insert_audit(conn, audit)
@@ -362,6 +376,8 @@ class RequirementRepository:
         work_state: RequirementWorkState | None = None,
         review_state: RequirementReviewState | None = None,
         owner: str | None = None,
+        contributor: str | None = None,
+        reviewer: str | None = None,
     ) -> list[Requirement]:
         """List/filter requirements with stable title/ID ordering."""
         filters: tuple[tuple[str, object | None], ...] = (
@@ -377,6 +393,8 @@ class RequirementRepository:
             ("work_state", work_state.value if work_state is not None else None),
             ("review_state", review_state.value if review_state is not None else None),
             ("owner", owner),
+            ("contributor", contributor),
+            ("reviewer", reviewer),
         )
         clauses: list[str] = []
         values: list[object] = []
@@ -407,7 +425,7 @@ class RequirementRepository:
                 """UPDATE requirements SET
                     title = ?, statement = ?, interpretation = ?, category = ?,
                     significance = ?, lifecycle_stage = ?, lifecycle_state = ?,
-                    superseded_by_requirement_id = ?, owner = ?, due_date = ?,
+                    superseded_by_requirement_id = ?, owner = ?, contributor = ?, due_date = ?,
                     disposition = ?, response_text = ?, evidence_description = ?,
                     proposal_location = ?, work_state = ?, review_state = ?,
                     reviewer = ?, review_note = ?, updated_at = ?, version = ?
@@ -422,6 +440,7 @@ class RequirementRepository:
                     requirement.lifecycle_state.value,
                     requirement.superseded_by_requirement_id,
                     requirement.owner,
+                    requirement.contributor,
                     requirement.due_date.isoformat() if requirement.due_date is not None else None,
                     requirement.disposition.value,
                     requirement.response_text,
@@ -469,6 +488,7 @@ class RequirementRepository:
                 "significance",
                 "lifecycle_stage",
                 "owner",
+                "contributor",
                 "due_date",
                 "review_state",
                 "reviewer",

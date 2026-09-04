@@ -1,6 +1,6 @@
 """Validated service boundary for TASK-10 scope and interface workflows."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 from core.scope_gap_rules import calculate_coverage, evaluate_gaps
 from core.scope_interfaces import InterfaceRecord, ScopeItem
@@ -28,6 +28,50 @@ class ScopeInterfaceService:
 
     def withdraw_interface(self, interface_id: str, expected_version: int, actor: str) -> None:
         self.repository.withdraw_interface(interface_id, expected_version, actor)
+
+    def update_scope_item(
+        self, scope_item_id: str, expected_version: int, values: dict[str, object], actor: str
+    ) -> ScopeItem:
+        current = self.repository.get_scope_item(scope_item_id)
+        if current is None:
+            raise ValueError("Scope item not found")
+        updated = ScopeItem.model_validate(
+            {
+                **current.model_dump(),
+                **values,
+                "updated_at": datetime.now(UTC),
+                "version": current.version + 1,
+            }
+        )
+        self.repository.update_scope_item(updated, expected_version, actor)
+        return updated
+
+    def update_interface(
+        self, interface_id: str, expected_version: int, values: dict[str, object], actor: str
+    ) -> InterfaceRecord:
+        current = self.repository.get_interface(interface_id)
+        if current is None:
+            raise ValueError("Interface not found")
+        updated = InterfaceRecord.model_validate(
+            {
+                **current.model_dump(),
+                **values,
+                "updated_at": datetime.now(UTC),
+                "version": current.version + 1,
+            }
+        )
+        self.repository.update_interface(updated, expected_version, actor)
+        return updated
+
+    def link_interface_scope(
+        self, interface_id: str, scope_item_id: str, bid_id: str, actor: str
+    ) -> None:
+        self.repository.link_interface_scope(interface_id, scope_item_id, bid_id, actor)
+
+    def unlink_interface_scope(
+        self, interface_id: str, scope_item_id: str, bid_id: str, actor: str
+    ) -> None:
+        self.repository.unlink_interface_scope(interface_id, scope_item_id, bid_id, actor)
 
     def projection(self, bid_id: str, as_of_date: date) -> object:
         scopes = self.repository.list_scope_items(bid_id)

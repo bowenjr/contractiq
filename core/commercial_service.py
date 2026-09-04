@@ -22,8 +22,10 @@ class CommercialService:
         self.repository.create(item, actor)
         return item
 
-    def initialize_standard(self, bid_id: str, actor: str = "operator") -> builtin_list[str]:
-        return self.repository.initialize_standard(bid_id, actor)
+    def initialize_standard(
+        self, bid_id: str, actor: str = "operator", default_owner: str | None = None
+    ) -> builtin_list[str]:
+        return self.repository.initialize_standard(bid_id, actor, default_owner)
 
     def add_link(self, link: CommercialLink, actor: str = "operator") -> CommercialLink:
         self.repository.add_link(link, actor)

@@ -75,6 +75,19 @@ class ClassificationControl(BaseModel):
     explanation: str
 
 
+class GovernanceLevelGuide(BaseModel):
+    """Business-language presentation derived from the authoritative gate thresholds."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    level: BidLevel
+    name: str
+    meaning: str
+    controls: tuple[str, ...]
+    adjacent_difference: str
+    next_action: str
+
+
 class BidBlockerView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -220,10 +233,10 @@ def _next_gate(gate: Gate) -> Gate | None:
     return gates[index + 1] if index + 1 < len(gates) else None
 
 
-def classification_controls(bid: Bid) -> list[ClassificationControl]:
+def classification_controls_for_level(level: BidLevel) -> list[ClassificationControl]:
     """Describe controls using the same Level rules as the gate engine."""
-    bid_decision_required = bid.classification is not BidLevel.LEVEL_0
-    margin_required = bid.classification in {
+    bid_decision_required = level is not BidLevel.LEVEL_0
+    margin_required = level in {
         BidLevel.LEVEL_2,
         BidLevel.LEVEL_3,
         BidLevel.LEVEL_4,
@@ -256,6 +269,72 @@ def classification_controls(bid: Bid) -> list[ClassificationControl]:
             ),
         ),
     ]
+
+
+def classification_controls(bid: Bid) -> list[ClassificationControl]:
+    return classification_controls_for_level(bid.classification)
+
+
+def governance_level_guides() -> list[GovernanceLevelGuide]:
+    """Explain each supported level without creating policy beyond current gate rules."""
+    names = (
+        "Intake control",
+        "Bid / no-bid control",
+        "Margin control",
+        "Enhanced pursuit governance",
+        "Highest trigger-led governance",
+    )
+    guides: list[GovernanceLevelGuide] = []
+    levels = list(BidLevel)
+    for index, level in enumerate(levels):
+        controls = classification_controls_for_level(level)
+        required = tuple(control.label for control in controls if control.required)
+        lower = levels[index - 1] if index else None
+        higher = levels[index + 1] if index + 1 < len(levels) else None
+        lower_required = (
+            {item.label for item in classification_controls_for_level(lower) if item.required}
+            if lower
+            else set()
+        )
+        higher_required = (
+            {item.label for item in classification_controls_for_level(higher) if item.required}
+            if higher
+            else set()
+        )
+        added_here = [item for item in required if item not in lower_required]
+        added_above = [item for item in higher_required if item not in set(required)]
+        difference_parts = []
+        if added_here:
+            difference_parts.append(f"Adds {', '.join(added_here)} versus the level below.")
+        elif lower:
+            difference_parts.append("No additional gate control is defined versus the level below.")
+        else:
+            difference_parts.append("This is the lowest governance floor.")
+        if added_above:
+            difference_parts.append(f"The next level adds {', '.join(added_above)}.")
+        elif higher:
+            difference_parts.append(
+                "The next level has no additional gate control currently defined."
+            )
+        else:
+            difference_parts.append("There is no higher supported level.")
+        guides.append(
+            GovernanceLevelGuide(
+                level=level,
+                name=names[index],
+                meaning=(
+                    "The deterministic Bid facts set this as the minimum governance floor; "
+                    "the controls below come from the existing gate rules."
+                ),
+                controls=required,
+                adjacent_difference=" ".join(difference_parts),
+                next_action=(
+                    "Assess the Bid facts, then select this level or a higher level with a reason. "
+                    "A lower level is not permitted."
+                ),
+            )
+        )
+    return guides
 
 
 def _blocker_view(bid: Bid, report_blocker: Blocker) -> BidBlockerView:
@@ -539,7 +618,10 @@ __all__ = [
     "BidReadinessFilter",
     "BidWorkspaceSection",
     "BidWorkspaceAttention",
+    "GovernanceLevelGuide",
     "classification_controls",
+    "classification_controls_for_level",
+    "governance_level_guides",
     "project_bid_portfolio",
     "project_bid_workspace",
     "workspace_path",

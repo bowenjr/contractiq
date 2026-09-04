@@ -46,6 +46,7 @@ class GateContext:
     prior_gate_results: dict[Gate, GateResult]
     has_compliance_matrix: bool = False
     has_supplier_register: bool = False
+    supplier_coverage_clear: bool | None = None
     has_concession_log: bool = False
     has_reconciliation: bool = False
     has_strategy_record: bool = False
@@ -185,13 +186,28 @@ def evaluate_g2(ctx: GateContext) -> GateResult:
 
 
 def evaluate_g3(ctx: GateContext) -> GateResult:
+    if ctx.supplier_coverage_clear is False:
+        return _gate_result(
+            Gate.G3,
+            [
+                ConditionResult(
+                    condition_id="g3.suppliers_supported",
+                    description="Manufacturer and supplier confirmations are complete.",
+                    state=ConditionState.UNMET,
+                    detail=(
+                        "Associated packages are unanswered, excepted, require "
+                        "clarification, or cannot comply."
+                    ),
+                )
+            ],
+        )
     condition = (
         ConditionResult(
             condition_id="g3.suppliers_supported",
             description="Mandatory supplier commitments have no silence flags.",
             state=ConditionState.MET,
         )
-        if ctx.has_supplier_register
+        if ctx.supplier_coverage_clear is True or ctx.has_supplier_register
         else _not_assessable(
             "g3.suppliers_supported",
             "Mandatory supplier commitments have no silence flags.",

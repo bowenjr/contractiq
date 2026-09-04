@@ -115,6 +115,38 @@ def test_classification_changes_control_presentation(
     assert "Required for Level 2, Level 3 and Level 4" in three
 
 
+def test_governance_meaning_rationale_and_controls_render_for_every_level(
+    ops06_app: ModuleType,
+    valid_bid: Bid,
+) -> None:
+    creation = _html(
+        asyncio.run(
+            ops06_app.bids_projects(
+                view="current",
+                status=None,
+                classification=None,
+                readiness="any",
+                owner=None,
+                deadline="any",
+            )
+        )
+    )
+    for index, level in enumerate(BidLevel):
+        bid = valid_bid.model_copy(
+            update={"bid_id": f"B-2026-01{index:02d}", "classification": level}
+        )
+        ops06_app.bid_repository.create_bid(bid)
+        workspace = _html(asyncio.run(ops06_app.bid_detail(cast(Request, object()), bid.bid_id)))
+        label = level.value.replace("_", " ").title()
+        assert label in creation
+        assert "Required controls" in creation
+        assert "What to do" in creation
+        assert "Governance level" in workspace
+        assert "Difference from adjacent levels" in workspace
+        assert "Legacy/manual classification" in workspace
+        assert "Review or reassess classification" in workspace
+
+
 def test_portfolio_filters_render_and_invalid_filter_is_422(
     ops06_app: ModuleType,
     valid_bid: Bid,

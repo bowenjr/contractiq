@@ -178,6 +178,8 @@ class RequirementService:
             lifecycle_stage=request.lifecycle_stage,
             lifecycle_state=RequirementLifecycle.ACTIVE,
             owner=request.owner,
+            contributor=request.contributor,
+            reviewer=request.reviewer,
             due_date=request.due_date,
             source_document_id=source_document_id,
             source_document_version_id=source_version_id,
@@ -186,8 +188,9 @@ class RequirementService:
             source_page_end=request.source_page_end,
             source_locator_note=request.source_locator_note,
             source_excerpt=request.source_excerpt,
-            disposition=ResponseDisposition.UNASSESSED,
-            work_state=RequirementWorkState.OPEN,
+            disposition=request.disposition,
+            response_text=request.response_text,
+            work_state=request.work_state,
             review_state=RequirementReviewState.NOT_REVIEWED,
             created_at=at,
             updated_at=at,
@@ -212,6 +215,10 @@ class RequirementService:
                     "source_page_end": requirement.source_page_end,
                     "source_locator_note": requirement.source_locator_note,
                     "source_excerpt_length": len(requirement.source_excerpt or ""),
+                    "owner": requirement.owner,
+                    "contributor": requirement.contributor,
+                    "reviewer": requirement.reviewer,
+                    "disposition": requirement.disposition.value,
                 },
             ),
         )
@@ -273,7 +280,11 @@ class RequirementService:
                     if substantive_change
                     else current.review_state
                 ),
-                "reviewer": None if substantive_change else current.reviewer,
+                "reviewer": (
+                    updates.get("reviewer")
+                    if "reviewer" in updates
+                    else (None if substantive_change else current.reviewer)
+                ),
                 "review_note": None if substantive_change else current.review_note,
                 "updated_at": at,
                 "version": current.version + 1,
@@ -292,6 +303,8 @@ class RequirementService:
                     "changed_fields": changed_fields,
                     "title": updated.title,
                     "owner": updated.owner,
+                    "contributor": updated.contributor,
+                    "reviewer": updated.reviewer,
                     "due_date": updated.due_date,
                     "category": updated.category.value,
                     "significance": updated.significance.value,
@@ -455,6 +468,8 @@ class RequirementService:
         work_state: RequirementWorkState | None = None,
         review_state: RequirementReviewState | None = None,
         owner: str | None = None,
+        contributor: str | None = None,
+        reviewer: str | None = None,
         due_state: str | None = None,
         attention_only: bool = False,
         exception_only: bool = False,
@@ -471,6 +486,8 @@ class RequirementService:
             work_state=work_state,
             review_state=review_state,
             owner=owner,
+            contributor=contributor,
+            reviewer=reviewer,
         )
         if due_state == "OVERDUE":
             records = [

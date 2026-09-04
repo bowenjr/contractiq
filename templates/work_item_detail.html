@@ -1,8 +1,7 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Edit {{ item.title }} — ContractIQ</title>
-<style>body{font:15px system-ui;margin:0;background:#f4f1eb;color:#1a1f2e}main{max-width:960px;margin:auto;padding:32px}.back{color:#175cd3}.panel{background:#fff;border:1px solid #d4cfc6;border-radius:8px;padding:24px;margin-top:18px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field{display:flex;flex-direction:column;gap:5px}.full{grid-column:1/-1}.field label{font-weight:650}.field input,.field select,.field textarea{font:inherit;padding:9px;border:1px solid #9ca3af;border-radius:5px}.field textarea{min-height:90px}.lifecycle{border:1px solid #d4cfc6;border-radius:6px;padding:14px}.lifecycle legend{font-weight:700}.error{padding:10px;margin-bottom:16px;background:#fee2e2;color:#991b1b;border-radius:5px}.actions{display:flex;gap:12px;margin-top:20px}.btn{font:inherit;padding:9px 14px;border:1px solid #175cd3;border-radius:5px;background:#175cd3;color:white}.muted{color:#6b7280}@media(max-width:700px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}</style></head>
-<body><main><a class="back" href="{{ back_href }}">← Back to My Work</a><h1>Edit work item</h1><p class="muted">{{ item.work_item_id }} · Version {{ item.version }}</p>
-<section class="panel">{% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Edit {{ item.title }} — ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="page-shell editor-shell">{% set current_nav = 'my-work' %}{% include '_primary_navigation.html' %}<p class="breadcrumbs"><a href="{{ back_href }}">← Back to My Work</a></p><header class="page-heading"><div><p class="eyebrow">Authoritative work record</p><h1>Edit work item</h1><p class="muted">{{ item.work_item_id }} · Version {{ item.version }}</p></div></header>
+<section class="card">{% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 <form method="post" action="/my-work/{{ item.work_item_id }}{% if editor_query %}?{{ editor_query }}{% endif %}"><input type="hidden" name="expected_version" value="{{ item.version }}"><div class="grid">
 <div class="field full"><label for="title">Title</label><input id="title" name="title" required maxlength="300" value="{{ values.title or '' }}"></div>
 <div class="field full"><label for="details">Description</label><textarea id="details" name="details" maxlength="10000">{{ values.details or '' }}</textarea></div>
@@ -32,7 +31,7 @@
 <fieldset class="lifecycle full" data-status-section="CANCELLED"{% if values.status != 'CANCELLED' %} hidden disabled{% endif %}><legend>Cancellation details</legend><div class="grid">
 <div class="field full"><label for="cancel-reason">Cancellation reason</label><textarea id="cancel-reason" name="cancellation_reason" required>{{ values.cancellation_reason or '' }}</textarea></div>
 </div></fieldset>
-<div class="field full"><input type="hidden" name="contribution_candidate" value="false"><label><input name="contribution_candidate" type="checkbox" value="true"{% if values.contribution_candidate in [true, 'true', 'on', '1', 1] %} checked{% endif %}> Contribution candidate</label></div>
+<div class="full"><input type="hidden" name="contribution_candidate" value="false"><label class="checkbox-option"><input name="contribution_candidate" type="checkbox" value="true"{% if values.contribution_candidate in [true, 'true', 'on', '1', 1] %} checked{% endif %}><span>Contribution candidate</span></label></div>
 </div><div class="actions"><button class="btn" type="submit">Save work item</button><a class="back" href="{{ back_href }}">Cancel and return</a></div></form></section></main>
 <script>
 const statusSelect = document.getElementById('status');

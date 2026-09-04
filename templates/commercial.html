@@ -3,10 +3,15 @@
 <head><meta charset="utf-8"><title>Commercial Completeness · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <main class="page-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
 <p><a href="/">Dashboard</a> · <a href="/my-day">My Day</a> · <a href="/deliverables">Deliverables</a></p>
 {% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
 <h1>Commercial Completeness</h1>
 <p class="muted">Reviewed price-basis evidence and commercial-factor coverage. This is not price, margin, or G4 approval.</p>
+{% if form_error %}<div class="error" role="alert">{{ form_error }}</div>{% endif %}
+{% if bid_id %}<section class="card" id="author"><h2>Commercial next action</h2><p>Initialize the governed standard factors, or record a Bid-specific exception without changing margin approval.</p>
+<form method="post" action="/commercial" class="form-grid"><input type="hidden" name="bid_id" value="{{ bid_id }}"><input type="hidden" name="operation" value="initialize"><label>Default accountable owner<input name="default_owner" required value="{{ entered.default_owner if entered else (bid_context.bc_owner if bid_context else '') }}"><span class="muted">Applied to each new factor; review applicability and mark non-applicable factors in their detail.</span></label><div class="actions" style="align-self:end"><button type="submit">Initialize assigned factors</button></div></form>
+<details><summary>Add commercial exception or assessment item</summary><form method="post" action="/commercial"><input type="hidden" name="bid_id" value="{{ bid_id }}"><label>Business issue<input name="title" required value="{{ entered.title if entered else '' }}"></label><label>Description<textarea name="description" required>{{ entered.description if entered else '' }}</textarea></label><label>Category<select name="category">{% for value in commercial_categories %}<option value="{{ value.value }}">{{ value.value|replace('_',' ')|title }}</option>{% endfor %}</select></label><label>Basis role<select name="basis_role">{% for value in basis_roles %}<option value="{{ value.value }}">{{ value.value|replace('_',' ')|title }}</option>{% endfor %}</select></label><label>Owner<input name="owner" value="{{ entered.owner if entered else '' }}"></label><button type="submit">Add commercial item</button></form></details></section>{% endif %}
 <form method="get" class="card"><label>Bid <select name="bid_id"><option value="">All bids</option>{% for bid in bids %}<option value="{{ bid.bid_id }}"{% if bid_id == bid.bid_id %} selected{% endif %}>{{ bid.project_name }}</option>{% endfor %}</select></label><button type="submit">Filter</button></form>
 <section class="card">
 <div class="cards"><div><strong>{{ metrics.active_items }}</strong><span>Active items</span></div><div><strong>{{ metrics.open_gaps }}</strong><span>Open gaps</span></div><div><strong>{{ metrics.blocking_gaps }}</strong><span>Blocking</span></div><div><strong>NOT APPROVED</strong><span>G4 status</span></div></div>

@@ -3,11 +3,15 @@ ContractIQ - Personal Contract & Bid Analysis System
 7-Pillar analysis engine with background processing and live progress.
 """
 
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import parse_qsl, quote, urlencode
@@ -34,6 +38,7 @@ from core.approval_authority import (
     AuthorityPolicy,
     DecisionCase,
     DecisionPackage,
+    DecisionType,
     RouteCycle,
     SubjectLink,
 )
@@ -48,10 +53,18 @@ from core.bid_control_center import (
     BidReadinessFilter,
     BidWorkspaceAttention,
     BidWorkspaceSection,
+    governance_level_guides,
     workspace_path,
 )
 from core.bid_repository import BidRepository
-from core.commercial import AssessmentVersion, CommercialItem, CommercialLink, CommercialReview
+from core.commercial import (
+    AssessmentVersion,
+    BasisRole,
+    CommercialCategory,
+    CommercialItem,
+    CommercialLink,
+    CommercialReview,
+)
 from core.commercial_repository import CommercialRepository
 from core.commercial_scenarios import (
     BaselineSelection,
@@ -60,7 +73,14 @@ from core.commercial_scenarios import (
     ScenarioVersion,
 )
 from core.commercial_service import CommercialService
-from core.contract_risk import ContractIssue, RiskAssessment, RiskLink, RiskReview, RiskSource
+from core.contract_risk import (
+    ContractIssue,
+    RiskAssessment,
+    RiskCategory,
+    RiskLink,
+    RiskReview,
+    RiskSource,
+)
 from core.contract_risk_repository import ContractRiskRepository
 from core.contract_risk_service import ContractRiskService
 from core.database import Database
@@ -68,7 +88,10 @@ from core.deliverable_repository import DeliverableRepository
 from core.deliverable_service import DeliverableService
 from core.deliverables import (
     Deliverable,
+    DeliverableCriticality,
+    DeliverableDirection,
     DeliverableLink,
+    LifecyclePhase,
     ReviewDecisionRecord,
     SubmissionVersion,
     SupplierCommitment,
@@ -90,8 +113,17 @@ from core.document_repository import (
     StaleDocumentError,
 )
 from core.document_service import DocumentService
-from core.enums import BidLevel, BidStatus, CustomerType, Gate, InferencePolicy
+from core.enums import (
+    ApprovalType,
+    BidLevel,
+    BidStatus,
+    CustomerType,
+    Gate,
+    InferencePolicy,
+    RiskTrigger,
+)
 from core.excel_generator import ExcelGenerator
+from core.handover import BidHandoverService, assess_manufacturer_handover
 from core.knowledge_bootstrap import bootstrap_knowledge
 from core.knowledge_engine import KnowledgeEngine
 from core.knowledge_io import KnowledgeIO
@@ -113,6 +145,18 @@ from core.negotiation import (
 )
 from core.negotiation_repository import NegotiationRepository
 from core.negotiation_service import NegotiationService
+from core.ops07 import (
+    BulkRequirementTarget as Ops07BulkTarget,
+)
+from core.ops07 import (
+    BulkResponsibilityAssignment,
+    Ops07Repository,
+)
+from core.ops07w import (
+    ClassificationAssessmentCommand,
+    Ops07WorkflowRepository,
+    build_navigator,
+)
 from core.ops_foundation import (
     RESPONSIBILITY_DOMAINS,
     OpsFoundationRepository,
@@ -122,9 +166,16 @@ from core.ops_foundation import (
 )
 from core.proposal_repository import ProposalRepository
 from core.proposal_service import ProposalService
-from core.proposals import ProposalFamily, ProposalProfile, ProposalReview, ProposalVersion
+from core.proposals import (
+    ProposalApplicability,
+    ProposalFamily,
+    ProposalProfile,
+    ProposalReview,
+    ProposalVersion,
+)
 from core.readiness_service import evaluate_readiness
 from core.report_generator import ReportGenerator
+from core.requirement_browser import RequirementBrowserCommand
 from core.requirement_repository import (
     RequirementNotFoundError,
     RequirementRepository,
@@ -133,6 +184,7 @@ from core.requirement_repository import (
 )
 from core.requirement_service import RequirementService
 from core.requirements import (
+    REQUIREMENT_SIGNIFICANCE_LABELS,
     RequirementCategory,
     RequirementLifecycle,
     RequirementOrigin,
@@ -146,8 +198,18 @@ from core.role_profile_service import RoleProfileService
 from core.role_profiles import ROLE_PROFILE_STATE_LABELS, RoleProfile
 from core.scenario_repository import ScenarioRepository
 from core.scenario_service import ScenarioService
-from core.schemas import AuditEntry, Bid, Provenance
-from core.scope_interfaces import InterfaceRecord, ScopeItem
+from core.schemas import Approval, Bid, Provenance
+from core.scope_interfaces import (
+    CustomerNeed,
+    DependencyState,
+    InterfaceRecord,
+    Materiality,
+    OfferPosition,
+    PricingState,
+    ScopeArea,
+    ScopeItem,
+    ScopeOrigin,
+)
 from core.scope_repository import ScopeInterfaceRepository
 from core.scope_service import ScopeInterfaceService
 from core.supplier_assurance import (
@@ -212,6 +274,8 @@ try:
 except ZoneInfoNotFoundError as exc:
     raise RuntimeError("config.json contains an invalid working_timezone") from exc
 LOCAL_ACTOR = str(APP_CONFIG.get("local_actor", "local_user"))
+_REQUIREMENT_FORM_STATE_TTL_SECONDS = 3600
+_requirement_form_states: dict[str, tuple[datetime, dict[str, str]]] = {}
 UPLOADS_DIR = BASE_DIR / "uploads"
 REPORTS_DIR = BASE_DIR / "reports"
 _managed_root_setting = Path(
@@ -251,6 +315,45 @@ def render(template_name: str, status_code: int = 200, **context) -> HTMLRespons
 
 # ── Core Services ───────────────────────────────────────────────────────────
 db = Database(Path(os.environ.get("CONTRACTIQ_DB_PATH", BASE_DIR / "data" / "contractiq.db")))
+
+
+def _source_operation_key() -> bytes:
+    """Return a stable deployment-local key without persisting a new domain or schema."""
+    identity = f"contractiq-ops07w-source-operation-v1\0{Path(db.db_path).resolve()}"
+    return hashlib.sha256(identity.encode()).digest()
+
+
+def _new_source_operation_token(bid_id: str) -> str:
+    payload = json.dumps(
+        {"bid_id": bid_id, "operation_id": str(uuid.uuid4())},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.digest(_source_operation_key(), payload, "sha256")
+    return base64.urlsafe_b64encode(payload + signature).decode().rstrip("=")
+
+
+def _source_operation_id(token: str, bid_id: str) -> str:
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode())
+        canonical_token = base64.urlsafe_b64encode(decoded).decode().rstrip("=")
+        if not hmac.compare_digest(token, canonical_token):
+            raise ValueError
+        payload, signature = decoded[:-32], decoded[-32:]
+        if len(signature) != 32 or not hmac.compare_digest(
+            signature, hmac.digest(_source_operation_key(), payload, "sha256")
+        ):
+            raise ValueError
+        values = json.loads(payload)
+        operation_id = str(values["operation_id"])
+        if values.get("bid_id") != bid_id or str(uuid.UUID(operation_id)) != operation_id:
+            raise ValueError
+        return operation_id
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
+        raise ValueError("Source registration operation is invalid for this Bid") from exc
+
+
 bid_repository = BidRepository(db)
 work_item_repository = WorkItemRepository(db)
 work_item_service = WorkItemService(work_item_repository, bid_repository)
@@ -272,6 +375,9 @@ deliverable_service = DeliverableService(deliverable_repository)
 vendor_document_repository = VendorDocumentRepository(db)
 vendor_document_service = VendorDocumentService(vendor_document_repository, bid_repository)
 vendor_document_service.ensure_standard_template()
+ops07_repository = Ops07Repository(db)
+ops07w_repository = Ops07WorkflowRepository(db)
+bid_handover_service = BidHandoverService(db)
 commercial_repository = CommercialRepository(db)
 commercial_service = CommercialService(commercial_repository)
 contract_risk_repository = ContractRiskRepository(db)
@@ -626,7 +732,7 @@ def _bid_return_context(
         BidWorkspaceSection.COMMERCIAL_CONTRACT: "Commercial & Contract",
         BidWorkspaceSection.PROPOSAL_NEGOTIATION: "Proposal & Negotiation",
     }
-    return {
+    context: dict[str, object] = {
         "bid_context": bid,
         "bid_return_path": workspace_path(bid.bid_id, section) if bid else None,
         "bid_section_label": section_labels.get(
@@ -634,6 +740,7 @@ def _bid_return_context(
             section.value.replace("-", " ").title(),
         ),
     }
+    return context
 
 
 def _json_item(
@@ -939,7 +1046,7 @@ def _work_item_editor_context(
     filters = register_filters or WorkRegisterFilter()
     register_query = _work_register_query(filters)
     back_href = "/my-work" + (f"?{register_query}" if register_query else "")
-    return {
+    context: dict[str, object] = {
         "item": item,
         "values": values or item.model_dump(mode="json"),
         "error": error,
@@ -956,6 +1063,7 @@ def _work_item_editor_context(
         "back_href": back_href,
         "editor_query": _editor_register_query(filters),
     }
+    return context
 
 
 @app.get("/my-work/{work_item_id}", response_class=HTMLResponse)
@@ -1547,10 +1655,13 @@ async def requirements_register(
     work_state: str | None = None,
     review_state: str | None = None,
     owner: str | None = None,
+    contributor: str | None = None,
+    reviewer: str | None = None,
     due_state: str | None = None,
     attention: str | None = None,
     exception: str | None = None,
     as_of: str | None = None,
+    form_state: str | None = None,
 ) -> HTMLResponse:
     projection_date = _parse_as_of(as_of)
     try:
@@ -1564,6 +1675,8 @@ async def requirements_register(
             work_state=RequirementWorkState(work_state) if work_state else None,
             review_state=RequirementReviewState(review_state) if review_state else None,
             owner=owner or None,
+            contributor=contributor or None,
+            reviewer=reviewer or None,
             due_state=due_state or None,
             attention_only=attention == "1",
             exception_only=exception == "1",
@@ -1577,6 +1690,25 @@ async def requirements_register(
         readiness = evaluate_readiness(bid_repository, db, bid_id) if bid_id else None
     except ValueError as exc:
         raise _mutation_error(exc) from exc
+    entered: dict[str, str] = {}
+    if form_state:
+        saved = _requirement_form_states.get(form_state)
+        if (
+            saved is None
+            or (datetime.now(UTC) - saved[0]).total_seconds() > _REQUIREMENT_FORM_STATE_TTL_SECONDS
+        ):
+            _requirement_form_states.pop(form_state, None)
+            raise HTTPException(
+                status_code=422, detail="Requirement form state expired; register the source again"
+            )
+        entered = dict(saved[1])
+        if entered.get("bid_id") != (bid_id or ""):
+            raise HTTPException(
+                status_code=422, detail="Requirement form state does not belong to this Bid"
+            )
+    source_operation_token = entered.get("source_operation_token", "")
+    if bid_id and not source_operation_token:
+        source_operation_token = _new_source_operation_token(bid_id)
     bids = bid_repository.list_bids()
     bid_names = {bid.bid_id: bid.project_name for bid in bids}
     return render(
@@ -1590,6 +1722,7 @@ async def requirements_register(
         origins=list(RequirementOrigin),
         categories=list(RequirementCategory),
         significances=list(RequirementSignificance),
+        significance_labels=REQUIREMENT_SIGNIFICANCE_LABELS,
         stages=list(RequirementStage),
         lifecycles=list(RequirementLifecycle),
         dispositions=list(ResponseDisposition),
@@ -1605,6 +1738,8 @@ async def requirements_register(
             "work_state": work_state or "",
             "review_state": review_state or "",
             "owner": owner or "",
+            "contributor": contributor or "",
+            "reviewer": reviewer or "",
             "due_state": due_state or "",
             "attention": attention or "",
             "exception": exception or "",
@@ -1612,12 +1747,120 @@ async def requirements_register(
         },
         as_of_date=projection_date,
         actor=LOCAL_ACTOR,
+        entered=entered,
+        form_state=form_state or "",
+        source_operation_token=source_operation_token,
+        source_registered=bool(form_state and entered.get("source_document_version_id")),
+        create_error=None,
         **_bid_return_context(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE),
+    )
+
+
+@app.post("/requirements", response_class=HTMLResponse)
+async def create_requirement_browser(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id") or "")
+    try:
+        command = RequirementBrowserCommand.model_validate(form)
+        created = requirement_service.create_requirement(command.requirement_payload(), LOCAL_ACTOR)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "requirement_create_error.html",
+            status_code=422,
+            error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+            entered=form,
+            bid=bid_repository.get_bid(bid_id),
+            sources=requirement_service.source_choices(bid_id)
+            if bid_repository.get_bid(bid_id)
+            else None,
+            origins=list(RequirementOrigin),
+            categories=list(RequirementCategory),
+            significances=list(RequirementSignificance),
+            significance_labels=REQUIREMENT_SIGNIFICANCE_LABELS,
+            stages=list(RequirementStage),
+            dispositions=list(ResponseDisposition),
+        )
+    state_token = str(form.get("form_state") or "")
+    if state_token:
+        _requirement_form_states.pop(state_token, None)
+    return RedirectResponse(f"/requirements/{quote(created.requirement_id)}", status_code=303)
+
+
+@app.post("/requirements/with-source", response_class=HTMLResponse)
+async def create_requirement_with_source(request: Request) -> Response:
+    """Register source evidence, then PRG back to the retained requirement form."""
+    raw = await request.form()
+    submitted = dict(raw)
+    form = {
+        key: value for key, value in submitted.items() if not isinstance(value, StarletteUploadFile)
+    }
+    bid_id = str(form.get("bid_id") or "")
+    upload = submitted.get("new_source_file")
+    try:
+        command = RequirementBrowserCommand.model_validate(submitted)
+        if not isinstance(upload, StarletteUploadFile) or not upload.filename:
+            raise ValueError("Choose the customer source file before registering Revision 0")
+        if bid_repository.get_bid(bid_id) is None:
+            raise ValueError("Bid not found")
+        operation_id = _source_operation_id(command.source_operation_token or "", bid_id)
+        _document, version = document_service.register_document_idempotent(
+            operation_id,
+            {
+                "bid_id": bid_id,
+                "title": command.new_source_title or "",
+                "category": DocumentCategory.SPECIFICATION,
+                "version_label": command.new_source_version_label or "Revision 0",
+            },
+            upload.file,
+            upload.filename,
+            upload.content_type,
+            LOCAL_ACTOR,
+        )
+        form = command.retained_values()
+        form["source_document_version_id"] = version.document_version_id
+        token = uuid.uuid4().hex
+        if len(_requirement_form_states) >= 100:
+            oldest = min(_requirement_form_states, key=lambda key: _requirement_form_states[key][0])
+            _requirement_form_states.pop(oldest, None)
+        _requirement_form_states[token] = (
+            datetime.now(UTC),
+            {key: str(value) for key, value in form.items()},
+        )
+    except (ValidationError, ValueError, sqlite3.Error, OSError) as exc:
+        return render(
+            "requirement_create_error.html",
+            status_code=422,
+            error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+            entered=form,
+            bid=bid_repository.get_bid(bid_id),
+            sources=requirement_service.source_choices(bid_id)
+            if bid_repository.get_bid(bid_id)
+            else None,
+            origins=list(RequirementOrigin),
+            categories=list(RequirementCategory),
+            significances=list(RequirementSignificance),
+            significance_labels=REQUIREMENT_SIGNIFICANCE_LABELS,
+            stages=list(RequirementStage),
+            dispositions=list(ResponseDisposition),
+        )
+    return RedirectResponse(
+        f"/requirements?bid_id={quote(bid_id)}&form_state={quote(token)}#create",
+        status_code=303,
     )
 
 
 @app.get("/requirements/{requirement_id}", response_class=HTMLResponse)
 async def requirement_detail(request: Request, requirement_id: str) -> HTMLResponse:
+    return render("requirement_detail.html", **_requirement_detail_context(requirement_id))
+
+
+def _requirement_detail_context(
+    requirement_id: str,
+    *,
+    error: str | None = None,
+    entered: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Build the complete retained browser context for requirement detail."""
     try:
         detail = requirement_service.detail(requirement_id)
         history = requirement_service.audit_history(requirement_id)
@@ -1629,21 +1872,336 @@ async def requirement_detail(request: Request, requirement_id: str) -> HTMLRespo
         as_of_date=_working_date(),
     )
     readiness = evaluate_readiness(bid_repository, db, detail.requirement.bid_id)
+    relationships = ops07_repository.coverage(requirement_id)
+    return {
+        "detail": detail,
+        "requirement": detail.requirement,
+        "bid": bid,
+        "coverage": coverage,
+        "readiness": readiness,
+        "history": history,
+        "relationships": relationships,
+        "available_scopes": scope_repository.list_scope_items(detail.requirement.bid_id),
+        "available_packages": vendor_document_repository.list_packages(detail.requirement.bid_id),
+        "exact_evidence": ops07w_repository.exact_evidence(requirement_id),
+        "available_exact_evidence": ops07w_repository.available_exact_evidence(requirement_id),
+        "available_work": work_item_repository.list(bid_id=detail.requirement.bid_id),
+        "categories": list(RequirementCategory),
+        "significances": list(RequirementSignificance),
+        "significance_labels": REQUIREMENT_SIGNIFICANCE_LABELS,
+        "stages": list(RequirementStage),
+        "dispositions": list(ResponseDisposition),
+        "work_states": list(RequirementWorkState),
+        "review_states": list(RequirementReviewState),
+        "actor": LOCAL_ACTOR,
+        "error": error,
+        "entered": entered or {},
+    }
+
+
+@app.post("/bids/{bid_id}/requirements/bulk", response_class=HTMLResponse)
+async def bulk_requirement_responsibility(bid_id: str, request: Request) -> HTMLResponse:
+    form = await request.form()
+    selected = [str(value) for value in form.getlist("requirement_target")]
+    try:
+        targets = []
+        for encoded in selected:
+            requirement_id, separator, version = encoded.partition("|")
+            if not separator:
+                raise ValueError("Select valid requirement rows")
+            targets.append(
+                Ops07BulkTarget(requirement_id=requirement_id, expected_version=int(version))
+            )
+        payload: dict[str, object] = {"targets": targets}
+        for field in ("owner", "contributor", "reviewer"):
+            value = str(form.get(field, "")).strip()
+            if value:
+                payload[field] = value
+            if form.get(f"clear_{field}") == "1":
+                payload[f"clear_{field}"] = True
+        ops07_repository.bulk_assign(
+            bid_id, BulkResponsibilityAssignment.model_validate(payload), LOCAL_ACTOR
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        context = _bid_workspace_context(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE)
+        context.update(
+            ops07_error=validation_error_message(exc)
+            if isinstance(exc, ValidationError)
+            else str(exc),
+            ops07_entered=form,
+            selected_requirement_targets=selected,
+        )
+        return render("bid_detail.html", status_code=422, **context)
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/requirements-scope#requirements", status_code=303
+    )
+
+
+@app.post("/requirements/{requirement_id}/scope-links", response_class=HTMLResponse)
+async def link_requirement_scope(requirement_id: str, request: Request) -> HTMLResponse:
+    form = await request.form()
+    try:
+        requirement = requirement_service.get_requirement(requirement_id)
+        ops07_repository.link_scope(
+            requirement.bid_id, requirement_id, str(form.get("scope_item_id", "")), LOCAL_ACTOR
+        )
+    except RequirementNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, sqlite3.Error) as exc:
+        if "not found" in str(exc).casefold():
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return render(
+            "requirement_detail.html",
+            status_code=422,
+            **_requirement_detail_context(
+                requirement_id,
+                error=str(exc),
+                entered={"scope_item_id": str(form.get("scope_item_id", ""))},
+            ),
+        )
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+@app.post("/requirements/{requirement_id}/scope-links/{scope_item_id}/remove")
+async def unlink_requirement_scope(requirement_id: str, scope_item_id: str) -> RedirectResponse:
+    try:
+        requirement = requirement_service.get_requirement(requirement_id)
+        ops07_repository.unlink_scope(
+            requirement.bid_id, requirement_id, scope_item_id, LOCAL_ACTOR
+        )
+    except RequirementNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+@app.post("/requirements/{requirement_id}/manufacturer-links", response_class=HTMLResponse)
+async def link_requirement_manufacturer(requirement_id: str, request: Request) -> HTMLResponse:
+    form = await request.form()
+    try:
+        requirement = requirement_service.get_requirement(requirement_id)
+        ops07_repository.link_manufacturer(
+            requirement.bid_id, requirement_id, str(form.get("package_id", "")), LOCAL_ACTOR
+        )
+    except RequirementNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, sqlite3.Error) as exc:
+        return render(
+            "requirement_detail.html",
+            status_code=422,
+            **_requirement_detail_context(
+                requirement_id,
+                error=str(exc),
+                entered={"package_id": str(form.get("package_id", ""))},
+            ),
+        )
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+@app.post("/requirements/{requirement_id}/manufacturer-packages", response_class=HTMLResponse)
+async def create_and_link_requirement_manufacturer(
+    requirement_id: str, request: Request
+) -> Response:
+    requirement = requirement_service.get_requirement(requirement_id)
+    form = dict(await request.form())
+    form["bid_id"] = requirement.bid_id
+    package = None
+    try:
+        # Validate relationship prerequisites before package creation. The only remaining
+        # association failure is compensated below so no unintended package survives.
+        if any(
+            item.package_code == str(form.get("package_code") or "")
+            for item in vendor_document_repository.list_packages(requirement.bid_id)
+        ):
+            raise ValueError("A package with this code already exists for the Bid")
+        package = vendor_document_service.create_package(
+            SupplierPackageCreate.model_validate(
+                {key: value for key, value in form.items() if value not in ("", None)}
+            ),
+            LOCAL_ACTOR,
+        )
+        ops07_repository.link_manufacturer(
+            requirement.bid_id, requirement_id, package.package_id, LOCAL_ACTOR
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        if package is not None:
+            with db._conn() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "DELETE FROM audit_log WHERE bid_id=? "
+                    "AND action='vendor_vdrl_package_created' AND detail LIKE ?",
+                    (requirement.bid_id, f'%"package_id": "{package.package_id}"%'),
+                )
+                conn.execute(
+                    "DELETE FROM vendor_bid_packages WHERE package_id=?", (package.package_id,)
+                )
+                conn.commit()
+        return render(
+            "requirement_detail.html",
+            status_code=422,
+            **_requirement_detail_context(
+                requirement_id,
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered={key: str(value) for key, value in form.items()},
+            ),
+        )
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+@app.post("/requirements/{requirement_id}/manufacturer-links/{package_id}/remove")
+async def unlink_requirement_manufacturer(requirement_id: str, package_id: str) -> RedirectResponse:
+    try:
+        requirement = requirement_service.get_requirement(requirement_id)
+        ops07_repository.unlink_manufacturer(
+            requirement.bid_id, requirement_id, package_id, LOCAL_ACTOR
+        )
+    except RequirementNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+@app.post("/requirements/{requirement_id}/work-links")
+async def link_requirement_work(requirement_id: str, request: Request) -> RedirectResponse:
+    form = await request.form()
+    requirement = requirement_service.get_requirement(requirement_id)
+    try:
+        ops07_repository.link_work_item(
+            bid_id=requirement.bid_id,
+            work_item_id=str(form.get("work_item_id", "")),
+            source_kind="requirement",
+            source_id=requirement_id,
+            purpose=str(form.get("purpose", "requirement closure")),
+            actor=LOCAL_ACTOR,
+        )
+    except (ValueError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+def _work_source_context(source_kind: str, source_id: str) -> dict[str, object]:
+    sources = {
+        "requirement": (requirement_repository.get, "title"),
+        "scope": (scope_repository.get_scope_item, "title"),
+        "interface": (scope_repository.get_interface, "title"),
+        "manufacturer": (vendor_document_repository.get_package, "package_name"),
+    }
+    if source_kind not in sources:
+        raise HTTPException(status_code=404, detail="Work source not found")
+    getter, label = sources[source_kind]
+    record = getter(source_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Work source not found")
+    bid_id = str(record.bid_id)
+    return {
+        "source_kind": source_kind,
+        "source_id": source_id,
+        "source_label": str(getattr(record, label)),
+        "bid_id": bid_id,
+        "bid": bid_repository.get_bid(bid_id),
+        "categories": list(WorkCategory),
+    }
+
+
+@app.get("/work/from/{source_kind}/{source_id}", response_class=HTMLResponse)
+async def contextual_work_form(source_kind: str, source_id: str) -> HTMLResponse:
     return render(
-        "requirement_detail.html",
-        detail=detail,
-        requirement=detail.requirement,
-        bid=bid,
-        coverage=coverage,
-        readiness=readiness,
-        history=history,
-        categories=list(RequirementCategory),
-        significances=list(RequirementSignificance),
-        stages=list(RequirementStage),
-        dispositions=list(ResponseDisposition),
-        work_states=list(RequirementWorkState),
-        review_states=list(RequirementReviewState),
-        actor=LOCAL_ACTOR,
+        "contextual_work.html",
+        **_work_source_context(source_kind, source_id),
+        error=None,
+        entered={},
+    )
+
+
+@app.post("/work/from/{source_kind}/{source_id}", response_class=HTMLResponse)
+async def create_contextual_work(source_kind: str, source_id: str, request: Request) -> Response:
+    form = dict(await request.form())
+    context = _work_source_context(source_kind, source_id)
+    try:
+        ops07w_repository.create_linked_work(
+            source_kind=source_kind,
+            source_id=source_id,
+            title=str(form.get("title") or ""),
+            purpose=str(form.get("purpose") or ""),
+            category=WorkCategory(str(form.get("category") or WorkCategory.OTHER.value)),
+            actor=LOCAL_ACTOR,
+            next_action_date=(
+                date.fromisoformat(str(form["next_action_date"]))
+                if form.get("next_action_date")
+                else None
+            ),
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "contextual_work.html",
+            status_code=422,
+            **context,
+            error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+            entered=form,
+        )
+    return_paths = {
+        "requirement": f"/requirements/{quote(source_id)}#coverage",
+        "scope": f"/scope-items/{quote(source_id)}?bid_id={quote(str(context['bid_id']))}",
+        "interface": f"/interfaces/{quote(source_id)}?bid_id={quote(str(context['bid_id']))}",
+        "manufacturer": f"/vendor-documents/packages/{quote(source_id)}",
+    }
+    return RedirectResponse(return_paths[source_kind], status_code=303)
+
+
+@app.post("/requirements/{requirement_id}/verification-links", response_class=HTMLResponse)
+async def link_requirement_verification(requirement_id: str, request: Request) -> Response:
+    form = await request.form()
+    try:
+        requirement = requirement_service.get_requirement(requirement_id)
+        ops07w_repository.link_exact_evidence(
+            requirement.bid_id,
+            requirement_id,
+            str(form.get("verification_row_id") or ""),
+            LOCAL_ACTOR,
+        )
+    except RequirementNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, sqlite3.Error) as exc:
+        if "not found" in str(exc).casefold():
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return render(
+            "requirement_detail.html",
+            status_code=422,
+            **_requirement_detail_context(
+                requirement_id,
+                error=str(exc),
+                entered={"verification_row_id": str(form.get("verification_row_id") or "")},
+            ),
+        )
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+@app.post("/requirements/{requirement_id}/verification-links/{verification_row_id}/remove")
+async def unlink_requirement_verification(
+    requirement_id: str, verification_row_id: str
+) -> RedirectResponse:
+    try:
+        requirement = requirement_service.get_requirement(requirement_id)
+        ops07w_repository.unlink_exact_evidence(
+            requirement.bid_id, requirement_id, verification_row_id, LOCAL_ACTOR
+        )
+    except RequirementNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RedirectResponse(f"/requirements/{quote(requirement_id)}#coverage", status_code=303)
+
+
+@app.get("/bids/{bid_id}/requirements-handover.csv")
+async def requirements_handover(bid_id: str) -> Response:
+    try:
+        content = ops07_repository.handover_csv(bid_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        content,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="requirements-handover.csv"'},
     )
 
 
@@ -1654,6 +2212,7 @@ def _bids_browser_context(
     error: str | None = None,
     filter_error: bool = False,
     entered: dict[str, object] | None = None,
+    assessment_preview: object | None = None,
 ) -> dict[str, object]:
     selected = filters or BidPortfolioFilters()
     selected_values = filter_values or {
@@ -1685,6 +2244,9 @@ def _bids_browser_context(
         "classification_values": [item.value for item in BidLevel],
         "customer_types": list(CustomerType),
         "classifications": list(BidLevel),
+        "governance_guides": governance_level_guides(),
+        "risk_triggers": list(RiskTrigger),
+        "assessment_preview": assessment_preview,
         "error": error,
         "filter_error": filter_error,
         "entered": entered or {},
@@ -1751,7 +2313,9 @@ async def bids_projects(
 
 @app.post("/bids", response_class=HTMLResponse)
 async def create_bid_project(request: Request) -> Response:
-    form = dict(await request.form())
+    submitted = await request.form()
+    form = dict(submitted)
+    form["risk_triggers"] = submitted.getlist("risk_triggers")
     now = datetime.now(WORKING_TIMEZONE)
     try:
         required = {
@@ -1769,34 +2333,44 @@ async def create_bid_project(request: Request) -> Response:
         missing = [label for key, label in required.items() if not str(form.get(key) or "").strip()]
         if missing:
             raise ValueError(f"Required field(s): {', '.join(missing)}")
-        payload = {key: value for key, value in form.items() if value not in ("", None)}
+        classification_command = ClassificationAssessmentCommand.model_validate(
+            {
+                "estimated_value": form["estimated_value"],
+                "customer_type": form["customer_type"],
+                "is_epc_epcm": str(form.get("is_epc_epcm") or "") == "1",
+                "strategic_customer": str(form.get("strategic_customer") or "") == "1",
+                "triggers": form["risk_triggers"],
+                "selected_level": form["classification"],
+                "override_rationale": form.get("classification_override_rationale") or None,
+            }
+        )
+        classification_result = ops07w_repository.assess(classification_command)
+        ops07w_repository.validate_level(classification_command, classification_result)
+        payload = {
+            key: value
+            for key, value in form.items()
+            if value not in ("", None)
+            and key
+            not in {
+                "strategic_customer",
+                "is_epc_epcm",
+                "classification_override_rationale",
+            }
+        }
         payload.update(
             {
                 "bid_id": _next_browser_bid_id(),
                 "currency": str(form.get("currency") or "CAD").strip().upper(),
                 "current_gate": Gate.G0,
                 "status": BidStatus.ACTIVE,
-                "risk_triggers": [],
+                "risk_triggers": classification_command.triggers,
                 "inference_policy": InferencePolicy.LOCAL_ONLY,
                 "created_at": now,
                 "updated_at": now,
             }
         )
         bid = Bid.model_validate(payload)
-        bid_repository.create_bid_with_audit(
-            bid,
-            AuditEntry(
-                entry_id=f"AUD-{uuid.uuid4()}",
-                bid_id=bid.bid_id,
-                actor=LOCAL_ACTOR,
-                action="bid_project_created",
-                detail=json.dumps(
-                    {"bid_id": bid.bid_id, "project_name": bid.project_name},
-                    sort_keys=True,
-                ),
-                timestamp=now,
-            ),
-        )
+        ops07w_repository.create_bid_with_assessment(bid, classification_command, LOCAL_ACTOR)
     except (ValidationError, ValueError, sqlite3.Error) as exc:
         return render(
             "bids.html",
@@ -1809,6 +2383,127 @@ async def create_bid_project(request: Request) -> Response:
             ),
         )
     return RedirectResponse(f"/bids/{bid.bid_id}", status_code=303)
+
+
+@app.post("/bids/classification-assessment", response_class=HTMLResponse)
+async def preview_bid_classification(request: Request) -> HTMLResponse:
+    submitted = await request.form()
+    form = dict(submitted)
+    form["risk_triggers"] = submitted.getlist("risk_triggers")
+    try:
+        allowed_fields = {
+            "anticipated_award_date",
+            "bc_owner",
+            "classification",
+            "classification_override_rationale",
+            "currency",
+            "customer",
+            "customer_due_date",
+            "customer_type",
+            "estimated_value",
+            "executive_sponsor",
+            "internal_due_date",
+            "is_epc_epcm",
+            "location",
+            "margin_range",
+            "project_name",
+            "release_date",
+            "risk_triggers",
+            "sales_owner",
+            "strategic_customer",
+            "win_probability",
+        }
+        unknown_fields = sorted(set(form) - allowed_fields)
+        if unknown_fields:
+            raise ValueError("Unrecognized classification field(s): " + ", ".join(unknown_fields))
+        selected = form.get("classification") or BidLevel.LEVEL_0.value
+        command = ClassificationAssessmentCommand.model_validate(
+            {
+                "estimated_value": form.get("estimated_value"),
+                "customer_type": form.get("customer_type"),
+                "is_epc_epcm": str(form.get("is_epc_epcm") or "") == "1",
+                "strategic_customer": str(form.get("strategic_customer") or "") == "1",
+                "triggers": form["risk_triggers"],
+                "selected_level": selected,
+                "override_rationale": form.get("classification_override_rationale") or None,
+            }
+        )
+        result = ops07w_repository.assess(command)
+    except (ValidationError, ValueError) as exc:
+        return render(
+            "bids.html",
+            status_code=422,
+            **_bids_browser_context(
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered=form,
+            ),
+        )
+    if not form.get("classification"):
+        form["classification"] = result.level.value
+    return render(
+        "bids.html",
+        **_bids_browser_context(entered=form, assessment_preview=result),
+    )
+
+
+@app.get("/bids/{bid_id}/classification", response_class=HTMLResponse)
+async def bid_classification_review(bid_id: str) -> HTMLResponse:
+    bid = bid_repository.get_bid(bid_id)
+    if bid is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    return render(
+        "classification_review.html",
+        bid=bid,
+        assessment=ops07w_repository.latest_assessment(bid_id),
+        risk_triggers=list(RiskTrigger),
+        classifications=list(BidLevel),
+        governance_guides=governance_level_guides(),
+        error=None,
+        entered={},
+    )
+
+
+@app.post("/bids/{bid_id}/classification", response_class=HTMLResponse)
+async def reassess_bid_classification(bid_id: str, request: Request) -> Response:
+    bid = bid_repository.get_bid(bid_id)
+    if bid is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    submitted = await request.form()
+    form = dict(submitted)
+    form["risk_triggers"] = submitted.getlist("risk_triggers")
+    try:
+        command = ClassificationAssessmentCommand.model_validate(
+            {
+                "estimated_value": bid.estimated_value,
+                "customer_type": bid.customer_type.value,
+                "is_epc_epcm": bid.customer_type in {CustomerType.EPC, CustomerType.EPCM},
+                "strategic_customer": str(form.get("strategic_customer") or "") == "1",
+                "triggers": form["risk_triggers"],
+                "selected_level": form.get("classification"),
+                "override_rationale": form.get("classification_override_rationale") or None,
+            }
+        )
+        ops07w_repository.record_assessment(
+            bid_id,
+            command,
+            LOCAL_ACTOR,
+            expected_bid_updated_at=str(form.get("expected_bid_updated_at") or ""),
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "classification_review.html",
+            status_code=422,
+            bid=bid,
+            assessment=ops07w_repository.latest_assessment(bid_id),
+            risk_triggers=list(RiskTrigger),
+            classifications=list(BidLevel),
+            governance_guides=governance_level_guides(),
+            error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+            entered=form,
+        )
+    return RedirectResponse(f"/bids/{quote(bid_id)}#navigator", status_code=303)
 
 
 @app.get("/bids/{bid_id}", response_class=HTMLResponse)
@@ -1824,7 +2519,16 @@ def _bid_workspace_context(
     workspace = bid_control_center_service.workspace(bid_id, as_of=as_of_date)
     requirements = requirement_service.list_requirements(bid_id=bid_id, as_of_date=as_of_date)
     scope_items = scope_repository.list_scope_items(bid_id)
-    return {
+    navigator_counts = ops07w_repository.navigator_counts(bid_id)
+    classification_assessment = ops07w_repository.latest_assessment(bid_id)
+    governance_guides = governance_level_guides()
+    navigator = build_navigator(
+        bid_id,
+        navigator_counts,
+        workspace.readiness.verdict.value,
+        workspace.bid.bc_owner,
+    )
+    context: dict[str, object] = {
         "workspace": workspace,
         "bid": workspace.bid,
         "readiness": workspace.readiness,
@@ -1851,7 +2555,24 @@ def _bid_workspace_context(
         "deliverable_metrics": deliverable_service.metrics(bid_id, as_of_date),
         "proposal_metrics": proposal_service.metrics(bid_id),
         "negotiation_metrics": negotiation_service.metrics(bid_id),
+        "ops07_error": None,
+        "ops07_entered": {},
+        "selected_requirement_targets": [],
+        "classification_assessment": classification_assessment,
+        "governance_guide": next(
+            guide for guide in governance_guides if guide.level is workspace.bid.classification
+        ),
+        "navigator": navigator,
+        "next_best_actions": [stage for stage in navigator if stage.status != "Complete"][:3],
     }
+    if section is BidWorkspaceSection.AWARD_HANDOVER:
+        context["handover_report"] = bid_handover_service.report(
+            bid_id,
+            gate_verdict=workspace.readiness.verdict.value,
+            gate_blockers=[blocker.description for blocker in workspace.blockers],
+            generated_by=f"ContractIQ server · {LOCAL_ACTOR}",
+        )
+    return context
 
 
 def _render_bid_workspace(
@@ -1890,6 +2611,42 @@ async def bid_award_handover(bid_id: str) -> HTMLResponse:
     return _render_bid_workspace(bid_id, BidWorkspaceSection.AWARD_HANDOVER)
 
 
+@app.get("/bids/{bid_id}/handover", response_class=HTMLResponse)
+async def bid_handover_report(bid_id: str) -> HTMLResponse:
+    """Render the authoritative printable whole-Bid pre-award handover."""
+    try:
+        workspace = bid_control_center_service.workspace(bid_id, as_of=_working_date())
+        report = bid_handover_service.report(
+            bid_id,
+            gate_verdict=workspace.readiness.verdict.value,
+            gate_blockers=[blocker.description for blocker in workspace.blockers],
+            generated_by=f"ContractIQ server · {LOCAL_ACTOR}",
+        )
+    except (BidNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("bid_handover.html", report=report, workspace=workspace)
+
+
+@app.get("/bids/{bid_id}/handover.csv")
+async def bid_handover_csv(bid_id: str) -> Response:
+    """Export the same whole-Bid projection as deterministic structured transfer."""
+    try:
+        workspace = bid_control_center_service.workspace(bid_id, as_of=_working_date())
+        report = bid_handover_service.report(
+            bid_id,
+            gate_verdict=workspace.readiness.verdict.value,
+            gate_blockers=[blocker.description for blocker in workspace.blockers],
+            generated_by=f"ContractIQ server · {LOCAL_ACTOR}",
+        )
+    except (BidNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
+        BidHandoverService.csv(report),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="bid-handover-{bid_id}.csv"'},
+    )
+
+
 @app.get("/administration", response_class=HTMLResponse)
 async def administration() -> HTMLResponse:
     """Expose configuration and controlled reference functions away from Bid work."""
@@ -1910,7 +2667,42 @@ async def reports_center() -> HTMLResponse:
 
 
 @app.get("/scope-interfaces", response_class=HTMLResponse)
-async def scope_interfaces_register(bid_id: str | None = None) -> HTMLResponse:
+async def scope_interfaces_register(
+    bid_id: str | None = None,
+    requirement_id: str | None = None,
+    scope_item_id: str | None = None,
+) -> HTMLResponse:
+    if bid_id is not None and bid_repository.get_bid(bid_id) is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    if requirement_id is not None:
+        try:
+            contextual_requirement = requirement_service.get_requirement(requirement_id)
+        except RequirementNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if contextual_requirement.bid_id != bid_id:
+            return render(
+                "scope_interfaces.html",
+                status_code=422,
+                **_scope_register_context(
+                    bid_id or "",
+                    error="Requirement context must belong to this Bid",
+                    entered={"requirement_id": requirement_id},
+                ),
+            )
+    if scope_item_id is not None:
+        contextual_scope = scope_repository.get_scope_item(scope_item_id)
+        if contextual_scope is None:
+            raise HTTPException(status_code=404, detail="Scope item not found")
+        if contextual_scope.bid_id != bid_id:
+            return render(
+                "scope_interfaces.html",
+                status_code=422,
+                **_scope_register_context(
+                    bid_id or "",
+                    error="Scope context must belong to this Bid",
+                    entered={"scope_item_id": scope_item_id},
+                ),
+            )
     scopes = scope_repository.list_scope_items(bid_id)
     interfaces = scope_repository.list_interfaces(bid_id)
     coverage = scope_service.projection(bid_id, _working_date()) if bid_id else None
@@ -1920,7 +2712,131 @@ async def scope_interfaces_register(bid_id: str | None = None) -> HTMLResponse:
         interfaces=interfaces,
         coverage=coverage,
         bid_id=bid_id,
+        bids=bid_repository.list_bids(),
+        scope_areas=list(ScopeArea),
+        scope_origins=list(ScopeOrigin),
+        customer_needs=list(CustomerNeed),
+        offer_positions=list(OfferPosition),
+        pricing_states=list(PricingState),
+        materialities=list(Materiality),
+        dependency_states=list(DependencyState),
+        requirements=requirement_service.list_requirements(
+            bid_id=bid_id, as_of_date=_working_date()
+        )
+        if bid_id
+        else [],
+        error=None,
+        entered={"requirement_id": requirement_id or "", "scope_item_id": scope_item_id or ""},
         **_bid_return_context(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE),
+    )
+
+
+def _scope_register_context(
+    bid_id: str, *, error: str | None = None, entered: dict[str, object] | None = None
+) -> dict[str, object]:
+    if bid_repository.get_bid(bid_id) is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    return {
+        "scopes": scope_repository.list_scope_items(bid_id),
+        "interfaces": scope_repository.list_interfaces(bid_id),
+        "coverage": scope_service.projection(bid_id, _working_date()),
+        "bid_id": bid_id,
+        "bids": bid_repository.list_bids(),
+        "scope_areas": list(ScopeArea),
+        "scope_origins": list(ScopeOrigin),
+        "customer_needs": list(CustomerNeed),
+        "offer_positions": list(OfferPosition),
+        "pricing_states": list(PricingState),
+        "materialities": list(Materiality),
+        "dependency_states": list(DependencyState),
+        "requirements": requirement_service.list_requirements(
+            bid_id=bid_id, as_of_date=_working_date()
+        ),
+        "error": error,
+        "entered": entered or {},
+        **_bid_return_context(bid_id, BidWorkspaceSection.REQUIREMENTS_SCOPE),
+    }
+
+
+@app.post("/scope-items", response_class=HTMLResponse)
+async def create_scope_item_browser(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id") or "")
+    actor = LOCAL_ACTOR
+    now = datetime.now(ZoneInfo("UTC"))
+    try:
+        item = ScopeItem.model_validate(
+            {
+                **{
+                    key: value
+                    for key, value in form.items()
+                    if value not in ("", None) and key != "requirement_id"
+                },
+                "created_at": now,
+                "updated_at": now,
+                "created_by": actor,
+                "provenance": Provenance.from_human(actor),
+            }
+        )
+        requirement_id = str(form.get("requirement_id") or "")
+        scope_service.create_scope_item(item, actor, [requirement_id] if requirement_id else None)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "scope_interfaces.html",
+            status_code=422,
+            **_scope_register_context(
+                bid_id,
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered=form,
+            ),
+        )
+    origin_requirement = str(form.get("requirement_id") or "")
+    location = (
+        f"/requirements/{quote(origin_requirement)}#coverage"
+        if origin_requirement
+        else f"/scope-items/{quote(item.scope_item_id)}?bid_id={quote(bid_id)}"
+    )
+    return RedirectResponse(location, status_code=303)
+
+
+@app.post("/interfaces", response_class=HTMLResponse)
+async def create_interface_browser(request: Request) -> Response:
+    submitted = await request.form()
+    form = dict(submitted)
+    bid_id = str(form.get("bid_id") or "")
+    now = datetime.now(ZoneInfo("UTC"))
+    try:
+        record = InterfaceRecord.model_validate(
+            {
+                **{
+                    key: value
+                    for key, value in form.items()
+                    if value not in ("", None) and key != "scope_item_id"
+                },
+                "created_at": now,
+                "updated_at": now,
+                "created_by": LOCAL_ACTOR,
+                "provenance": Provenance.from_human(LOCAL_ACTOR),
+            }
+        )
+        scope_ids = [str(value) for value in submitted.getlist("scope_item_id")]
+        scope_service.create_interface(record, LOCAL_ACTOR, scope_ids)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "scope_interfaces.html",
+            status_code=422,
+            **_scope_register_context(
+                bid_id,
+                error=validation_error_message(exc)
+                if isinstance(exc, ValidationError)
+                else str(exc),
+                entered=form,
+            ),
+        )
+    return RedirectResponse(
+        f"/interfaces/{quote(record.interface_id)}?bid_id={quote(bid_id)}", status_code=303
     )
 
 
@@ -1937,8 +2853,55 @@ async def deliverables_register(
         bid_id=bid_id or "",
         metrics=deliverable_service.metrics(bid_id, projection_date),
         gaps=deliverable_service.gaps(bid_id, projection_date),
+        deliverable_criticalities=list(DeliverableCriticality),
+        deliverable_directions=list(DeliverableDirection),
         **_bid_return_context(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
     )
+
+
+@app.post("/deliverables", response_class=HTMLResponse)
+async def create_deliverable_html(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id", ""))
+    try:
+        bid_repository.get_bid(bid_id)
+        now = datetime.now(UTC)
+        deliverable_service.create(
+            Deliverable(
+                bid_id=bid_id,
+                title=str(form.get("title", "")),
+                description=str(form.get("description", "")),
+                category=str(form.get("category", "")),
+                criticality=DeliverableCriticality(str(form.get("criticality", "MANDATORY"))),
+                lifecycle_phase=LifecyclePhase.PRE_AWARD,
+                direction=DeliverableDirection(str(form.get("direction", "COMPANY_TO_CUSTOMER"))),
+                owner=str(form.get("owner") or "") or None,
+                provenance=Provenance.from_human(LOCAL_ACTOR),
+                created_at=now,
+                updated_at=now,
+                created_by=LOCAL_ACTOR,
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        projection_date = date.today()
+        return render(
+            "deliverables.html",
+            status_code=422,
+            deliverables=deliverable_service.list(bid_id or None),
+            bids=bid_repository.list_bids(),
+            bid_id=bid_id,
+            metrics=deliverable_service.metrics(bid_id or None, projection_date),
+            gaps=deliverable_service.gaps(bid_id or None, projection_date),
+            deliverable_criticalities=list(DeliverableCriticality),
+            deliverable_directions=list(DeliverableDirection),
+            form_error=validation_error_message(exc)
+            if isinstance(exc, ValidationError)
+            else str(exc),
+            entered=form,
+            **_bid_return_context(bid_id or None, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
+        )
+    return RedirectResponse(f"/deliverables?bid_id={quote(bid_id)}#author", status_code=303)
 
 
 @app.get("/deliverables/{deliverable_id}", response_class=HTMLResponse)
@@ -2136,12 +3099,28 @@ def _vdrl_package_context(
     if bid is None:
         raise HTTPException(status_code=500, detail="Package Bid context is missing")
     requirements = vendor_document_repository.list_requirements(package_id)
+    handover_assessments = {
+        item.requirement_id: assess_manufacturer_handover(
+            required=item.required,
+            applicable=item.applicable,
+            verification_status=item.verification_status,
+            response_source=item.response_source,
+            response_received_date=item.response_received_date,
+            internal_owner=item.internal_owner,
+            commercial_impact=item.commercial_impact,
+            bid_disposition=item.bid_disposition,
+            disposition_approved=item.disposition_approved,
+            unresolved_action=item.unresolved_action,
+        )
+        for item in requirements
+    }
     return {
         "package": package,
         "bid": bid,
         "requirements": requirements,
         "rows": vendor_document_service.register_rows(package_id=package_id),
         "readiness": vendor_document_service.readiness(package_id),
+        "handover_assessments": handover_assessments,
         "verification_statuses": list(VerificationStatus),
         "commercial_impacts": list(CommercialImpact),
         "bid_dispositions": list(BidDisposition),
@@ -2153,6 +3132,8 @@ def _vdrl_package_context(
         "import_preview": import_preview,
         "import_csv": import_csv,
         "import_digest": import_digest,
+        "linked_work": ops07w_repository.linked_work("manufacturer", package_id),
+        "requirement_evidence": ops07w_repository.package_requirement_evidence(package_id),
     }
 
 
@@ -2406,6 +3387,8 @@ async def commercial_register(bid_id: str | None = None, as_of: str | None = Non
         bid_id=bid_id or "",
         gaps=commercial_service.gaps(bid_id, projection_date, scope_rows),
         metrics=commercial_service.metrics(bid_id, projection_date, scope_rows),
+        commercial_categories=list(CommercialCategory),
+        basis_roles=list(BasisRole),
         **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
 
@@ -2417,6 +3400,55 @@ async def commercial_detail(commercial_item_id: str) -> HTMLResponse:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return render("commercial_detail.html", **detail)
+
+
+@app.post("/commercial", response_class=HTMLResponse)
+async def commercial_author(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id", ""))
+    try:
+        bid_repository.get_bid(bid_id)
+        if form.get("operation") == "initialize":
+            default_owner = str(form.get("default_owner") or "").strip()
+            if not default_owner:
+                raise ValueError("Assign a default owner before initializing commercial factors")
+            commercial_service.initialize_standard(bid_id, LOCAL_ACTOR, default_owner)
+        else:
+            now = datetime.now(UTC)
+            commercial_service.create(
+                CommercialItem(
+                    bid_id=bid_id,
+                    title=str(form.get("title", "")),
+                    description=str(form.get("description", "")),
+                    category=CommercialCategory(str(form.get("category", "OTHER"))),
+                    basis_role=BasisRole(str(form.get("basis_role", "COMMERCIAL_FACTOR"))),
+                    owner=str(form.get("owner") or "") or None,
+                    provenance=Provenance.from_human(LOCAL_ACTOR),
+                    created_at=now,
+                    updated_at=now,
+                    created_by=LOCAL_ACTOR,
+                ),
+                LOCAL_ACTOR,
+            )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        projection_date = date.today()
+        return render(
+            "commercial.html",
+            status_code=422,
+            commercial_items=commercial_service.list(bid_id or None),
+            bids=bid_repository.list_bids(),
+            bid_id=bid_id,
+            gaps=commercial_service.gaps(bid_id or None, projection_date),
+            metrics=commercial_service.metrics(bid_id or None, projection_date),
+            form_error=validation_error_message(exc)
+            if isinstance(exc, ValidationError)
+            else str(exc),
+            entered=form,
+            commercial_categories=list(CommercialCategory),
+            basis_roles=list(BasisRole),
+            **_bid_return_context(bid_id or None, BidWorkspaceSection.COMMERCIAL_CONTRACT),
+        )
+    return RedirectResponse(f"/commercial?bid_id={quote(bid_id)}#author", status_code=303)
 
 
 @app.get("/api/commercial")
@@ -2441,7 +3473,9 @@ async def initialize_commercial(request: Request) -> JSONResponse:
         return JSONResponse(
             {
                 "created": commercial_service.initialize_standard(
-                    str(body["bid_id"]), str(body.get("actor", LOCAL_ACTOR))
+                    str(body["bid_id"]),
+                    str(body.get("actor", LOCAL_ACTOR)),
+                    str(body.get("default_owner") or "").strip() or None,
                 )
             }
         )
@@ -2522,8 +3556,50 @@ async def contract_risks_register(
         bid_id=bid_id or "",
         gaps=contract_risk_service.gaps(bid_id, projection_date),
         metrics=contract_risk_service.metrics(bid_id, projection_date),
+        risk_categories=list(RiskCategory),
         **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
+
+
+@app.post("/contract-risks", response_class=HTMLResponse)
+async def contract_risk_author(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id", ""))
+    try:
+        bid_repository.get_bid(bid_id)
+        now = datetime.now(UTC)
+        contract_risk_service.create(
+            ContractIssue(
+                bid_id=bid_id,
+                issue_code=str(form.get("issue_code", "")),
+                title=str(form.get("title", "")),
+                summary=str(form.get("summary", "")),
+                owner=str(form.get("owner") or "") or None,
+                provenance=Provenance.from_human(LOCAL_ACTOR),
+                created_at=now,
+                updated_at=now,
+                created_by=LOCAL_ACTOR,
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        projection_date = date.today()
+        return render(
+            "contract_risks.html",
+            status_code=422,
+            issues=contract_risk_service.list(bid_id or None),
+            bids=bid_repository.list_bids(),
+            bid_id=bid_id,
+            gaps=contract_risk_service.gaps(bid_id or None, projection_date),
+            metrics=contract_risk_service.metrics(bid_id or None, projection_date),
+            risk_categories=list(RiskCategory),
+            form_error=validation_error_message(exc)
+            if isinstance(exc, ValidationError)
+            else str(exc),
+            entered=form,
+            **_bid_return_context(bid_id or None, BidWorkspaceSection.COMMERCIAL_CONTRACT),
+        )
+    return RedirectResponse(f"/contract-risks?bid_id={quote(bid_id)}#author", status_code=303)
 
 
 @app.get("/contract-risks/{issue_id}", response_class=HTMLResponse)
@@ -2544,8 +3620,85 @@ async def decisions_register(bid_id: str | None = None) -> HTMLResponse:
         policies=approval_repository.policies(),
         cases=approval_repository.cases(bid_id),
         gaps=approval_service.gaps(bid_id),
+        gate_approvals=bid_repository.list_approvals(bid_id) if bid_id else [],
+        approval_types=list(ApprovalType),
+        decision_types=list(DecisionType),
         **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
+
+
+def _decisions_error(bid_id: str, entered: dict[str, object], exc: Exception) -> HTMLResponse:
+    return render(
+        "decisions.html",
+        status_code=422,
+        bids=bid_repository.list_bids(),
+        bid_id=bid_id,
+        policies=approval_repository.policies(),
+        cases=approval_repository.cases(bid_id or None),
+        gaps=approval_service.gaps(bid_id or None),
+        gate_approvals=bid_repository.list_approvals(bid_id) if bid_id else [],
+        approval_types=list(ApprovalType),
+        decision_types=list(DecisionType),
+        form_error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+        entered=entered,
+        **_bid_return_context(bid_id or None, BidWorkspaceSection.COMMERCIAL_CONTRACT),
+    )
+
+
+@app.post("/decisions/gate-approvals", response_class=HTMLResponse)
+async def record_gate_approval(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id", ""))
+    try:
+        bid_repository.get_bid(bid_id)
+        obtained = form.get("obtained") == "on"
+        authority = str(form.get("authority") or "") or None
+        evidence = str(form.get("evidence_ref") or "") or None
+        decision = str(form.get("decision") or "") or None
+        if obtained and (not authority or not evidence or not decision):
+            raise ValueError("Obtained approval requires authority, evidence and decision")
+        bid_repository.create_approval(
+            Approval(
+                approval_id=f"APR-{uuid.uuid4().hex}",
+                bid_id=bid_id,
+                approval_type=ApprovalType(str(form.get("approval_type", ""))),
+                obtained=obtained,
+                authority=authority,
+                evidence_ref=evidence,
+                decision=decision,
+                decided_at=datetime.now(UTC) if obtained else None,
+                provenance=Provenance.from_human(LOCAL_ACTOR),
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return _decisions_error(bid_id, form, exc)
+    return RedirectResponse(f"/decisions?bid_id={quote(bid_id)}#gate-approval", status_code=303)
+
+
+@app.post("/decisions/cases", response_class=HTMLResponse)
+async def create_decision_case_html(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id", ""))
+    try:
+        bid_repository.get_bid(bid_id)
+        now = datetime.now(UTC)
+        approval_service.create_case(
+            DecisionCase(
+                bid_id=bid_id,
+                case_code=str(form.get("case_code", "")),
+                decision_type=DecisionType(str(form.get("decision_type", ""))),
+                title=str(form.get("title", "")),
+                owner=str(form.get("owner", "")),
+                created_by=LOCAL_ACTOR,
+                created_at=now,
+                provenance=Provenance.from_human(LOCAL_ACTOR),
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return _decisions_error(bid_id, form, exc)
+    return RedirectResponse(f"/decisions?bid_id={quote(bid_id)}#decision-case", status_code=303)
 
 
 @app.get("/api/decisions")
@@ -2808,8 +3961,44 @@ async def proposals_register(bid_id: str | None = None) -> HTMLResponse:
         families=proposal_repository.families(bid_id),
         metrics=proposal_service.metrics(bid_id),
         bid_id=bid_id or "",
+        proposal_applicabilities=list(ProposalApplicability),
         **_bid_return_context(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
     )
+
+
+@app.post("/proposals/families", response_class=HTMLResponse)
+async def create_proposal_family_html(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id", ""))
+    try:
+        bid_repository.get_bid(bid_id)
+        proposal_service.create_family(
+            ProposalFamily(
+                bid_id=bid_id,
+                code=str(form.get("code", "")),
+                applicability=ProposalApplicability(str(form.get("applicability", ""))),
+                title=str(form.get("title", "")),
+                owner=str(form.get("owner", "")),
+                created_by=LOCAL_ACTOR,
+                created_at=datetime.now(UTC),
+            ),
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "proposals.html",
+            status_code=422,
+            families=proposal_repository.families(bid_id or None),
+            metrics=proposal_service.metrics(bid_id or None),
+            bid_id=bid_id,
+            proposal_applicabilities=list(ProposalApplicability),
+            form_error=validation_error_message(exc)
+            if isinstance(exc, ValidationError)
+            else str(exc),
+            entered=form,
+            **_bid_return_context(bid_id or None, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
+        )
+    return RedirectResponse(f"/proposals?bid_id={quote(bid_id)}#author", status_code=303)
 
 
 @app.get("/api/proposals")
@@ -3019,7 +4208,9 @@ async def supplier_request_detail(request_id: str) -> HTMLResponse:
         links = [
             dict(row)
             for row in conn.execute(
-                "SELECT * FROM supplier_item_flow_down WHERE request_item_id IN (SELECT request_item_id FROM supplier_request_items WHERE request_id=?) ORDER BY request_item_id",
+                "SELECT * FROM supplier_item_flow_down WHERE request_item_id IN "
+                "(SELECT request_item_id FROM supplier_request_items WHERE request_id=?) "
+                "ORDER BY request_item_id",
                 (request_id,),
             ).fetchall()
         ]
@@ -3036,7 +4227,8 @@ async def supplier_response_detail(response_version_id: str) -> HTMLResponse:
         coverage = [
             dict(item)
             for item in conn.execute(
-                "SELECT * FROM supplier_response_coverage WHERE response_version_id=? ORDER BY request_item_id",
+                "SELECT * FROM supplier_response_coverage WHERE response_version_id=? "
+                "ORDER BY request_item_id",
                 (response_version_id,),
             ).fetchall()
         ]
@@ -3163,6 +4355,18 @@ async def scope_item_detail(scope_item_id: str) -> HTMLResponse:
         "scope_item_detail.html",
         item=item,
         links=scope_repository.requirement_links(scope_item_id=scope_item_id),
+        requirements=requirement_service.list_requirements(
+            bid_id=item.bid_id, as_of_date=_working_date()
+        ),
+        scopes=scope_repository.list_scope_items(item.bid_id),
+        scope_areas=list(ScopeArea),
+        customer_needs=list(CustomerNeed),
+        offer_positions=list(OfferPosition),
+        pricing_states=list(PricingState),
+        materialities=list(Materiality),
+        error=None,
+        entered={},
+        linked_work=ops07w_repository.linked_work("scope", scope_item_id),
     )
 
 
@@ -3175,7 +4379,202 @@ async def interface_detail(interface_id: str) -> HTMLResponse:
         "interface_detail.html",
         interface=record,
         links=scope_repository.interface_scope_links(interface_id),
+        scopes=scope_repository.list_scope_items(record.bid_id),
+        materialities=list(Materiality),
+        dependency_states=list(DependencyState),
+        error=None,
+        entered={},
+        linked_work=ops07w_repository.linked_work("interface", interface_id),
     )
+
+
+@app.post("/scope-items/{scope_item_id}", response_class=HTMLResponse)
+async def edit_scope_item_browser(scope_item_id: str, request: Request) -> Response:
+    current = scope_repository.get_scope_item(scope_item_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Scope item not found")
+    form = dict(await request.form())
+    try:
+        expected = int(str(form.pop("expected_version")))
+        scope_service.update_scope_item(
+            scope_item_id, expected, {k: v for k, v in form.items() if v != ""}, LOCAL_ACTOR
+        )
+    except (ValidationError, ValueError, sqlite3.Error, TypeError) as exc:
+        return render(
+            "scope_item_detail.html",
+            status_code=422,
+            item=current,
+            links=scope_repository.requirement_links(scope_item_id=scope_item_id),
+            requirements=requirement_service.list_requirements(
+                bid_id=current.bid_id, as_of_date=_working_date()
+            ),
+            scopes=scope_repository.list_scope_items(current.bid_id),
+            scope_areas=list(ScopeArea),
+            customer_needs=list(CustomerNeed),
+            offer_positions=list(OfferPosition),
+            pricing_states=list(PricingState),
+            materialities=list(Materiality),
+            error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+            entered=form,
+        )
+    return RedirectResponse(
+        f"/scope-items/{quote(scope_item_id)}?bid_id={quote(current.bid_id)}", status_code=303
+    )
+
+
+@app.post("/scope-items/{scope_item_id}/withdraw")
+async def withdraw_scope_item_browser(scope_item_id: str, request: Request) -> Response:
+    current = scope_repository.get_scope_item(scope_item_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Scope item not found")
+    form = await request.form()
+    try:
+        scope_service.withdraw_scope_item(
+            scope_item_id, int(str(form.get("expected_version"))), LOCAL_ACTOR
+        )
+    except (ValueError, TypeError) as exc:
+        return render(
+            "scope_item_detail.html",
+            status_code=422,
+            item=current,
+            links=scope_repository.requirement_links(scope_item_id=scope_item_id),
+            requirements=requirement_service.list_requirements(
+                bid_id=current.bid_id, as_of_date=_working_date()
+            ),
+            scopes=scope_repository.list_scope_items(current.bid_id),
+            scope_areas=list(ScopeArea),
+            customer_needs=list(CustomerNeed),
+            offer_positions=list(OfferPosition),
+            pricing_states=list(PricingState),
+            materialities=list(Materiality),
+            error=str(exc),
+            entered={"expected_version": str(form.get("expected_version") or "")},
+            linked_work=ops07w_repository.linked_work("scope", scope_item_id),
+        )
+    return RedirectResponse(f"/scope-interfaces?bid_id={quote(current.bid_id)}", status_code=303)
+
+
+@app.post("/interfaces/{interface_id}", response_class=HTMLResponse)
+async def edit_interface_browser(interface_id: str, request: Request) -> Response:
+    current = scope_repository.get_interface(interface_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Interface not found")
+    form = dict(await request.form())
+    try:
+        expected = int(str(form.pop("expected_version")))
+        scope_service.update_interface(
+            interface_id, expected, {k: v for k, v in form.items() if v != ""}, LOCAL_ACTOR
+        )
+    except (ValidationError, ValueError, sqlite3.Error, TypeError) as exc:
+        return render(
+            "interface_detail.html",
+            status_code=422,
+            interface=current,
+            links=scope_repository.interface_scope_links(interface_id),
+            scopes=scope_repository.list_scope_items(current.bid_id),
+            materialities=list(Materiality),
+            dependency_states=list(DependencyState),
+            error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+            entered=form,
+        )
+    return RedirectResponse(
+        f"/interfaces/{quote(interface_id)}?bid_id={quote(current.bid_id)}", status_code=303
+    )
+
+
+@app.post("/interfaces/{interface_id}/withdraw")
+async def withdraw_interface_browser(interface_id: str, request: Request) -> Response:
+    current = scope_repository.get_interface(interface_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Interface not found")
+    form = await request.form()
+    try:
+        scope_service.withdraw_interface(
+            interface_id, int(str(form.get("expected_version"))), LOCAL_ACTOR
+        )
+    except (ValueError, TypeError) as exc:
+        return render(
+            "interface_detail.html",
+            status_code=422,
+            interface=current,
+            links=scope_repository.interface_scope_links(interface_id),
+            scopes=scope_repository.list_scope_items(current.bid_id),
+            materialities=list(Materiality),
+            dependency_states=list(DependencyState),
+            error=str(exc),
+            entered={"expected_version": str(form.get("expected_version") or "")},
+            linked_work=ops07w_repository.linked_work("interface", interface_id),
+        )
+    return RedirectResponse(f"/scope-interfaces?bid_id={quote(current.bid_id)}", status_code=303)
+
+
+@app.post("/interfaces/{interface_id}/scope-links", response_class=HTMLResponse)
+async def link_interface_scope_browser(interface_id: str, request: Request) -> Response:
+    current = scope_repository.get_interface(interface_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Interface not found")
+    form = dict(await request.form())
+    try:
+        scope_service.link_interface_scope(
+            interface_id, str(form.get("scope_item_id", "")), current.bid_id, LOCAL_ACTOR
+        )
+    except (ValueError, sqlite3.Error) as exc:
+        return render(
+            "interface_detail.html",
+            status_code=422,
+            interface=current,
+            links=scope_repository.interface_scope_links(interface_id),
+            scopes=scope_repository.list_scope_items(current.bid_id),
+            materialities=list(Materiality),
+            dependency_states=list(DependencyState),
+            error=str(exc),
+            entered=form,
+        )
+    return RedirectResponse(f"/interfaces/{quote(interface_id)}#relationships", status_code=303)
+
+
+@app.post("/interfaces/{interface_id}/scope-links/{scope_item_id}/remove")
+async def unlink_interface_scope_browser(interface_id: str, scope_item_id: str) -> Response:
+    current = scope_repository.get_interface(interface_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Interface not found")
+    try:
+        scope_service.unlink_interface_scope(
+            interface_id, scope_item_id, current.bid_id, LOCAL_ACTOR
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RedirectResponse(f"/interfaces/{quote(interface_id)}#relationships", status_code=303)
+
+
+@app.post("/scope-items/{scope_item_id}/requirement-links", response_class=HTMLResponse)
+async def link_scope_requirement_browser(scope_item_id: str, request: Request) -> Response:
+    scope = scope_repository.get_scope_item(scope_item_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="Scope item not found")
+    form = dict(await request.form())
+    requirement_id = str(form.get("requirement_id", ""))
+    try:
+        ops07_repository.link_scope(scope.bid_id, requirement_id, scope_item_id, LOCAL_ACTOR)
+    except (ValueError, sqlite3.Error) as exc:
+        return render(
+            "scope_item_detail.html",
+            status_code=422,
+            item=scope,
+            links=scope_repository.requirement_links(scope_item_id=scope_item_id),
+            requirements=requirement_service.list_requirements(
+                bid_id=scope.bid_id, as_of_date=_working_date()
+            ),
+            scopes=scope_repository.list_scope_items(scope.bid_id),
+            scope_areas=list(ScopeArea),
+            customer_needs=list(CustomerNeed),
+            offer_positions=list(OfferPosition),
+            pricing_states=list(PricingState),
+            materialities=list(Materiality),
+            error=str(exc),
+            entered=form,
+        )
+    return RedirectResponse(f"/scope-items/{quote(scope_item_id)}#relationships", status_code=303)
 
 
 @app.get("/api/scope-interfaces")
@@ -3392,7 +4791,7 @@ async def controlled_document_detail(
 
 @app.post("/api/controlled-documents")
 async def register_controlled_document(
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008
     bid_id: str = Form(...),
     title: str = Form(...),
     category: str = Form(...),
@@ -3439,7 +4838,7 @@ async def register_controlled_document(
 @app.post("/api/controlled-documents/{document_id}/versions")
 async def add_controlled_document_version(
     document_id: str,
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008
     version_label: str = Form(...),
     expected_document_version: int = Form(...),
     expected_current_version_id: str = Form(...),
@@ -3540,7 +4939,7 @@ async def contract_detail(request: Request, doc_id: str):
 
 @app.post("/api/upload")
 async def upload_document(
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008
     doc_type_hint: str = None,
 ):
     allowed = {".pdf", ".docx", ".doc", ".txt"}
@@ -3557,7 +4956,7 @@ async def upload_document(
         extracted = doc_processor.process(file_path)
     except Exception as e:
         file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=f"Could not extract text: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"Could not extract text: {str(e)}") from e
 
     # Check for scanned PDF pages
     scan_warning = None
@@ -3776,7 +5175,7 @@ async def delete_document(doc_id: str):
 
         print(f"[ERROR] Delete failed for {doc_id}: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}") from e
 
 
 @app.patch("/api/document/{doc_id}/issue/{issue_id}")
@@ -3913,8 +5312,8 @@ async def regenerate_reports(doc_id: str):
         )
     try:
         results = json.loads(analysis_json_str)
-    except (json.JSONDecodeError, TypeError):
-        raise HTTPException(status_code=422, detail="Analysis data is corrupted")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Analysis data is corrupted") from exc
 
     try:
         pdf_filename = f"report_{doc_id}.pdf"
@@ -3955,7 +5354,7 @@ async def regenerate_reports(doc_id: str):
 
         print(f"[ERROR] Report regeneration failed for {doc_id}: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}") from e
 
 
 @app.post("/api/cancel/{doc_id}")
@@ -4164,7 +5563,10 @@ async def export_knowledge_table(table_name: str):
 
 
 @app.post("/api/knowledge/{table_name}/import")
-async def import_knowledge_table(table_name: str, file: UploadFile = File(...)):
+async def import_knowledge_table(
+    table_name: str,
+    file: UploadFile = File(...),  # noqa: B008
+):
     _resolve_table(table_name)  # validate
     import tempfile
 

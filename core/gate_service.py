@@ -9,6 +9,7 @@ from uuid import uuid4
 from core.bid_repository import BidRepository
 from core.database import Database
 from core.enums import GateStatus
+from core.export_controls import manufacturer_confirmation_clear
 from core.gates import ConditionState, GateContext, GateResult, evaluate_all_gates
 from core.schemas import AuditEntry, GateRecord
 
@@ -67,6 +68,34 @@ def _supplier_assurance_clear(db: Database, bid_id: str) -> bool:
     return True
 
 
+def _manufacturer_coverage_clear(db: Database, bid_id: str) -> bool | None:
+    """Evaluate actual OPS-05B responses; association alone never confirms."""
+    if not _table_exists(db, "requirement_manufacturer_links"):
+        return None
+    with _conn(db) as conn:
+        links = conn.execute(
+            "SELECT package_id FROM requirement_manufacturer_links WHERE bid_id=?", (bid_id,)
+        ).fetchall()
+        if not links:
+            return None
+        for link in links:
+            rows = conn.execute(
+                "SELECT verification_status,response_source,response_received_date "
+                "FROM vendor_bid_requirements WHERE package_id=?",
+                (link["package_id"],),
+            ).fetchall()
+            if not rows or any(
+                not manufacturer_confirmation_clear(
+                    row["verification_status"],
+                    row["response_source"],
+                    row["response_received_date"],
+                )
+                for row in rows
+            ):
+                return False
+    return True
+
+
 def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateContext:
     """Load all currently available register data needed by the pure gate rules."""
     bid = repo.get_bid(bid_id)
@@ -96,6 +125,44 @@ def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateCo
         for table in unconfirmed_counts:
             unconfirmed_counts[table] += document_counts.get(table, 0)
 
+    if _table_exists(db, "scope_interface_items"):
+        with _conn(db) as conn:
+            authoritative = conn.execute(
+                "SELECT * FROM scope_interface_items WHERE bid_id=? AND lifecycle_state='ACTIVE'",
+                (bid_id,),
+            ).fetchall()
+            unresolved_interfaces = conn.execute(
+                "SELECT owner FROM scope_interfaces WHERE bid_id=? AND lifecycle_state='ACTIVE' "
+                "AND (dependency_state='OPEN' OR work_state<>'COMPLETE' "
+                "OR review_state<>'ACCEPTED')",
+                (bid_id,),
+            ).fetchall()
+        scope_items = [
+            {
+                "human_confirmed": True,
+                "included_in_quote": row["offer_position"] in {"INCLUDED", "OPTION"},
+                "priced": row["pricing_state"]
+                in {"PRICED", "ALLOWANCED", "NO_CHARGE", "NOT_APPLICABLE"},
+                "owner": row["owner"],
+                "gap_status": "CLOSED"
+                if row["work_state"] == "COMPLETE" and row["review_state"] == "ACCEPTED"
+                else "OPEN",
+            }
+            for row in authoritative
+        ]
+        scope_items.extend(
+            {
+                "human_confirmed": True,
+                "included_in_quote": False,
+                "priced": False,
+                "owner": row["owner"],
+                "gap_status": "OPEN",
+            }
+            for row in unresolved_interfaces
+        )
+
+    manufacturer_clear = _manufacturer_coverage_clear(db, bid_id)
+
     return GateContext(
         bid=bid,
         approvals=repo.list_approvals(bid_id),
@@ -105,6 +172,7 @@ def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateCo
         prior_gate_results={},
         has_compliance_matrix=_table_exists(db, "requirements"),
         has_supplier_register=_supplier_assurance_clear(db, bid_id),
+        supplier_coverage_clear=manufacturer_clear,
         has_concession_log=_table_exists(db, "concession_log"),
         has_reconciliation=_table_exists(db, "reconciliation"),
         has_strategy_record=_table_has_bid_row(db, "bid_strategy", bid_id),

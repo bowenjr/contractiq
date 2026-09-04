@@ -1,8 +1,9 @@
 # ruff: noqa: E501, E701, E702, F405, I001
 """SQLite persistence and migration for authoritative TASK-10 records."""
 
+import json
 import sqlite3
-from datetime import date, datetime, UTC
+from datetime import UTC, date, datetime
 from typing import cast
 from uuid import uuid4
 
@@ -313,6 +314,61 @@ class ScopeInterfaceRepository:
                 ).fetchall()
             ]
 
+    def link_interface_scope(
+        self, interface_id: str, scope_item_id: str, bid_id: str, actor: str
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            interface = conn.execute(
+                "SELECT bid_id,lifecycle_state FROM scope_interfaces WHERE interface_id=?",
+                (interface_id,),
+            ).fetchone()
+            scope = conn.execute(
+                "SELECT bid_id,lifecycle_state FROM scope_interface_items WHERE scope_item_id=?",
+                (scope_item_id,),
+            ).fetchone()
+            if interface is None or scope is None:
+                raise ValueError("Interface or scope item was not found")
+            if (
+                interface["bid_id"] != bid_id
+                or scope["bid_id"] != bid_id
+                or interface["lifecycle_state"] != LifecycleState.ACTIVE.value
+                or scope["lifecycle_state"] != LifecycleState.ACTIVE.value
+            ):
+                raise ValueError("Interface and scope item must be active and belong to this Bid")
+            try:
+                self._link(
+                    conn,
+                    "interface_scope_links",
+                    "interface_id",
+                    interface_id,
+                    "scope_item_id",
+                    scope_item_id,
+                    bid_id,
+                    actor,
+                    datetime.now(UTC).isoformat(),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("This interface is already linked to the scope item") from exc
+            self._insert_audit(
+                conn, bid_id, actor, "interface_scope_linked", f"{interface_id}:{scope_item_id}"
+            )
+
+    def unlink_interface_scope(
+        self, interface_id: str, scope_item_id: str, bid_id: str, actor: str
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = conn.execute(
+                "DELETE FROM interface_scope_links WHERE bid_id=? AND interface_id=? AND scope_item_id=?",
+                (bid_id, interface_id, scope_item_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError("Interface-to-scope relationship was not found")
+            self._insert_audit(
+                conn, bid_id, actor, "interface_scope_unlinked", f"{interface_id}:{scope_item_id}"
+            )
+
     def withdraw_scope_item(self, scope_item_id: str, expected_version: int, actor: str) -> None:
         self._withdraw(
             "scope_interface_items", "scope_item_id", scope_item_id, expected_version, actor
@@ -320,6 +376,95 @@ class ScopeInterfaceRepository:
 
     def withdraw_interface(self, interface_id: str, expected_version: int, actor: str) -> None:
         self._withdraw("scope_interfaces", "interface_id", interface_id, expected_version, actor)
+
+    def update_scope_item(self, item: ScopeItem, expected_version: int, actor: str) -> None:
+        if item.version != expected_version + 1:
+            raise ValueError("scope version must increment by one")
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = conn.execute(
+                """UPDATE scope_interface_items SET title=?,description=?,scope_area=?,customer_need=?,
+                offer_position=?,pricing_state=?,responsible_party=?,owner=?,due_date=?,materiality=?,
+                assumption_exclusion_note=?,evidence_decision_note=?,work_state=?,review_state=?,
+                reviewer=?,review_note=?,updated_at=?,version=? WHERE scope_item_id=? AND version=?
+                AND lifecycle_state='ACTIVE'""",
+                (
+                    item.title,
+                    item.description,
+                    item.scope_area.value,
+                    item.customer_need.value,
+                    item.offer_position.value,
+                    item.pricing_state.value,
+                    item.responsible_party,
+                    item.owner,
+                    item.due_date.isoformat() if item.due_date else None,
+                    item.materiality.value,
+                    item.assumption_exclusion_note,
+                    item.evidence_decision_note,
+                    item.work_state.value,
+                    item.review_state.value,
+                    item.reviewer,
+                    item.review_note,
+                    item.updated_at.isoformat(),
+                    item.version,
+                    item.scope_item_id,
+                    expected_version,
+                ),
+            )
+            if result.rowcount != 1:
+                raise StaleScopeError("Scope item is missing, closed, or stale")
+            self._insert_audit(
+                conn,
+                item.bid_id,
+                actor,
+                "scope_updated",
+                json.dumps(
+                    {"scope_item_id": item.scope_item_id, "version": item.version}, sort_keys=True
+                ),
+            )
+
+    def update_interface(self, item: InterfaceRecord, expected_version: int, actor: str) -> None:
+        if item.version != expected_version + 1:
+            raise ValueError("interface version must increment by one")
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = conn.execute(
+                """UPDATE scope_interfaces SET title=?,boundary_description=?,upstream_party=?,downstream_party=?,
+                dependency_description=?,owner=?,due_date=?,materiality=?,dependency_state=?,
+                not_applicable_rationale=?,work_state=?,review_state=?,reviewer=?,review_note=?,updated_at=?,version=?
+                WHERE interface_id=? AND version=? AND lifecycle_state='ACTIVE'""",
+                (
+                    item.title,
+                    item.boundary_description,
+                    item.upstream_party,
+                    item.downstream_party,
+                    item.dependency_description,
+                    item.owner,
+                    item.due_date.isoformat() if item.due_date else None,
+                    item.materiality.value,
+                    item.dependency_state.value,
+                    item.not_applicable_rationale,
+                    item.work_state.value,
+                    item.review_state.value,
+                    item.reviewer,
+                    item.review_note,
+                    item.updated_at.isoformat(),
+                    item.version,
+                    item.interface_id,
+                    expected_version,
+                ),
+            )
+            if result.rowcount != 1:
+                raise StaleScopeError("Interface is missing, closed, or stale")
+            self._insert_audit(
+                conn,
+                item.bid_id,
+                actor,
+                "interface_updated",
+                json.dumps(
+                    {"interface_id": item.interface_id, "version": item.version}, sort_keys=True
+                ),
+            )
 
     def _withdraw(self, table: str, key: str, value: str, expected: int, actor: str) -> None:
         with self._conn() as c:

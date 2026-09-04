@@ -317,6 +317,13 @@ def test_my_work_quick_capture_and_full_editor_lifecycle(ui_app: ModuleType) -> 
     assert '<label for="capture-next-action">Next-action date</label>' in page_text
     assert "Opportunity Development" in page_text
     assert ">OPPORTUNITY_DEVELOPMENT<" not in page_text
+    assert 'class="page-shell"' in page_text
+    assert 'class="primary-nav"' in page_text
+    assert 'href="/static/style.css"' in page_text
+    assert 'id="quick-capture"' in page_text
+    assert 'aria-label="Work register views"' in page_text
+    for name in ("view", "status", "category", "domain", "context", "bid_id", "attention"):
+        assert f'name="{name}"' in page_text
 
     created = asyncio.run(
         ui_app.quick_capture_work(
@@ -337,6 +344,10 @@ def test_my_work_quick_capture_and_full_editor_lifecycle(ui_app: ModuleType) -> 
     assert editor.status_code == 200
     assert "Prepare regional opportunity summary" in _html(editor)
     assert "Back to My Work" in _html(editor)
+    assert 'class="page-shell editor-shell"' in _html(editor)
+    assert 'class="primary-nav"' in _html(editor)
+    for lifecycle in ("WAITING", "BLOCKED", "COMPLETED", "CANCELLED"):
+        assert f'data-status-section="{lifecycle}"' in _html(editor)
 
     waiting = asyncio.run(
         ui_app.save_work_item_detail(

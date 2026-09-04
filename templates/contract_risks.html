@@ -3,10 +3,13 @@
 <head><meta charset="utf-8"><title>Contract Risks · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <main class="page-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
 <p><a href="/">Dashboard</a> · <a href="/my-day">My Day</a> · <a href="/commercial">Commercial</a></p>
 {% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
 <h1>Contract Risks</h1>
 <p class="muted">Controlled contract mechanisms, proposed positions, and deterministic risk exposure. Review is data-quality acceptance, not approval.</p>
+{% if form_error %}<div class="error" role="alert">{{ form_error }}</div>{% endif %}
+{% if bid_id %}<section class="card" id="author"><h2>Add contract issue</h2><p>Register the issue first; attach authoritative source and complete assessment/review from its detail.</p><form method="post" action="/contract-risks"><input type="hidden" name="bid_id" value="{{ bid_id }}"><label>Issue code<input name="issue_code" required value="{{ entered.issue_code if entered else '' }}"></label><label>Issue title<input name="title" required value="{{ entered.title if entered else '' }}"></label><label>Customer position / summary<textarea name="summary" required>{{ entered.summary if entered else '' }}</textarea></label><label>Owner<input name="owner" value="{{ entered.owner if entered else '' }}"></label><button type="submit">Add contract issue</button></form></section>{% endif %}
 <section class="card">
 <div class="cards"><div><strong>{{ metrics.active }}</strong><span>Active</span></div><div><strong>{{ metrics.blocking }}</strong><span>Blocking</span></div><div><strong>{{ metrics.high_attention }}</strong><span>High attention</span></div><div><strong>NOT APPROVED</strong><span>G4 status</span></div></div>
 <table><thead><tr><th>Issue</th><th>Category</th><th>Owner</th><th>Materiality</th><th>Lifecycle</th></tr></thead><tbody>{% for issue in issues %}<tr><td><a href="/contract-risks/{{ issue.issue_id }}">{{ issue.issue_code }} — {{ issue.title }}</a></td><td>{{ issue.issue_code }}</td><td>{{ issue.owner or 'Ownerless' }}</td><td>{{ issue.materiality }}</td><td>{{ issue.lifecycle_state }}</td></tr>{% else %}<tr><td colspan="5">No contract risks registered.</td></tr>{% endfor %}</tbody></table>

@@ -5,6 +5,7 @@ import sqlite3
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import cast
+from uuid import uuid4
 
 from core.database import Database
 from core.document_control import ControlledDocumentIdentityError
@@ -342,8 +343,18 @@ class BidRepository:
             provenance=Provenance.model_validate_json(str(row["provenance_json"])),
         )
 
-    def create_approval(self, approval: Approval) -> None:
+    def create_approval(self, approval: Approval, actor: str | None = None) -> None:
+        """Create a gate approval and, for browser authors, its audit atomically."""
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if (
+                actor is not None
+                and conn.execute(
+                    "SELECT 1 FROM approvals WHERE bid_id=? AND approval_type=?",
+                    (approval.bid_id, approval.approval_type.value),
+                ).fetchone()
+            ):
+                raise ValueError("This Bid gate approval has already been recorded")
             conn.execute(
                 """
                 INSERT INTO approvals (
@@ -364,6 +375,29 @@ class BidRepository:
                     approval.provenance.model_dump_json(),
                 ),
             )
+            if actor is not None:
+                at = datetime.now(UTC)
+                conn.execute(
+                    """INSERT INTO audit_log(
+                    entry_id,bid_id,actor,action,detail,timestamp
+                    ) VALUES(?,?,?,?,?,?)""",
+                    (
+                        f"AUD-{uuid4()}",
+                        approval.bid_id,
+                        actor,
+                        "bid_gate_approval_created",
+                        json.dumps(
+                            {
+                                "approval_id": approval.approval_id,
+                                "gate": approval.approval_type.value,
+                                "decision": approval.decision,
+                                "obtained": approval.obtained,
+                            },
+                            sort_keys=True,
+                        ),
+                        at.isoformat(),
+                    ),
+                )
             conn.commit()
 
     def list_approvals(self, bid_id: str) -> list[Approval]:

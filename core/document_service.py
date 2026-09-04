@@ -1,10 +1,12 @@
 """Application service coordinating controlled metadata, files, and audit."""
 
 import json
+import sqlite3
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import BinaryIO, cast
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from core.bid_repository import BidRepository
 from core.document_control import (
@@ -18,6 +20,7 @@ from core.document_control import (
     DocumentVersionCreate,
     DocumentVersionState,
     IntegrityResult,
+    IntegrityStatus,
     StorageDiagnostic,
 )
 from core.document_repository import (
@@ -30,6 +33,7 @@ from core.document_repository import (
 from core.enums import Actor
 from core.managed_document_storage import (
     ManagedDocumentStorage,
+    StorageCollisionError,
     normalize_display_filename,
 )
 from core.schemas import AuditEntry, Provenance
@@ -183,6 +187,170 @@ class DocumentService:
                     },
                 ),
             )
+            return document, version
+        except Exception:
+            if placed_key is not None:
+                self.storage.remove_owned(placed_key)
+            raise
+        finally:
+            self.storage.remove_staged(staged)
+
+    def register_document_idempotent(
+        self,
+        operation_id: str,
+        data: DocumentCreateData,
+        source: BinaryIO,
+        original_filename: str,
+        media_type: str | None,
+        actor: str,
+    ) -> tuple[ControlledDocument, DocumentVersion]:
+        """Register once using a server-issued operation identity stored in existing PKs."""
+        try:
+            operation_uuid = UUID(operation_id)
+        except ValueError as exc:
+            raise ValueError("source operation identity is invalid") from exc
+        request = DocumentCreate.model_validate(data)
+        normalized_actor = self._actor(actor)
+        if self.bid_repository.get_bid(request.bid_id) is None:
+            raise ValueError(f"Bid not found: {request.bid_id}")
+        display_filename = normalize_display_filename(original_filename)
+        normalized_media_type = media_type.strip() if media_type and media_type.strip() else None
+        document_id = f"DOC-{uuid5(operation_uuid, 'controlled-document')}"
+        version_id = f"DV-{uuid5(operation_uuid, 'controlled-document-version')}"
+        audit_id = f"AUD-{uuid5(operation_uuid, 'controlled-document-audit')}"
+        staged = self.storage.stage(source)
+        storage_key = self.storage.storage_key(version_id)
+
+        def recover() -> tuple[ControlledDocument, DocumentVersion] | None:
+            document = self.repository.get(document_id)
+            if document is None:
+                return None
+            version = self.repository.get_version(version_id)
+            if version is None:
+                raise ValueError("source operation has incomplete persisted evidence")
+            expected = (
+                request.bid_id,
+                request.title,
+                request.document_number,
+                request.category,
+                request.issuer,
+                request.notes,
+                version_id,
+                request.version_label,
+                request.issued_date,
+                request.received_at,
+                display_filename,
+                normalized_media_type,
+                staged.byte_size,
+                staged.sha256_digest,
+            )
+            actual = (
+                document.bid_id,
+                document.title,
+                document.document_number,
+                document.category,
+                document.issuer,
+                document.notes,
+                document.current_version_id,
+                version.version_label,
+                version.issued_date,
+                version.received_at,
+                version.original_filename,
+                version.media_type,
+                version.byte_size,
+                version.sha256_digest,
+            )
+            if actual != expected:
+                raise ValueError("source operation was already used with different values")
+            if self.storage.verify(version).status is not IntegrityStatus.OK:
+                raise ValueError("source operation evidence is not intact")
+            return document, version
+
+        placed_key: str | None = None
+        try:
+            existing = recover()
+            if existing is not None:
+                return existing
+            at = self._now()
+            provenance = self._provenance(normalized_actor, at, document_id)
+            document = ControlledDocument(
+                document_id=document_id,
+                bid_id=request.bid_id,
+                title=request.title,
+                document_number=request.document_number,
+                category=request.category,
+                issuer=request.issuer,
+                notes=request.notes,
+                lifecycle_state=DocumentLifecycle.ACTIVE,
+                current_version_id=version_id,
+                created_at=at,
+                updated_at=at,
+                version=1,
+                provenance=provenance,
+            )
+            version = DocumentVersion(
+                document_version_id=version_id,
+                document_id=document_id,
+                version_label=request.version_label,
+                issued_date=request.issued_date,
+                received_at=request.received_at,
+                original_filename=display_filename,
+                media_type=normalized_media_type,
+                byte_size=staged.byte_size,
+                sha256_digest=staged.sha256_digest,
+                storage_key=storage_key,
+                predecessor_version_id=None,
+                version_state=DocumentVersionState.CURRENT,
+                created_at=at,
+                provenance=provenance,
+            )
+            try:
+                self.storage.place(staged, storage_key)
+                placed_key = storage_key
+            except StorageCollisionError:
+                for _attempt in range(100):
+                    existing = recover()
+                    if existing is not None:
+                        return existing
+                    if not self.storage.resolve(storage_key).exists():
+                        self.storage.place(staged, storage_key)
+                        placed_key = storage_key
+                        break
+                    time.sleep(0.01)
+                else:
+                    raise ValueError("source operation is still being processed") from None
+            try:
+                self.repository.create_with_first_version(
+                    document,
+                    version,
+                    AuditEntry(
+                        entry_id=audit_id,
+                        bid_id=document.bid_id,
+                        actor=normalized_actor,
+                        action="controlled_document_created",
+                        detail=json.dumps(
+                            {
+                                "document_id": document_id,
+                                "operation": "controlled_document_created",
+                                "evidence": {
+                                    "document_version_id": version_id,
+                                    "version_label": version.version_label,
+                                    "original_filename": display_filename,
+                                    "byte_size": version.byte_size,
+                                    "sha256_digest": version.sha256_digest,
+                                },
+                            },
+                            sort_keys=True,
+                        ),
+                        timestamp=at,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing = recover()
+                if existing is not None:
+                    placed_key = None
+                    return existing
+                raise
             return document, version
         except Exception:
             if placed_key is not None:

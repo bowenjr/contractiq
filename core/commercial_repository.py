@@ -106,7 +106,9 @@ class CommercialRepository:
                 conn.rollback()
                 raise
 
-    def initialize_standard(self, bid_id: str, actor: str) -> list[str]:
+    def initialize_standard(
+        self, bid_id: str, actor: str, default_owner: str | None = None
+    ) -> list[str]:
         created: list[str] = []
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -130,7 +132,7 @@ class CommercialRepository:
                             category,
                             "COMMERCIAL_FACTOR",
                             "MATERIAL",
-                            None,
+                            default_owner,
                             None,
                             "DRAFT",
                             1,
