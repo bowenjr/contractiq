@@ -74,6 +74,7 @@ files = [
     "core/requirement_coverage.py",
     "core/requirement_repository.py",
     "core/requirement_service.py",
+    "core/ops08.py",
     "scripts/validate_task_09.py",
 ]
 
@@ -109,6 +110,7 @@ module = [
     "core.requirement_coverage",
     "core.requirement_repository",
     "core.requirement_service",
+    "core.ops08",
     "scripts.validate_task_09",
 ]
 ignore_errors = false

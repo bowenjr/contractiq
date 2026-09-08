@@ -263,6 +263,26 @@ class BidHandoverService:
                     (bid_id,),
                 ),
             }
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='commercial_position_versions'"
+            ).fetchone():
+                position_rows = self._rows(
+                    conn,
+                    """SELECT p.position_id AS commercial_item_id,tv.label AS title,
+                    v.customer_position AS description,tv.display_group AS category,
+                    'CUSTOMER_TERM' AS basis_role,v.disposition AS materiality,v.owner,v.due_date,
+                    v.negotiation_state AS lifecycle_state,v.provenance_json,
+                    v.proposed_position,v.source_document_version_id,v.source_locator,
+                    v.rationale,v.required_approver,v.current_outcome
+                    FROM commercial_positions p
+                    JOIN commercial_position_versions v ON v.position_id=p.position_id
+                      AND v.version_number=p.current_version
+                    JOIN commercial_topic_versions tv ON tv.topic_version_id=v.topic_version_id
+                    WHERE p.bid_id=? ORDER BY tv.display_group,tv.display_order,p.position_id""",
+                    (bid_id,),
+                )
+                sections["commercial"] = sections["commercial"] + position_rows
 
         blockers = list(gate_blockers)
         for row in sections["manufacturer"]:

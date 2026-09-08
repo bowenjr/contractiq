@@ -96,6 +96,34 @@ def _manufacturer_coverage_clear(db: Database, bid_id: str) -> bool | None:
     return True
 
 
+def _commercial_review_state(db: Database, bid_id: str) -> tuple[bool | None, str]:
+    """Adapt OPS-08 current immutable positions into the existing G4 gate."""
+    if not _table_exists(db, "commercial_positions"):
+        return None, ""
+    with _conn(db) as conn:
+        rows = conn.execute(
+            """SELECT v.* FROM commercial_positions p
+            JOIN commercial_position_versions v ON v.position_id=p.position_id
+              AND v.version_number=p.current_version
+            WHERE p.bid_id=?""",
+            (bid_id,),
+        ).fetchall()
+    if not rows:
+        return None, ""
+    unresolved = [
+        row
+        for row in rows
+        if row["disposition"] == "NOT_REVIEWED"
+        or not str(row["owner"] or "").strip()
+        or (
+            row["disposition"] in {"QUALIFY", "REJECT", "CLARIFICATION_REQUIRED"}
+            and row["negotiation_state"] != "RESOLVED"
+        )
+        or (row["required_approver"] and not str(row["current_outcome"] or "").strip())
+    ]
+    return not unresolved, f"{len(unresolved)} commercial position(s) remain unresolved."
+
+
 def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateContext:
     """Load all currently available register data needed by the pure gate rules."""
     bid = repo.get_bid(bid_id)
@@ -162,6 +190,7 @@ def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateCo
         )
 
     manufacturer_clear = _manufacturer_coverage_clear(db, bid_id)
+    commercial_clear, commercial_detail = _commercial_review_state(db, bid_id)
 
     return GateContext(
         bid=bid,
@@ -176,6 +205,8 @@ def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateCo
         has_concession_log=_table_exists(db, "concession_log"),
         has_reconciliation=_table_exists(db, "reconciliation"),
         has_strategy_record=_table_has_bid_row(db, "bid_strategy", bid_id),
+        commercial_review_clear=commercial_clear,
+        commercial_review_detail=commercial_detail,
     )
 
 

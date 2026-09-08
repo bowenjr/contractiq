@@ -145,10 +145,22 @@ async def main() -> None:
             )
             with app.db._conn() as conn:
                 conn.execute(
-                    "UPDATE vendor_bid_requirements SET verification_status='CONFIRMED_COMPLIANT' "
-                    "WHERE requirement_id=?",
-                    (vendor_row.requirement_id,),
+                    "UPDATE vendor_bid_requirements SET verification_status='CONFIRMED_COMPLIANT', "
+                    "response_received_date=? WHERE requirement_id=?",
+                    ("2026-08-21", vendor_row.requirement_id),
                 )
+
+            hydrated_vendor_row = app.vendor_document_repository.get_requirement(
+                vendor_row.requirement_id
+            )
+            assert hydrated_vendor_row is not None
+            assert hydrated_vendor_row.response_received_date is not None
+            assert hydrated_vendor_row.response_received_date.isoformat() == "2026-08-21"
+            status, headers, package_body = await request(
+                app.app, "GET", f"/vendor-documents/packages/{package.package_id}"
+            )
+            assert status == 200 and headers["content-type"].startswith("text/html")
+            assert b'value="2026-08-21"' in package_body
 
             before_audit = len(app.bid_repository.list_audit())
             for path in (
@@ -198,7 +210,7 @@ async def main() -> None:
             assert row["manufacturer_verification"] == "CONFIRMED_COMPLIANT"
             assert row["readiness_state"] == "NOT_READY"
             assert row["original_requirement"].startswith("'=")
-            assert "lacks response source and response date" in row["unresolved_action"]
+            assert "lacks response source" in row["unresolved_action"]
             assert (await request(app.app, "GET", "/bids/B-2099-9999"))[0] == 404
             assert (await request(app.app, "GET", "/requirements/REQ-MISSING"))[0] == 404
             assert len(app.bid_repository.list_audit()) == after_unlink + 2

@@ -50,6 +50,8 @@ class GateContext:
     has_concession_log: bool = False
     has_reconciliation: bool = False
     has_strategy_record: bool = False
+    commercial_review_clear: bool | None = None
+    commercial_review_detail: str = ""
 
 
 def _condition(
@@ -147,7 +149,7 @@ def evaluate_g1(ctx: GateContext) -> GateResult:
         "g1.bid_no_bid_approved",
         "Bid/no-bid approval has been obtained.",
         not approval_required or _has_obtained_approval(ctx, ApprovalType.BID_NO_BID),
-        "BID_NO_BID approval has not been obtained.",
+        "Bid/no-bid approval has not been obtained.",
     )
     return _gate_result(Gate.G1, [condition])
 
@@ -265,10 +267,17 @@ def evaluate_g4(ctx: GateContext) -> GateResult:
         not missing_required,
         f"Required approval(s) not obtained: {', '.join(sorted(missing_required))}.",
     )
-    return _gate_result(
-        Gate.G4,
-        [margin_condition, authority_condition, required_condition],
-    )
+    conditions = [margin_condition, authority_condition, required_condition]
+    if ctx.commercial_review_clear is not None:
+        conditions.append(
+            _condition(
+                "g4.commercial_review_clear",
+                "Commercial and contract review has no unresolved controlled position.",
+                ctx.commercial_review_clear,
+                ctx.commercial_review_detail,
+            )
+        )
+    return _gate_result(Gate.G4, conditions)
 
 
 def evaluate_g5(ctx: GateContext) -> GateResult:

@@ -157,6 +157,8 @@ from core.ops07w import (
     Ops07WorkflowRepository,
     build_navigator,
 )
+from core.ops08 import NegotiationState as CommercialNegotiationState
+from core.ops08 import Ops08Repository, PositionDisposition, PositionRevision
 from core.ops_foundation import (
     RESPONSIBILITY_DOMAINS,
     OpsFoundationRepository,
@@ -276,6 +278,7 @@ except ZoneInfoNotFoundError as exc:
 LOCAL_ACTOR = str(APP_CONFIG.get("local_actor", "local_user"))
 _REQUIREMENT_FORM_STATE_TTL_SECONDS = 3600
 _requirement_form_states: dict[str, tuple[datetime, dict[str, str]]] = {}
+_commercial_form_states: dict[str, tuple[datetime, dict[str, str]]] = {}
 UPLOADS_DIR = BASE_DIR / "uploads"
 REPORTS_DIR = BASE_DIR / "reports"
 _managed_root_setting = Path(
@@ -380,6 +383,7 @@ ops07w_repository = Ops07WorkflowRepository(db)
 bid_handover_service = BidHandoverService(db)
 commercial_repository = CommercialRepository(db)
 commercial_service = CommercialService(commercial_repository)
+ops08_repository = Ops08Repository(db)
 contract_risk_repository = ContractRiskRepository(db)
 contract_risk_service = ContractRiskService(contract_risk_repository)
 approval_repository = ApprovalRepository(db)
@@ -409,6 +413,17 @@ def _load_bid_workspace_attention(bid_id: str, as_of: date) -> BidWorkspaceAtten
         for row in approval_repository.cases(bid_id)
         if row["lifecycle_state"] in {"ACTIVE", "DRAFT"}
     ]
+    if "ops08_repository" in globals():
+        approval_attention.extend(
+            {
+                "bid_id": bid_id,
+                "entity_id": str(row["position_id"]),
+                "code": "COMMERCIAL_POSITION_BLOCKED",
+                "severity": "HIGH",
+            }
+            for row in ops08_repository.workspace(bid_id)
+            if row["disposition"] in {"NOT_REVIEWED", "QUALIFY", "CLARIFICATION_REQUIRED", "REJECT"}
+        )
     supplier_attention = [
         {
             "bid_id": gap.bid_id,
@@ -743,6 +758,217 @@ def _bid_return_context(
     return context
 
 
+def _position_context(position_id: str | None, bid_id: str) -> dict[str, object] | None:
+    """Resolve optional commercial context and reject stale or cross-Bid links."""
+    if not position_id:
+        return None
+    position = ops08_repository.detail(position_id)
+    if str(position["bid_id"]) != bid_id:
+        raise ValueError("Commercial topic context must belong to this Bid")
+    return position
+
+
+def _position_link_counts(bid_id: str) -> dict[str, dict[str, int]]:
+    with db._conn() as conn:
+        rows = conn.execute(
+            """SELECT r.position_id,
+            SUM(CASE WHEN r.risk_issue_id IS NOT NULL THEN 1 ELSE 0 END) risk_count,
+            SUM(CASE WHEN r.decision_case_id IS NOT NULL
+                OR r.approval_route_id IS NOT NULL THEN 1 ELSE 0 END) approval_count,
+            SUM(CASE WHEN r.negotiation_plan_id IS NOT NULL THEN 1 ELSE 0 END) negotiation_count
+            FROM commercial_position_relationships r
+            WHERE r.bid_id=? GROUP BY r.position_id""",
+            (bid_id,),
+        ).fetchall()
+    return {
+        str(row["position_id"]): {
+            "risk_count": int(row["risk_count"] or 0),
+            "approval_count": int(row["approval_count"] or 0),
+            "negotiation_count": int(row["negotiation_count"] or 0),
+        }
+        for row in rows
+    }
+
+
+def _linked_position_labels(bid_id: str, target_column: str) -> dict[str, list[str]]:
+    allowed = {"risk_issue_id", "decision_case_id", "approval_route_id", "negotiation_plan_id"}
+    if target_column not in allowed:
+        raise ValueError("Unsupported commercial relationship target")
+    with db._conn() as conn:
+        rows = conn.execute(
+            f"""SELECT r.{target_column} target_id,tv.label
+            FROM commercial_position_relationships r
+            JOIN commercial_positions p ON p.position_id=r.position_id
+            JOIN commercial_position_versions pv ON pv.position_id=p.position_id
+                AND pv.version_number=p.current_version
+            JOIN commercial_topic_versions tv ON tv.topic_version_id=pv.topic_version_id
+            WHERE r.bid_id=? AND r.{target_column} IS NOT NULL
+            ORDER BY tv.label,r.link_id""",
+            (bid_id,),
+        ).fetchall()
+    result: dict[str, list[str]] = {}
+    for row in rows:
+        result.setdefault(str(row["target_id"]), []).append(str(row["label"]))
+    return result
+
+
+def _proposal_input_rows(bid_id: str) -> list[dict[str, str]]:
+    """Project proposal inputs from existing authoritative Bid records."""
+    rows: list[dict[str, str]] = []
+    for item in requirement_service.list_requirements(bid_id=bid_id, as_of_date=_working_date()):
+        rows.append(
+            {
+                "area": "Customer requirement",
+                "input": f"{item.title}: {item.statement}",
+                "response": item.response_text or "Proposed response not recorded",
+                "origin": item.requirement_id,
+                "href": f"/requirements/{quote(item.requirement_id)}",
+            }
+        )
+    for item in scope_repository.list_scope_items(bid_id):
+        rows.append(
+            {
+                "area": "Scope",
+                "input": f"{item.title}: {item.description}",
+                "response": item.offer_position.value.replace("_", " ").title(),
+                "origin": item.scope_item_id,
+                "href": f"/scope-items/{quote(item.scope_item_id)}",
+            }
+        )
+    for item in scope_repository.list_interfaces(bid_id):
+        rows.append(
+            {
+                "area": "Interface",
+                "input": item.title,
+                "response": (
+                    f"{item.upstream_party} to {item.downstream_party}: "
+                    f"{item.dependency_description}"
+                ),
+                "origin": item.interface_id,
+                "href": f"/interfaces/{quote(item.interface_id)}",
+            }
+        )
+    for package in vendor_document_repository.list_packages(bid_id):
+        evidence = vendor_document_repository.list_requirements(package.package_id)
+        confirmed = sum(
+            row.verification_status is VerificationStatus.CONFIRMED_COMPLIANT for row in evidence
+        )
+        rows.append(
+            {
+                "area": "Manufacturer coverage",
+                "input": f"{package.proposed_manufacturer}: {package.package_name}",
+                "response": (
+                    f"{confirmed} of {len(evidence)} vendor-document responsibilities confirmed"
+                ),
+                "origin": package.package_id,
+                "href": f"/vendor-documents/packages/{quote(package.package_id)}",
+            }
+        )
+    for item in ops08_repository.workspace(bid_id):
+        if item["disposition"] == PositionDisposition.NOT_REVIEWED:
+            continue
+        rows.append(
+            {
+                "area": "Commercial position",
+                "input": str(item["label"]),
+                "response": str(
+                    item["proposed_position"] or item["rationale"] or item["disposition"]
+                ),
+                "origin": f"Commercial position version {item['version_number']}",
+                "href": f"/commercial/{quote(str(item['position_id']))}",
+            }
+        )
+    for item in approval_repository.cases(bid_id):
+        rows.append(
+            {
+                "area": "Decision or approval",
+                "input": str(item["title"]),
+                "response": str(item["lifecycle_state"]).replace("_", " ").title(),
+                "origin": str(item["case_id"]),
+                "href": f"/decisions?bid_id={quote(bid_id)}",
+            }
+        )
+    for item in negotiation_repository.plans(bid_id):
+        rows.append(
+            {
+                "area": "Negotiation",
+                "input": str(item["title"]),
+                "response": str(item["applicability"]).replace("_", " ").title(),
+                "origin": str(item["plan_id"]),
+                "href": f"/negotiations?bid_id={quote(bid_id)}",
+            }
+        )
+    return rows
+
+
+def _my_day_bid_summaries(projection: object, bids: list[Bid]) -> list[dict[str, object]]:
+    """Aggregate attention into one deterministic primary summary per active Bid."""
+    attention_names = (
+        ("requirement_attention", "requirements"),
+        ("supplier_attention", "manufacturer coverage"),
+        ("deliverable_attention", "proposal inputs"),
+        ("commercial_attention", "commercial review"),
+        ("contract_risk_attention", "contract risks"),
+        ("approval_attention", "approvals"),
+    )
+    summaries: list[dict[str, object]] = []
+    for bid in bids:
+        if bid.status in {BidStatus.LOST, BidStatus.NO_BID, BidStatus.WON}:
+            continue
+        workspace = bid_control_center_service.workspace(bid.bid_id, as_of=_working_date())
+        grouped: dict[str, int] = {}
+        for attribute, label in attention_names:
+            count = sum(
+                1
+                for item in getattr(projection, attribute)
+                if (
+                    str(item.requirement.bid_id)
+                    if hasattr(item, "requirement")
+                    else str(item.get("bid_id", ""))
+                )
+                == bid.bid_id
+            )
+            if count:
+                grouped[label] = count
+        work = [
+            item
+            for item in work_item_repository.list(bid.bid_id)
+            if item.status not in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}
+        ]
+        if work:
+            grouped["My Work"] = len(work)
+        commercial_count = grouped.get("commercial review", 0)
+        if workspace.blockers:
+            primary = workspace.blockers[0].description
+        elif commercial_count:
+            primary = (
+                f"Commercial review incomplete — {commercial_count} topics require assessment."
+            )
+        elif work:
+            primary = sorted(work, key=lambda item: work_item_order_key(item, _working_date()))[
+                0
+            ].title
+        else:
+            primary = workspace.next_action
+        meaningful_dates = [bid.internal_due_date, bid.customer_due_date]
+        if bid.anticipated_award_date:
+            meaningful_dates.append(bid.anticipated_award_date)
+        summaries.append(
+            {
+                "bid": bid,
+                "stage": workspace.current_gate_label,
+                "status": "Ready"
+                if workspace.readiness.verdict.value == "clear"
+                else "Needs attention",
+                "primary": primary,
+                "counts": grouped,
+                "nearest_date": min(meaningful_dates),
+                "underlying_count": sum(grouped.values()) + len(workspace.blockers),
+            }
+        )
+    return summaries
+
+
 def _json_item(
     item: WorkItem | list[WorkItem],
     *,
@@ -872,6 +1098,7 @@ async def my_day(request: Request) -> HTMLResponse:
         bid_owners=bid_owners,
         award_handover_bids=[bid for bid in bids if bid.status is BidStatus.WON],
         archived_items=archived_items,
+        bid_summaries=_my_day_bid_summaries(projection, bids),
         category_labels=WORK_CATEGORY_LABELS,
         status_labels=WORK_ITEM_STATUS_LABELS,
     )
@@ -1184,9 +1411,11 @@ async def role_framework(request: Request) -> HTMLResponse:
     except RoleProfileOverlapError as exc:
         effective = None
         effective_error = str(exc)
+    profiles = role_profile_service.list_profiles()
     return render(
         "role_framework.html",
-        profiles=role_profile_service.list_profiles(),
+        profiles=profiles,
+        has_lineage=bool(profiles),
         effective=effective,
         effective_error=effective_error,
         domains=list(ResponsibilityDomain),
@@ -1277,6 +1506,12 @@ def _role_profile_form_values(
 
 @app.get("/role-framework/new", response_class=HTMLResponse)
 async def new_role_profile(request: Request) -> HTMLResponse:
+    profiles = role_profile_service.list_profiles()
+    if profiles:
+        preferred = next(
+            (profile for profile in profiles if profile.state.value == "PUBLISHED"), profiles[0]
+        )
+        return RedirectResponse(f"/role-framework/{quote(preferred.profile_id)}", status_code=303)
     return render(
         "role_profile_detail.html",
         **_role_profile_detail_context(None),
@@ -2080,6 +2315,20 @@ async def link_requirement_work(requirement_id: str, request: Request) -> Redire
 
 
 def _work_source_context(source_kind: str, source_id: str) -> dict[str, object]:
+    if source_kind == "commercial":
+        try:
+            position = ops08_repository.detail(source_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Work source not found") from exc
+        bid_id = str(position["bid_id"])
+        return {
+            "source_kind": source_kind,
+            "source_id": source_id,
+            "source_label": str(position["label"]),
+            "bid_id": bid_id,
+            "bid": bid_repository.get_bid(bid_id),
+            "categories": list(WorkCategory),
+        }
     sources = {
         "requirement": (requirement_repository.get, "title"),
         "scope": (scope_repository.get_scope_item, "title"),
@@ -2104,10 +2353,22 @@ def _work_source_context(source_kind: str, source_id: str) -> dict[str, object]:
 
 
 @app.get("/work/from/{source_kind}/{source_id}", response_class=HTMLResponse)
-async def contextual_work_form(source_kind: str, source_id: str) -> HTMLResponse:
+async def contextual_work_form(
+    source_kind: str, source_id: str, return_to_bid: bool = False
+) -> HTMLResponse:
+    context = _work_source_context(source_kind, source_id)
+    section = (
+        BidWorkspaceSection.COMMERCIAL_CONTRACT
+        if source_kind == "commercial"
+        else BidWorkspaceSection.MANUFACTURERS_COVERAGE
+        if source_kind == "manufacturer"
+        else BidWorkspaceSection.REQUIREMENTS_SCOPE
+    )
     return render(
         "contextual_work.html",
-        **_work_source_context(source_kind, source_id),
+        **context,
+        bid_return_path=workspace_path(str(context["bid_id"]), section),
+        return_to_bid=return_to_bid,
         error=None,
         entered={},
     )
@@ -2118,7 +2379,12 @@ async def create_contextual_work(source_kind: str, source_id: str, request: Requ
     form = dict(await request.form())
     context = _work_source_context(source_kind, source_id)
     try:
-        ops07w_repository.create_linked_work(
+        create_work = (
+            ops08_repository.create_linked_work
+            if source_kind == "commercial"
+            else ops07w_repository.create_linked_work
+        )
+        create_work(
             source_kind=source_kind,
             source_id=source_id,
             title=str(form.get("title") or ""),
@@ -2144,7 +2410,17 @@ async def create_contextual_work(source_kind: str, source_id: str, request: Requ
         "scope": f"/scope-items/{quote(source_id)}?bid_id={quote(str(context['bid_id']))}",
         "interface": f"/interfaces/{quote(source_id)}?bid_id={quote(str(context['bid_id']))}",
         "manufacturer": f"/vendor-documents/packages/{quote(source_id)}",
+        "commercial": f"/commercial/{quote(source_id)}",
     }
+    if form.get("return_to_bid") == "1":
+        section = (
+            BidWorkspaceSection.COMMERCIAL_CONTRACT
+            if source_kind == "commercial"
+            else BidWorkspaceSection.MANUFACTURERS_COVERAGE
+            if source_kind == "manufacturer"
+            else BidWorkspaceSection.REQUIREMENTS_SCOPE
+        )
+        return_paths[source_kind] = workspace_path(str(context["bid_id"]), section)
     return RedirectResponse(return_paths[source_kind], status_code=303)
 
 
@@ -2528,11 +2804,46 @@ def _bid_workspace_context(
         workspace.readiness.verdict.value,
         workspace.bid.bc_owner,
     )
+    commercial_positions = ops08_repository.workspace(bid_id)
+    link_counts = _position_link_counts(bid_id)
+    for position in commercial_positions:
+        position.update(
+            link_counts.get(
+                str(position["position_id"]),
+                {"risk_count": 0, "approval_count": 0, "negotiation_count": 0},
+            )
+        )
+    package_rows = []
+    for package in vendor_document_repository.list_packages(bid_id):
+        package_requirements = vendor_document_repository.list_requirements(package.package_id)
+        package_rows.append(
+            {
+                "package": package,
+                "requirements": package_requirements,
+                "readiness": vendor_document_service.readiness(package.package_id),
+                "linked_customer_requirements": sum(
+                    len(
+                        ops07w_repository.package_requirement_evidence(package.package_id).get(
+                            row.requirement_id, []
+                        )
+                    )
+                    for row in package_requirements
+                ),
+            }
+        )
     context: dict[str, object] = {
         "workspace": workspace,
         "bid": workspace.bid,
         "readiness": workspace.readiness,
         "section": section,
+        "bid_section_label": {
+            BidWorkspaceSection.OVERVIEW: "Overview & Plan",
+            BidWorkspaceSection.REQUIREMENTS_SCOPE: "Requirements & Scope",
+            BidWorkspaceSection.MANUFACTURERS_COVERAGE: "Manufacturers & Coverage",
+            BidWorkspaceSection.COMMERCIAL_CONTRACT: "Commercial & Contract",
+            BidWorkspaceSection.PROPOSAL_NEGOTIATION: "Proposal & Negotiation",
+            BidWorkspaceSection.AWARD_HANDOVER: "Award & Handover",
+        }[section],
         "workspace_sections": list(BidWorkspaceSection),
         "requirements": requirements,
         "coverage": requirement_service.coverage(bid_id=bid_id, as_of_date=as_of_date),
@@ -2540,7 +2851,12 @@ def _bid_workspace_context(
         "scope_items": scope_items,
         "interfaces": scope_repository.list_interfaces(bid_id),
         "scope_projection": scope_service.projection(bid_id, as_of_date),
+        "scope_areas": list(ScopeArea),
+        "offer_positions": list(OfferPosition),
+        "pricing_states": list(PricingState),
+        "materialities": list(Materiality),
         "vendor_packages": vendor_document_repository.list_packages(bid_id),
+        "manufacturer_packages": package_rows,
         "supplier_metrics": supplier_service.metrics(bid_id),
         "commercial_metrics": commercial_service.metrics(
             bid_id,
@@ -2555,6 +2871,10 @@ def _bid_workspace_context(
         "deliverable_metrics": deliverable_service.metrics(bid_id, as_of_date),
         "proposal_metrics": proposal_service.metrics(bid_id),
         "negotiation_metrics": negotiation_service.metrics(bid_id),
+        "commercial_positions": commercial_positions,
+        "commercial_position_readiness": ops08_repository.readiness(bid_id),
+        "commercial_dispositions": list(PositionDisposition),
+        "proposal_inputs": _proposal_input_rows(bid_id),
         "ops07_error": None,
         "ops07_entered": {},
         "selected_requirement_targets": [],
@@ -2770,7 +3090,7 @@ async def create_scope_item_browser(request: Request) -> Response:
                 **{
                     key: value
                     for key, value in form.items()
-                    if value not in ("", None) and key != "requirement_id"
+                    if value not in ("", None) and key not in {"requirement_id", "origin_section"}
                 },
                 "created_at": now,
                 "updated_at": now,
@@ -2794,7 +3114,9 @@ async def create_scope_item_browser(request: Request) -> Response:
         )
     origin_requirement = str(form.get("requirement_id") or "")
     location = (
-        f"/requirements/{quote(origin_requirement)}#coverage"
+        f"/bids/{quote(bid_id)}/requirements-scope#scope-and-interfaces"
+        if form.get("origin_section") == "bid"
+        else f"/requirements/{quote(origin_requirement)}#coverage"
         if origin_requirement
         else f"/scope-items/{quote(item.scope_item_id)}?bid_id={quote(bid_id)}"
     )
@@ -2813,7 +3135,7 @@ async def create_interface_browser(request: Request) -> Response:
                 **{
                     key: value
                     for key, value in form.items()
-                    if value not in ("", None) and key != "scope_item_id"
+                    if value not in ("", None) and key not in {"scope_item_id", "origin_section"}
                 },
                 "created_at": now,
                 "updated_at": now,
@@ -2835,9 +3157,12 @@ async def create_interface_browser(request: Request) -> Response:
                 entered=form,
             ),
         )
-    return RedirectResponse(
-        f"/interfaces/{quote(record.interface_id)}?bid_id={quote(bid_id)}", status_code=303
+    location = (
+        f"/bids/{quote(bid_id)}/requirements-scope#scope-and-interfaces"
+        if form.get("origin_section") == "bid"
+        else f"/interfaces/{quote(record.interface_id)}?bid_id={quote(bid_id)}"
     )
+    return RedirectResponse(location, status_code=303)
 
 
 @app.get("/deliverables", response_class=HTMLResponse)
@@ -3064,7 +3389,11 @@ async def create_vendor_package(request: Request) -> HTMLResponse:
     try:
         package = vendor_document_service.create_package(
             SupplierPackageCreate.model_validate(
-                {key: value for key, value in form.items() if value not in ("", None)}
+                {
+                    key: value
+                    for key, value in form.items()
+                    if value not in ("", None) and key != "origin_section"
+                }
             ),
             LOCAL_ACTOR,
         )
@@ -3073,13 +3402,19 @@ async def create_vendor_package(request: Request) -> HTMLResponse:
             "vendor_documents.html",
             status_code=422,
             **_vdrl_dashboard_context(
+                bid_id=str(form.get("bid_id") or "") or None,
                 error=validation_error_message(exc)
                 if isinstance(exc, ValidationError)
                 else str(exc),
                 entered=form,
             ),
         )
-    return RedirectResponse(f"/vendor-documents/packages/{package.package_id}", status_code=303)
+    location = (
+        f"/bids/{quote(package.bid_id)}/manufacturers-coverage#manufacturer-packages"
+        if form.get("origin_section") == "bid"
+        else f"/vendor-documents/packages/{package.package_id}"
+    )
+    return RedirectResponse(location, status_code=303)
 
 
 def _vdrl_package_context(
@@ -3369,8 +3704,14 @@ async def vendor_document_handover(package_id: str) -> Response:
     )
 
 
-@app.get("/commercial", response_class=HTMLResponse)
-async def commercial_register(bid_id: str | None = None, as_of: str | None = None) -> HTMLResponse:
+def _commercial_browser_context(
+    bid_id: str | None,
+    as_of: str | None,
+    *,
+    form_error: str | None = None,
+    entered: dict[str, object] | None = None,
+    selected_position_targets: list[str] | None = None,
+) -> dict[str, object]:
     projection_date = _parse_as_of(as_of)
     scope_rows = [
         dict(row)
@@ -3380,26 +3721,298 @@ async def commercial_register(bid_id: str | None = None, as_of: str | None = Non
         )
         .fetchall()
     ]
-    return render(
-        "commercial.html",
-        commercial_items=commercial_service.list(bid_id),
-        bids=bid_repository.list_bids(),
-        bid_id=bid_id or "",
-        gaps=commercial_service.gaps(bid_id, projection_date, scope_rows),
-        metrics=commercial_service.metrics(bid_id, projection_date, scope_rows),
-        commercial_categories=list(CommercialCategory),
-        basis_roles=list(BasisRole),
+    return {
+        "positions": ops08_repository.workspace(bid_id) if bid_id else [],
+        "commercial_readiness": ops08_repository.readiness(bid_id)
+        if bid_id
+        else {"state": "NOT_STARTED", "blockers": [], "total": 0, "reviewed": 0},
+        "commercial_items": commercial_service.list(bid_id),
+        "bids": bid_repository.list_bids(),
+        "bid_id": bid_id or "",
+        "gaps": commercial_service.gaps(bid_id, projection_date, scope_rows),
+        "metrics": commercial_service.metrics(bid_id, projection_date, scope_rows),
+        "commercial_categories": list(CommercialCategory),
+        "basis_roles": list(BasisRole),
+        "form_error": form_error,
+        "entered": entered or {},
+        "selected_position_targets": selected_position_targets or [],
         **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
-    )
+    }
+
+
+@app.get("/commercial", response_class=HTMLResponse)
+async def commercial_register(bid_id: str | None = None, as_of: str | None = None) -> HTMLResponse:
+    return render("commercial.html", **_commercial_browser_context(bid_id, as_of))
 
 
 @app.get("/commercial/{commercial_item_id}", response_class=HTMLResponse)
-async def commercial_detail(commercial_item_id: str) -> HTMLResponse:
+async def commercial_detail(
+    commercial_item_id: str,
+    form_state: str | None = None,
+    source_error: str | None = None,
+) -> HTMLResponse:
+    if commercial_item_id.startswith("CP-"):
+        try:
+            detail = ops08_repository.detail(commercial_item_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        with db._conn() as conn:
+            sources = [
+                dict(row)
+                for row in conn.execute(
+                    """SELECT v.document_version_id,
+                    COALESCE(d.control_title,d.filename) AS title,v.version_label
+                    FROM document_versions v
+                    JOIN documents d ON d.id=v.document_id
+                    WHERE d.bid_id=? ORDER BY title,v.version_label""",
+                    (detail["bid_id"],),
+                ).fetchall()
+            ]
+        entered: dict[str, str] = {}
+        if form_state:
+            saved = _commercial_form_states.get(form_state)
+            if saved and (datetime.now(UTC) - saved[0]).total_seconds() <= 3600:
+                entered = saved[1]
+        return render(
+            "commercial_position_detail.html",
+            position=detail,
+            sources=sources,
+            dispositions=list(PositionDisposition),
+            negotiation_states=list(CommercialNegotiationState),
+            risks=contract_risk_service.list(str(detail["bid_id"])),
+            bid=bid_repository.get_bid(str(detail["bid_id"])),
+            error=source_error,
+            entered=entered,
+            source_operation_token=(
+                entered.get("source_operation_token")
+                or _new_source_operation_token(str(detail["bid_id"]))
+            ),
+            source_registered=bool(entered.get("source_document_version_id")),
+        )
     try:
         detail = commercial_service.detail(commercial_item_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return render("commercial_detail.html", **detail)
+
+
+@app.post("/commercial/positions/{position_id}/with-source", response_class=HTMLResponse)
+async def register_commercial_source(position_id: str, request: Request) -> Response:
+    raw = await request.form()
+    submitted = dict(raw)
+    form = {
+        key: str(value)
+        for key, value in submitted.items()
+        if not isinstance(value, StarletteUploadFile)
+    }
+    upload = submitted.get("new_source_file")
+    try:
+        detail = ops08_repository.detail(position_id)
+        bid_id = str(detail["bid_id"])
+        if not isinstance(upload, StarletteUploadFile) or not upload.filename:
+            raise ValueError("Choose the customer source file before registering it")
+        operation_id = _source_operation_id(str(form.get("source_operation_token") or ""), bid_id)
+        _document, version = document_service.register_document_idempotent(
+            operation_id,
+            {
+                "bid_id": bid_id,
+                "title": str(form.get("new_source_title") or ""),
+                "category": DocumentCategory.SPECIFICATION,
+                "version_label": str(form.get("new_source_version_label") or "Revision 0"),
+            },
+            upload.file,
+            upload.filename,
+            upload.content_type,
+            LOCAL_ACTOR,
+        )
+        form["source_document_version_id"] = version.document_version_id
+        token = uuid.uuid4().hex
+        if len(_commercial_form_states) >= 100:
+            oldest = min(_commercial_form_states, key=lambda key: _commercial_form_states[key][0])
+            _commercial_form_states.pop(oldest, None)
+        _commercial_form_states[token] = (datetime.now(UTC), form)
+    except (ValueError, sqlite3.Error, OSError) as exc:
+        token = uuid.uuid4().hex
+        _commercial_form_states[token] = (datetime.now(UTC), form)
+        return RedirectResponse(
+            f"/commercial/{quote(position_id)}?form_state={quote(token)}"
+            f"&source_error={quote(str(exc))}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/commercial/{quote(position_id)}?form_state={quote(token)}", status_code=303
+    )
+
+
+@app.post("/commercial/positions/{position_id}/risk-links", response_class=HTMLResponse)
+async def link_commercial_risk(position_id: str, request: Request) -> Response:
+    form = dict(await request.form())
+    try:
+        ops08_repository.link(
+            position_id,
+            "risk",
+            str(form.get("risk_id") or ""),
+            str(form.get("relation") or "EXPOSURE"),
+            LOCAL_ACTOR,
+        )
+    except (ValueError, sqlite3.Error) as exc:
+        try:
+            detail = ops08_repository.detail(position_id)
+        except ValueError as missing:
+            raise HTTPException(status_code=404, detail=str(missing)) from missing
+        with db._conn() as conn:
+            sources = [
+                dict(row)
+                for row in conn.execute(
+                    """SELECT v.document_version_id,
+                    COALESCE(d.control_title,d.filename) AS title,v.version_label
+                    FROM document_versions v JOIN documents d ON d.id=v.document_id
+                    WHERE d.bid_id=? ORDER BY title,v.version_label""",
+                    (detail["bid_id"],),
+                ).fetchall()
+            ]
+        return render(
+            "commercial_position_detail.html",
+            status_code=422,
+            position=detail,
+            sources=sources,
+            dispositions=list(PositionDisposition),
+            negotiation_states=list(CommercialNegotiationState),
+            risks=contract_risk_service.list(str(detail["bid_id"])),
+            bid=bid_repository.get_bid(str(detail["bid_id"])),
+            error=str(exc),
+            entered={},
+        )
+    return RedirectResponse(f"/commercial/{quote(position_id)}", status_code=303)
+
+
+@app.post("/commercial/positions/{position_id}", response_class=HTMLResponse)
+async def revise_commercial_position(position_id: str, request: Request) -> Response:
+    form = dict(await request.form())
+    try:
+        current = ops08_repository.detail(position_id)
+        source_fields = {
+            "expected_version",
+            "source_operation_token",
+            "new_source_title",
+            "new_source_version_label",
+            "new_source_file",
+        }
+        revision = PositionRevision.model_validate(
+            {key: value or None for key, value in form.items() if key not in source_fields}
+        )
+        ops08_repository.revise(
+            position_id,
+            int(form.get("expected_version", 0)),
+            revision,
+            LOCAL_ACTOR,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        try:
+            current = ops08_repository.detail(position_id)
+        except ValueError as missing:
+            raise HTTPException(status_code=404, detail=str(missing)) from missing
+        with db._conn() as conn:
+            sources = [
+                dict(row)
+                for row in conn.execute(
+                    """SELECT v.document_version_id,
+                    COALESCE(d.control_title,d.filename) AS title,v.version_label
+                    FROM document_versions v JOIN documents d ON d.id=v.document_id
+                    WHERE d.bid_id=? ORDER BY title,v.version_label""",
+                    (current["bid_id"],),
+                ).fetchall()
+            ]
+        return render(
+            "commercial_position_detail.html",
+            status_code=422,
+            position=current,
+            sources=sources,
+            dispositions=list(PositionDisposition),
+            negotiation_states=list(CommercialNegotiationState),
+            risks=contract_risk_service.list(str(current["bid_id"])),
+            bid=bid_repository.get_bid(str(current["bid_id"])),
+            error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+            entered=form,
+        )
+    return RedirectResponse(f"/commercial/{quote(position_id)}", status_code=303)
+
+
+@app.get("/commercial-qualifications.csv")
+async def commercial_qualifications_csv(bid_id: str) -> Response:
+    if bid_repository.get_bid(bid_id) is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    return Response(
+        ops08_repository.qualifications_csv(bid_id),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="qualifications-{bid_id}.csv"'},
+    )
+
+
+@app.get("/commercial-qualifications", response_class=HTMLResponse)
+async def commercial_qualifications(bid_id: str) -> HTMLResponse:
+    bid = bid_repository.get_bid(bid_id)
+    if bid is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    rows = [
+        row
+        for row in ops08_repository.workspace(bid_id)
+        if row["disposition"] in {"QUALIFY", "REJECT"}
+    ]
+    return render("commercial_qualifications.html", bid=bid, rows=rows)
+
+
+@app.get("/commercial-proposal-input.csv")
+async def commercial_proposal_input_csv(bid_id: str) -> Response:
+    if bid_repository.get_bid(bid_id) is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    return Response(
+        ops08_repository.proposal_input_csv(bid_id),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="proposal-input-{bid_id}.csv"'},
+    )
+
+
+@app.get("/commercial-unresolved-actions.csv")
+async def commercial_unresolved_actions_csv(bid_id: str) -> Response:
+    if bid_repository.get_bid(bid_id) is None:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    return Response(
+        ops08_repository.unresolved_actions_csv(bid_id),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="commercial-actions-{bid_id}.csv"'},
+    )
+
+
+@app.post("/commercial/bulk-owner", response_class=HTMLResponse)
+async def commercial_bulk_owner(request: Request) -> Response:
+    form = await request.form()
+    bid_id = str(form.get("bid_id") or "")
+    try:
+        targets: list[tuple[str, int]] = []
+        for encoded in form.getlist("position_target"):
+            position_id, separator, version = str(encoded).partition("|")
+            if not separator:
+                raise ValueError("invalid commercial position selection")
+            targets.append((position_id, int(version)))
+        ops08_repository.bulk_assign_owner(
+            bid_id, targets, str(form.get("owner") or ""), LOCAL_ACTOR
+        )
+    except (ValueError, ValidationError, sqlite3.Error) as exc:
+        return render(
+            "commercial.html",
+            status_code=422,
+            **_commercial_browser_context(
+                bid_id,
+                None,
+                form_error=(
+                    validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc)
+                ),
+                entered={"owner": str(form.get("owner") or "")},
+                selected_position_targets=[str(value) for value in form.getlist("position_target")],
+            ),
+        )
+    return RedirectResponse(f"/commercial?bid_id={quote(bid_id)}", status_code=303)
 
 
 @app.post("/commercial", response_class=HTMLResponse)
@@ -3413,6 +4026,7 @@ async def commercial_author(request: Request) -> Response:
             if not default_owner:
                 raise ValueError("Assign a default owner before initializing commercial factors")
             commercial_service.initialize_standard(bid_id, LOCAL_ACTOR, default_owner)
+            ops08_repository.initialize(bid_id, default_owner, LOCAL_ACTOR)
         else:
             now = datetime.now(UTC)
             commercial_service.create(
@@ -3546,9 +4160,19 @@ async def review_commercial(commercial_item_id: str, request: Request) -> JSONRe
 
 @app.get("/contract-risks", response_class=HTMLResponse)
 async def contract_risks_register(
-    bid_id: str | None = None, as_of: str | None = None
+    bid_id: str | None = None,
+    as_of: str | None = None,
+    position_id: str | None = None,
+    topic: str | None = None,
 ) -> HTMLResponse:
     projection_date = _parse_as_of(as_of)
+    contextual_position = None
+    context_error = None
+    if position_id:
+        try:
+            contextual_position = _position_context(position_id, bid_id or "")
+        except ValueError as exc:
+            context_error = str(exc)
     return render(
         "contract_risks.html",
         issues=contract_risk_service.list(bid_id),
@@ -3557,6 +4181,9 @@ async def contract_risks_register(
         gaps=contract_risk_service.gaps(bid_id, projection_date),
         metrics=contract_risk_service.metrics(bid_id, projection_date),
         risk_categories=list(RiskCategory),
+        contextual_position=contextual_position,
+        form_error=context_error,
+        entered={"title": topic or "", "position_id": position_id or ""},
         **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
 
@@ -3566,24 +4193,37 @@ async def contract_risk_author(request: Request) -> Response:
     form = dict(await request.form())
     bid_id = str(form.get("bid_id", ""))
     try:
-        bid_repository.get_bid(bid_id)
+        if bid_repository.get_bid(bid_id) is None:
+            raise ValueError("Bid not found")
+        position_id = str(form.get("position_id") or "")
+        if position_id:
+            _position_context(position_id, bid_id)
+            if form.get("confirm_authoritative") != "on":
+                raise ValueError("Confirm creation of the authoritative contract risk")
         now = datetime.now(UTC)
-        contract_risk_service.create(
-            ContractIssue(
-                bid_id=bid_id,
-                issue_code=str(form.get("issue_code", "")),
-                title=str(form.get("title", "")),
-                summary=str(form.get("summary", "")),
-                owner=str(form.get("owner") or "") or None,
-                provenance=Provenance.from_human(LOCAL_ACTOR),
-                created_at=now,
-                updated_at=now,
-                created_by=LOCAL_ACTOR,
-            ),
-            LOCAL_ACTOR,
+        issue = ContractIssue(
+            bid_id=bid_id,
+            issue_code=str(form.get("issue_code", "")),
+            title=str(form.get("title", "")),
+            summary=str(form.get("summary", "")),
+            owner=str(form.get("owner") or "") or None,
+            provenance=Provenance.from_human(LOCAL_ACTOR),
+            created_at=now,
+            updated_at=now,
+            created_by=LOCAL_ACTOR,
         )
+        contract_risk_service.create(issue, LOCAL_ACTOR)
+        if position_id:
+            ops08_repository.link(position_id, "risk", issue.issue_id, "EXPOSURE", LOCAL_ACTOR)
     except (ValidationError, ValueError, sqlite3.Error) as exc:
         projection_date = date.today()
+        error_position = None
+        error_position_id = str(form.get("position_id") or "")
+        if error_position_id:
+            try:
+                error_position = _position_context(error_position_id, bid_id)
+            except ValueError:
+                pass
         return render(
             "contract_risks.html",
             status_code=422,
@@ -3593,11 +4233,16 @@ async def contract_risk_author(request: Request) -> Response:
             gaps=contract_risk_service.gaps(bid_id or None, projection_date),
             metrics=contract_risk_service.metrics(bid_id or None, projection_date),
             risk_categories=list(RiskCategory),
+            contextual_position=error_position,
             form_error=validation_error_message(exc)
             if isinstance(exc, ValidationError)
             else str(exc),
             entered=form,
             **_bid_return_context(bid_id or None, BidWorkspaceSection.COMMERCIAL_CONTRACT),
+        )
+    if form.get("position_id"):
+        return RedirectResponse(
+            f"/bids/{quote(bid_id)}/commercial-contract#commercial", status_code=303
         )
     return RedirectResponse(f"/contract-risks?bid_id={quote(bid_id)}#author", status_code=303)
 
@@ -3608,11 +4253,29 @@ async def contract_risk_detail(issue_id: str) -> HTMLResponse:
         detail = contract_risk_service.detail(issue_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return render("contract_risk_detail.html", **detail)
+    return render(
+        "contract_risk_detail.html",
+        **detail,
+        bid_return_path=workspace_path(
+            str(detail["issue"]["bid_id"]), BidWorkspaceSection.COMMERCIAL_CONTRACT
+        ),
+        linked_commercial_positions=_linked_position_labels(
+            str(detail["issue"]["bid_id"]), "risk_issue_id"
+        ).get(issue_id, []),
+    )
 
 
 @app.get("/decisions", response_class=HTMLResponse)
-async def decisions_register(bid_id: str | None = None) -> HTMLResponse:
+async def decisions_register(
+    bid_id: str | None = None, position_id: str | None = None
+) -> HTMLResponse:
+    contextual_position = None
+    context_error = None
+    if position_id:
+        try:
+            contextual_position = _position_context(position_id, bid_id or "")
+        except ValueError as exc:
+            context_error = str(exc)
     return render(
         "decisions.html",
         bids=bid_repository.list_bids(),
@@ -3623,11 +4286,24 @@ async def decisions_register(bid_id: str | None = None) -> HTMLResponse:
         gate_approvals=bid_repository.list_approvals(bid_id) if bid_id else [],
         approval_types=list(ApprovalType),
         decision_types=list(DecisionType),
+        linked_position_labels=(
+            _linked_position_labels(bid_id, "decision_case_id") if bid_id else {}
+        ),
+        contextual_position=contextual_position,
+        form_error=context_error,
+        entered={"position_id": position_id or ""},
         **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
 
 
 def _decisions_error(bid_id: str, entered: dict[str, object], exc: Exception) -> HTMLResponse:
+    position_id = str(entered.get("position_id") or "")
+    contextual_position = None
+    if position_id:
+        try:
+            contextual_position = _position_context(position_id, bid_id)
+        except ValueError:
+            pass
     return render(
         "decisions.html",
         status_code=422,
@@ -3639,6 +4315,10 @@ def _decisions_error(bid_id: str, entered: dict[str, object], exc: Exception) ->
         gate_approvals=bid_repository.list_approvals(bid_id) if bid_id else [],
         approval_types=list(ApprovalType),
         decision_types=list(DecisionType),
+        contextual_position=contextual_position,
+        linked_position_labels=(
+            _linked_position_labels(bid_id, "decision_case_id") if bid_id else {}
+        ),
         form_error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
         entered=entered,
         **_bid_return_context(bid_id or None, BidWorkspaceSection.COMMERCIAL_CONTRACT),
@@ -3681,23 +4361,35 @@ async def create_decision_case_html(request: Request) -> Response:
     form = dict(await request.form())
     bid_id = str(form.get("bid_id", ""))
     try:
-        bid_repository.get_bid(bid_id)
+        if bid_repository.get_bid(bid_id) is None:
+            raise ValueError("Bid not found")
+        position_id = str(form.get("position_id") or "")
+        if position_id:
+            _position_context(position_id, bid_id)
+            if form.get("confirm_authoritative") != "on":
+                raise ValueError("Confirm creation of the authoritative approval request")
         now = datetime.now(UTC)
-        approval_service.create_case(
-            DecisionCase(
-                bid_id=bid_id,
-                case_code=str(form.get("case_code", "")),
-                decision_type=DecisionType(str(form.get("decision_type", ""))),
-                title=str(form.get("title", "")),
-                owner=str(form.get("owner", "")),
-                created_by=LOCAL_ACTOR,
-                created_at=now,
-                provenance=Provenance.from_human(LOCAL_ACTOR),
-            ),
-            LOCAL_ACTOR,
+        case = DecisionCase(
+            bid_id=bid_id,
+            case_code=str(form.get("case_code", "")),
+            decision_type=DecisionType(str(form.get("decision_type", ""))),
+            title=str(form.get("title", "")),
+            owner=str(form.get("owner", "")),
+            created_by=LOCAL_ACTOR,
+            created_at=now,
+            provenance=Provenance.from_human(LOCAL_ACTOR),
         )
+        approval_service.create_case(case, LOCAL_ACTOR)
+        if position_id:
+            ops08_repository.link(
+                position_id, "decision", case.case_id, "APPROVAL_FOR", LOCAL_ACTOR
+            )
     except (ValidationError, ValueError, sqlite3.Error) as exc:
         return _decisions_error(bid_id, form, exc)
+    if form.get("position_id"):
+        return RedirectResponse(
+            f"/bids/{quote(bid_id)}/commercial-contract#commercial", status_code=303
+        )
     return RedirectResponse(f"/decisions?bid_id={quote(bid_id)}#decision-case", status_code=303)
 
 
@@ -3866,13 +4558,89 @@ async def select_scenario_baseline(request: Request) -> JSONResponse:
 
 
 @app.get("/negotiations", response_class=HTMLResponse)
-async def negotiations_register(bid_id: str | None = None) -> HTMLResponse:
+async def negotiations_register(
+    bid_id: str | None = None, position_id: str | None = None
+) -> HTMLResponse:
+    contextual_position = None
+    context_error = None
+    if position_id:
+        try:
+            contextual_position = _position_context(position_id, bid_id or "")
+        except ValueError as exc:
+            context_error = str(exc)
     return render(
         "negotiations.html",
         plans=negotiation_repository.plans(bid_id),
         metrics=negotiation_service.metrics(bid_id),
         bid_id=bid_id or "",
-        **_bid_return_context(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
+        contextual_position=contextual_position,
+        linked_position_labels=(
+            _linked_position_labels(bid_id, "negotiation_plan_id") if bid_id else {}
+        ),
+        form_error=context_error,
+        entered={"position_id": position_id or ""},
+        **_bid_return_context(
+            bid_id,
+            BidWorkspaceSection.COMMERCIAL_CONTRACT
+            if position_id
+            else BidWorkspaceSection.PROPOSAL_NEGOTIATION,
+        ),
+    )
+
+
+@app.post("/negotiations/plans", response_class=HTMLResponse)
+async def create_negotiation_plan_html(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id") or "")
+    position_id = str(form.get("position_id") or "")
+    try:
+        if bid_repository.get_bid(bid_id) is None:
+            raise ValueError("Bid not found")
+        position = _position_context(position_id, bid_id) if position_id else None
+        if position_id and form.get("confirm_authoritative") != "on":
+            raise ValueError("Confirm creation of the authoritative negotiation plan")
+        plan = NegotiationPlan(
+            bid_id=bid_id,
+            code=str(form.get("code") or ""),
+            applicability="NEGOTIATION_REQUIRED",
+            title=str(form.get("title") or (position or {}).get("label") or ""),
+            owner=str(form.get("owner") or ""),
+            created_by=LOCAL_ACTOR,
+            created_at=datetime.now(UTC),
+        )
+        negotiation_service.create_plan(plan, LOCAL_ACTOR)
+        if position_id:
+            ops08_repository.link(
+                position_id, "negotiation", plan.plan_id, "NEGOTIATES", LOCAL_ACTOR
+            )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        error_position = None
+        if position_id:
+            try:
+                error_position = _position_context(position_id, bid_id)
+            except ValueError:
+                pass
+        return render(
+            "negotiations.html",
+            status_code=422,
+            plans=negotiation_repository.plans(bid_id or None),
+            metrics=negotiation_service.metrics(bid_id or None),
+            bid_id=bid_id,
+            contextual_position=error_position,
+            linked_position_labels=(
+                _linked_position_labels(bid_id, "negotiation_plan_id") if bid_id else {}
+            ),
+            form_error=validation_error_message(exc)
+            if isinstance(exc, ValidationError)
+            else str(exc),
+            entered=form,
+            **_bid_return_context(bid_id or None, BidWorkspaceSection.COMMERCIAL_CONTRACT),
+        )
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/commercial-contract#commercial"
+        if position_id
+        else f"/negotiations?bid_id={quote(bid_id)}",
+        status_code=303,
     )
 
 
@@ -4179,6 +4947,9 @@ async def supplier_detail(supplier_id: str) -> HTMLResponse:
         "supplier_detail.html",
         supplier=supplier,
         requests=[row for row in supplier_service.requests() if row["supplier_id"] == supplier_id],
+        bid_return_path=workspace_path(
+            str(supplier["bid_id"]), BidWorkspaceSection.MANUFACTURERS_COVERAGE
+        ),
     )
 
 
