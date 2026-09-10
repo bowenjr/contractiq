@@ -1,0 +1,63 @@
+{
+  "schema_id": "urn:proposal-studio:contract:proposal-generation-manifest:v1",
+  "schema_version": "1.0.0",
+  "proposal_id": "PROP-2026-0104",
+  "proposal_revision": "A",
+  "source_proposal_package": {
+    "package_id": "PPK-BID-2026-0042-R3",
+    "sha256": "f087af73dc3306d0ca174ffaa6df464f5c6102a86929926a038797e9b71b310b"
+  },
+  "template": {
+    "template_id": "TPL-MAJOR-PROJECTS",
+    "template_version": 3
+  },
+  "generation_application": {
+    "name": "Proposal Studio",
+    "version": "0.1.0"
+  },
+  "generated_at": "2026-09-08T10:45:00Z",
+  "generated_files": {
+    "docx": {
+      "filename": "PROP-2026-0104_Rev_A.docx",
+      "sha256": "1818181818181818181818181818181818181818181818181818181818181818"
+    },
+    "pdf": {
+      "filename": "PROP-2026-0104_Rev_A.pdf",
+      "sha256": "1919191919191919191919191919191919191919191919191919191919191919"
+    }
+  },
+  "included_sections": [
+    {"order": 10, "section_key": "cover", "title": "Cover"},
+    {"order": 20, "section_key": "executive_summary", "title": "Executive Summary"},
+    {"order": 30, "section_key": "scope", "title": "Scope of Supply"},
+    {"order": 40, "section_key": "commercial", "title": "Commercial Terms"},
+    {"order": 50, "section_key": "qualifications", "title": "Qualifications and Deviations"}
+  ],
+  "excluded_sections": [
+    {"order": 60, "section_key": "optional_appendix", "title": "Optional Appendix", "reason": "Not applicable to this proposal revision."}
+  ],
+  "manual_narratives": [
+    {
+      "section_key": "executive_summary",
+      "content_sha256": "2020202020202020202020202020202020202020202020202020202020202020"
+    }
+  ],
+  "manual_overrides": [
+    {
+      "target_path": "delivery_commitments.DEL-0001.commitment_text",
+      "source_value_sha256": "2121212121212121212121212121212121212121212121212121212121212121",
+      "override_value_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "reason": "Customer-facing wording clarified without changing the underlying source commitment."
+    }
+  ],
+  "warnings": [
+    {
+      "severity": "WARNING",
+      "code": "SOURCE_AGE",
+      "message": "One supplier commitment was reviewed and accepted despite exceeding the configured freshness threshold.",
+      "target": "manufacturer_packages.PKG-0001"
+    }
+  ],
+  "unresolved_placeholders": [],
+  "generation_status": "SUCCEEDED_WITH_WARNINGS"
+}

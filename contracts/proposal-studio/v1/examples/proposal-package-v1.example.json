@@ -1,0 +1,284 @@
+{
+  "schema_id": "urn:proposal-studio:contract:proposal-package:v1",
+  "schema_version": "1.0.0",
+  "package_id": "PPK-BID-2026-0042-R3",
+  "source_application": {
+    "name": "ContractIQ",
+    "version": "0.9.0"
+  },
+  "generated_at": "2026-09-08T10:30:00Z",
+  "bid": {
+    "bid_id": "BID-2026-0042",
+    "bid_revision": 3,
+    "name": "North Plant Electrical Distribution Package",
+    "source": {
+      "source_type": "bid",
+      "source_id": "BID-2026-0042",
+      "source_version": 3,
+      "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  },
+  "customer": {
+    "customer_id": "CUST-0148",
+    "name": "Example EPCM Inc.",
+    "reference": "EPCM-4821",
+    "source": {
+      "source_type": "customer",
+      "source_id": "CUST-0148",
+      "source_version": 4,
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  "opportunity": {
+    "opportunity_id": "OPP-2026-0187",
+    "name": "North Plant Expansion",
+    "customer_reference": "NPX-ELEC-001",
+    "rfp_reference": "RFP-001-ELEC",
+    "due_at": "2026-10-01T18:00:00Z",
+    "project_location": "Newfoundland and Labrador, Canada",
+    "source": {
+      "source_type": "opportunity",
+      "source_id": "OPP-2026-0187",
+      "source_version": 2,
+      "source_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  },
+  "requirements": [
+    {
+      "requirement_id": "REQ-0001",
+      "requirement_text": "Provide medium-voltage switchgear in accordance with the project technical specification.",
+      "proposed_response": "Comply. Equipment will be supplied in accordance with the referenced technical specification, subject to the listed qualifications.",
+      "response_status": "COMPLIANT_WITH_QUALIFICATION",
+      "source": {
+        "source_type": "requirement",
+        "source_id": "REQ-0001",
+        "source_version": 5,
+        "source_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+      }
+    },
+    {
+      "requirement_id": "REQ-0002",
+      "requirement_text": "Provide factory acceptance testing before shipment.",
+      "proposed_response": "Comply. FAT will be performed before shipment in accordance with the approved test procedure.",
+      "response_status": "COMPLIANT",
+      "source": {
+        "source_type": "requirement",
+        "source_id": "REQ-0002",
+        "source_version": 2,
+        "source_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+      }
+    }
+  ],
+  "scope": {
+    "inclusions": [
+      {
+        "scope_item_id": "SCOPE-IN-0001",
+        "description": "Supply of medium-voltage switchgear assemblies.",
+        "source": {
+          "source_type": "scope_item",
+          "source_id": "SCOPE-IN-0001",
+          "source_version": 3,
+          "source_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+        }
+      }
+    ],
+    "exclusions": [
+      {
+        "scope_item_id": "SCOPE-EX-0001",
+        "description": "Field power cabling between supplied equipment and site loads is excluded.",
+        "source": {
+          "source_type": "scope_item",
+          "source_id": "SCOPE-EX-0001",
+          "source_version": 1,
+          "source_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+        }
+      }
+    ],
+    "interfaces": [
+      {
+        "interface_id": "INT-0001",
+        "description": "Customer provides approved IFC cable schedules before final equipment engineering release.",
+        "responsibility": "Customer / EPCM",
+        "counterparty": "Example EPCM Inc.",
+        "source": {
+          "source_type": "scope_interface",
+          "source_id": "INT-0001",
+          "source_version": 2,
+          "source_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+        }
+      }
+    ]
+  },
+  "manufacturer_packages": [
+    {
+      "package_id": "PKG-0001",
+      "description": "5 kV switchgear package",
+      "manufacturer_name": "Example Manufacturer",
+      "equipment": [
+        {
+          "equipment_id": "EQ-0001",
+          "description": "5 kV metal-clad switchgear lineup",
+          "quantity": 1,
+          "source": {
+            "source_type": "equipment_item",
+            "source_id": "EQ-0001",
+            "source_version": 3,
+            "source_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+          }
+        }
+      ],
+      "commitments": [
+        {
+          "commitment_id": "MFG-COM-0001",
+          "commitment_text": "Manufacturer confirms factory acceptance testing before shipment.",
+          "status": "CONFIRMED",
+          "evidence_document_ids": ["DOC-0001"],
+          "source": {
+            "source_type": "manufacturer_commitment",
+            "source_id": "MFG-COM-0001",
+            "source_version": 2,
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "source": {
+        "source_type": "manufacturer_package",
+        "source_id": "PKG-0001",
+        "source_version": 4,
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  ],
+  "vdrl_commitments": [
+    {
+      "vdrl_id": "VDRL-0001",
+      "document_code": "VDRL-01",
+      "title": "Shop Drawings",
+      "commitment": "Submit for customer review before release to manufacturing.",
+      "status": "COMMITTED",
+      "source": {
+        "source_type": "vdrl_commitment",
+        "source_id": "VDRL-0001",
+        "source_version": 2,
+        "source_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    }
+  ],
+  "commercial_positions": [
+    {
+      "commercial_position_id": "CP-0001",
+      "topic": "Payment Terms",
+      "customer_position": "Net 60 days.",
+      "proposed_position": "Net 45 days from invoice date.",
+      "status": "APPROVED",
+      "source": {
+        "source_type": "commercial_position",
+        "source_id": "CP-0001",
+        "source_version": 3,
+        "source_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    }
+  ],
+  "qualifications_and_deviations": [
+    {
+      "item_id": "QUAL-0001",
+      "kind": "QUALIFICATION",
+      "text": "Delivery dates are contingent on receipt of approved drawings by the required decision date.",
+      "status": "APPROVED",
+      "related_requirement_ids": ["REQ-0001"],
+      "source": {
+        "source_type": "qualification",
+        "source_id": "QUAL-0001",
+        "source_version": 2,
+        "source_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    }
+  ],
+  "proposal_issue_risks": [
+    {
+      "risk_id": "RISK-0001",
+      "description": "Final delivery schedule remains dependent on timely customer drawing approvals.",
+      "rating": "HIGH",
+      "proposal_disposition": "Carry the schedule dependency as an explicit proposal qualification.",
+      "status": "MITIGATED",
+      "source": {
+        "source_type": "risk",
+        "source_id": "RISK-0001",
+        "source_version": 3,
+        "source_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    }
+  ],
+  "decisions_and_approvals": [
+    {
+      "decision_id": "DEC-0001",
+      "subject": "Payment Terms",
+      "decision": "Net 45 position approved for proposal issue.",
+      "status": "APPROVED",
+      "authority_reference": "AUTH-COMMERCIAL-01",
+      "decided_at": "2026-09-08T09:45:00Z",
+      "source": {
+        "source_type": "decision",
+        "source_id": "DEC-0001",
+        "source_version": 1,
+        "source_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+      }
+    }
+  ],
+  "selected_pricing_scenario": {
+    "scenario_id": "PRICE-SCEN-0003",
+    "scenario_version": 4,
+    "scenario_label": "Base Bid - Approved",
+    "source": {
+      "source_type": "pricing_scenario",
+      "source_id": "PRICE-SCEN-0003",
+      "source_version": 4,
+      "source_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+    }
+  },
+  "delivery_commitments": [
+    {
+      "delivery_commitment_id": "DEL-0001",
+      "description": "5 kV switchgear package shipment",
+      "target_date": "2029-07-15",
+      "commitment_text": "Target shipment July 15, 2029, conditional on approved drawings by the required decision date.",
+      "status": "CONDITIONAL",
+      "source": {
+        "source_type": "delivery_commitment",
+        "source_id": "DEL-0001",
+        "source_version": 2,
+        "source_sha256": "1414141414141414141414141414141414141414141414141414141414141414"
+      }
+    }
+  ],
+  "proposal_inputs": [
+    {
+      "input_key": "proposal.validity_days",
+      "display_label": "Proposal Validity",
+      "value_type": "INTEGER",
+      "value": 30,
+      "source": {
+        "source_type": "proposal_input",
+        "source_id": "PI-0001",
+        "source_version": 1,
+        "source_sha256": "1515151515151515151515151515151515151515151515151515151515151515"
+      }
+    }
+  ],
+  "supporting_documents": [
+    {
+      "document_id": "DOC-0001",
+      "title": "Manufacturer FAT Commitment Letter",
+      "revision": "A",
+      "relative_path": "documents/manufacturer-fat-commitment.pdf",
+      "media_type": "application/pdf",
+      "sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+      "source": {
+        "source_type": "controlled_document",
+        "source_id": "DOC-0001",
+        "source_version": 2,
+        "source_sha256": "1717171717171717171717171717171717171717171717171717171717171717"
+      }
+    }
+  ]
+}

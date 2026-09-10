@@ -145,9 +145,11 @@ class BidHandoverService:
         db: Database,
         *,
         now_factory: Callable[[], datetime] | None = None,
+        proposal_issue_loader: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
     ) -> None:
         self.db = db
         self._now = now_factory or (lambda: datetime.now(UTC))
+        self._proposal_issue_loader = proposal_issue_loader
 
     def _conn(self) -> sqlite3.Connection:
         return cast(sqlite3.Connection, self.db._conn())
@@ -284,12 +286,18 @@ class BidHandoverService:
                 )
                 sections["commercial"] = sections["commercial"] + position_rows
 
+        if self._proposal_issue_loader is not None:
+            sections["issued_proposals"] = tuple(self._proposal_issue_loader(bid_id))
+
         blockers = list(gate_blockers)
         for row in sections["manufacturer"]:
             if row["handover_readiness"] == "Not ready":
                 blockers.extend(cast(str, row["handover_blocking_reasons"]).split(" | "))
         for row in sections["work"]:
             blockers.append(f"Outstanding action: {row['title']}")
+        issued_rows = sections.get("issued_proposals", ())
+        if issued_rows and issued_rows[0].get("remaining_actions"):
+            blockers.extend(str(issued_rows[0]["remaining_actions"]).split(" | "))
         unique_blockers = tuple(dict.fromkeys(item for item in blockers if item))
         return BidHandoverReport(
             bid=bid,

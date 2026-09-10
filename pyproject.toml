@@ -75,6 +75,9 @@ files = [
     "core/requirement_repository.py",
     "core/requirement_service.py",
     "core/ops08.py",
+    "core/proposal_exchange.py",
+    "core/proposal_exchange_contract.py",
+    "core/proposal_exchange_service.py",
     "scripts/validate_task_09.py",
 ]
 
@@ -111,6 +114,9 @@ module = [
     "core.requirement_repository",
     "core.requirement_service",
     "core.ops08",
+    "core.proposal_exchange",
+    "core.proposal_exchange_contract",
+    "core.proposal_exchange_service",
     "scripts.validate_task_09",
 ]
 ignore_errors = false

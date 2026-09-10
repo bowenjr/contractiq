@@ -1,0 +1,543 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:proposal-studio:contract:proposal-generation-manifest:v1",
+  "title": "Proposal Studio to ContractIQ Generation Manifest V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "schema_version",
+    "proposal_id",
+    "proposal_revision",
+    "source_proposal_package",
+    "template",
+    "generation_application",
+    "generated_at",
+    "generated_files",
+    "included_sections",
+    "excluded_sections",
+    "manual_narratives",
+    "manual_overrides",
+    "warnings",
+    "unresolved_placeholders",
+    "generation_status"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "urn:proposal-studio:contract:proposal-generation-manifest:v1"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "proposal_id": {
+      "$ref": "#/$defs/id"
+    },
+    "proposal_revision": {
+      "$ref": "#/$defs/version"
+    },
+    "source_proposal_package": {
+      "$ref": "#/$defs/sourcePackage"
+    },
+    "template": {
+      "$ref": "#/$defs/templateReference"
+    },
+    "generation_application": {
+      "$ref": "#/$defs/applicationIdentity"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/utcTimestamp"
+    },
+    "generated_files": {
+      "$ref": "#/$defs/generatedFiles"
+    },
+    "included_sections": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/includedSection"
+      }
+    },
+    "excluded_sections": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/excludedSection"
+      }
+    },
+    "manual_narratives": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/manualNarrative"
+      }
+    },
+    "manual_overrides": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/manualOverride"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/warning"
+      }
+    },
+    "unresolved_placeholders": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/unresolvedPlaceholder"
+      }
+    },
+    "generation_status": {
+      "type": "string",
+      "enum": [
+        "SUCCEEDED",
+        "SUCCEEDED_WITH_WARNINGS",
+        "BLOCKED",
+        "FAILED"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "generation_status": {
+            "enum": [
+              "SUCCEEDED",
+              "SUCCEEDED_WITH_WARNINGS"
+            ]
+          }
+        },
+        "required": [
+          "generation_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "generated_files": {
+            "properties": {
+              "docx": {
+                "$ref": "#/$defs/docxArtifact"
+              }
+            }
+          },
+          "unresolved_placeholders": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "generation_status": {
+            "const": "SUCCEEDED"
+          }
+        },
+        "required": [
+          "generation_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "warnings": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "generation_status": {
+            "const": "SUCCEEDED_WITH_WARNINGS"
+          }
+        },
+        "required": [
+          "generation_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "warnings": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "generation_status": {
+            "const": "BLOCKED"
+          }
+        },
+        "required": [
+          "generation_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "generated_files": {
+            "properties": {
+              "docx": {
+                "type": "null"
+              },
+              "pdf": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "version": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+    },
+    "shortText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "mediumText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "applicationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "sourcePackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package_id",
+        "sha256"
+      ],
+      "properties": {
+        "package_id": {
+          "$ref": "#/$defs/id"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "templateReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "template_id",
+        "template_version"
+      ],
+      "properties": {
+        "template_id": {
+          "$ref": "#/$defs/id"
+        },
+        "template_version": {
+          "$ref": "#/$defs/version"
+        }
+      }
+    },
+    "docxFilename": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 255,
+      "pattern": "^(?!.*[/\\\\])(?!\\.\\.?$).+\\.docx$"
+    },
+    "pdfFilename": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 255,
+      "pattern": "^(?!.*[/\\\\])(?!\\.\\.?$).+\\.pdf$"
+    },
+    "docxArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "sha256"
+      ],
+      "properties": {
+        "filename": {
+          "$ref": "#/$defs/docxFilename"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "pdfArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "sha256"
+      ],
+      "properties": {
+        "filename": {
+          "$ref": "#/$defs/pdfFilename"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "generatedFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "docx",
+        "pdf"
+      ],
+      "properties": {
+        "docx": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/docxArtifact"
+            }
+          ]
+        },
+        "pdf": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/pdfArtifact"
+            }
+          ]
+        }
+      }
+    },
+    "includedSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "section_key",
+        "title"
+      ],
+      "properties": {
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "section_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_.-]*$"
+        },
+        "title": {
+          "$ref": "#/$defs/shortText"
+        }
+      }
+    },
+    "excludedSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "section_key",
+        "title",
+        "reason"
+      ],
+      "properties": {
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "section_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_.-]*$"
+        },
+        "title": {
+          "$ref": "#/$defs/shortText"
+        },
+        "reason": {
+          "$ref": "#/$defs/mediumText"
+        }
+      }
+    },
+    "manualNarrative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "section_key",
+        "content_sha256"
+      ],
+      "properties": {
+        "section_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_.-]*$"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "manualOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_path",
+        "source_value_sha256",
+        "override_value_sha256",
+        "reason"
+      ],
+      "properties": {
+        "target_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "source_value_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "override_value_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "$ref": "#/$defs/mediumText"
+        }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "message",
+        "target"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": [
+            "WARNING",
+            "INFO"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Z0-9_.-]+$"
+        },
+        "message": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "target": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          ]
+        }
+      }
+    },
+    "unresolvedPlaceholder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "placeholder",
+        "section_key"
+      ],
+      "properties": {
+        "placeholder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "section_key": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z][a-z0-9_.-]*$"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

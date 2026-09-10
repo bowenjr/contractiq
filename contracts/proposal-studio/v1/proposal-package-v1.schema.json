@@ -1,0 +1,1336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:proposal-studio:contract:proposal-package:v1",
+  "title": "ContractIQ to Proposal Studio Proposal Package V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "schema_version",
+    "package_id",
+    "source_application",
+    "generated_at",
+    "bid",
+    "customer",
+    "opportunity",
+    "requirements",
+    "scope",
+    "manufacturer_packages",
+    "vdrl_commitments",
+    "commercial_positions",
+    "qualifications_and_deviations",
+    "proposal_issue_risks",
+    "decisions_and_approvals",
+    "selected_pricing_scenario",
+    "delivery_commitments",
+    "proposal_inputs",
+    "supporting_documents"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "urn:proposal-studio:contract:proposal-package:v1"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "package_id": {
+      "$ref": "#/$defs/id"
+    },
+    "source_application": {
+      "$ref": "#/$defs/applicationIdentity"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/utcTimestamp"
+    },
+    "bid": {
+      "$ref": "#/$defs/bid"
+    },
+    "customer": {
+      "$ref": "#/$defs/customer"
+    },
+    "opportunity": {
+      "$ref": "#/$defs/opportunity"
+    },
+    "requirements": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/requirement"
+      }
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "manufacturer_packages": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/manufacturerPackage"
+      }
+    },
+    "vdrl_commitments": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/vdrlCommitment"
+      }
+    },
+    "commercial_positions": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/commercialPosition"
+      }
+    },
+    "qualifications_and_deviations": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/qualificationDeviation"
+      }
+    },
+    "proposal_issue_risks": {
+      "type": "array",
+      "maxItems": 2000,
+      "items": {
+        "$ref": "#/$defs/risk"
+      }
+    },
+    "decisions_and_approvals": {
+      "type": "array",
+      "maxItems": 3000,
+      "items": {
+        "$ref": "#/$defs/decisionApproval"
+      }
+    },
+    "selected_pricing_scenario": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/pricingScenarioReference"
+        }
+      ]
+    },
+    "delivery_commitments": {
+      "type": "array",
+      "maxItems": 3000,
+      "items": {
+        "$ref": "#/$defs/deliveryCommitment"
+      }
+    },
+    "proposal_inputs": {
+      "type": "array",
+      "maxItems": 3000,
+      "items": {
+        "$ref": "#/$defs/proposalInput"
+      }
+    },
+    "supporting_documents": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/supportingDocument"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "version": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "shortText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "mediumText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "longText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "nullableShortText": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/shortText"
+        }
+      ]
+    },
+    "nullableMediumText": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/mediumText"
+        }
+      ]
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"
+    },
+    "isoDate": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//)[A-Za-z0-9._ -]+(?:/[A-Za-z0-9._ -]+)*$"
+    },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_type",
+        "source_id",
+        "source_version",
+        "source_sha256"
+      ],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "source_id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_version": {
+          "$ref": "#/$defs/version"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "applicationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "bid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bid_id",
+        "bid_revision",
+        "name",
+        "source"
+      ],
+      "properties": {
+        "bid_id": {
+          "$ref": "#/$defs/id"
+        },
+        "bid_revision": {
+          "$ref": "#/$defs/version"
+        },
+        "name": {
+          "$ref": "#/$defs/shortText"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "customer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "customer_id",
+        "name",
+        "reference",
+        "source"
+      ],
+      "properties": {
+        "customer_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/id"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/shortText"
+        },
+        "reference": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "opportunity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "opportunity_id",
+        "name",
+        "customer_reference",
+        "rfp_reference",
+        "due_at",
+        "project_location",
+        "source"
+      ],
+      "properties": {
+        "opportunity_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/id"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/shortText"
+        },
+        "customer_reference": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "rfp_reference": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "due_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/utcTimestamp"
+            }
+          ]
+        },
+        "project_location": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirement_id",
+        "requirement_text",
+        "proposed_response",
+        "response_status",
+        "source"
+      ],
+      "properties": {
+        "requirement_id": {
+          "$ref": "#/$defs/id"
+        },
+        "requirement_text": {
+          "$ref": "#/$defs/longText"
+        },
+        "proposed_response": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/longText"
+            }
+          ]
+        },
+        "response_status": {
+          "type": "string",
+          "enum": [
+            "COMPLIANT",
+            "COMPLIANT_WITH_QUALIFICATION",
+            "NON_COMPLIANT",
+            "NOT_APPLICABLE",
+            "UNRESOLVED"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "scopeItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope_item_id",
+        "description",
+        "source"
+      ],
+      "properties": {
+        "scope_item_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/longText"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "scopeInterface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interface_id",
+        "description",
+        "responsibility",
+        "counterparty",
+        "source"
+      ],
+      "properties": {
+        "interface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/longText"
+        },
+        "responsibility": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "counterparty": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inclusions",
+        "exclusions",
+        "interfaces"
+      ],
+      "properties": {
+        "inclusions": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "$ref": "#/$defs/scopeItem"
+          }
+        },
+        "exclusions": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "$ref": "#/$defs/scopeItem"
+          }
+        },
+        "interfaces": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "$ref": "#/$defs/scopeInterface"
+          }
+        }
+      }
+    },
+    "equipmentItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "equipment_id",
+        "description",
+        "quantity",
+        "source"
+      ],
+      "properties": {
+        "equipment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "quantity": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000000
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "manufacturerCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commitment_id",
+        "commitment_text",
+        "status",
+        "evidence_document_ids",
+        "source"
+      ],
+      "properties": {
+        "commitment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "commitment_text": {
+          "$ref": "#/$defs/longText"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "CONFIRMED",
+            "CONDITIONAL",
+            "UNCONFIRMED",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "evidence_document_ids": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "manufacturerPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package_id",
+        "description",
+        "manufacturer_name",
+        "equipment",
+        "commitments",
+        "source"
+      ],
+      "properties": {
+        "package_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "manufacturer_name": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "equipment": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "$ref": "#/$defs/equipmentItem"
+          }
+        },
+        "commitments": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/manufacturerCommitment"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "vdrlCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vdrl_id",
+        "document_code",
+        "title",
+        "commitment",
+        "status",
+        "source"
+      ],
+      "properties": {
+        "vdrl_id": {
+          "$ref": "#/$defs/id"
+        },
+        "document_code": {
+          "$ref": "#/$defs/shortText"
+        },
+        "title": {
+          "$ref": "#/$defs/shortText"
+        },
+        "commitment": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "COMMITTED",
+            "CONDITIONAL",
+            "UNRESOLVED",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "commercialPosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commercial_position_id",
+        "topic",
+        "customer_position",
+        "proposed_position",
+        "status",
+        "source"
+      ],
+      "properties": {
+        "commercial_position_id": {
+          "$ref": "#/$defs/id"
+        },
+        "topic": {
+          "$ref": "#/$defs/shortText"
+        },
+        "customer_position": {
+          "$ref": "#/$defs/nullableMediumText"
+        },
+        "proposed_position": {
+          "$ref": "#/$defs/longText"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "APPROVED",
+            "CONDITIONAL",
+            "UNRESOLVED",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "qualificationDeviation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_id",
+        "kind",
+        "text",
+        "status",
+        "related_requirement_ids",
+        "source"
+      ],
+      "properties": {
+        "item_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "QUALIFICATION",
+            "DEVIATION",
+            "CLARIFICATION"
+          ]
+        },
+        "text": {
+          "$ref": "#/$defs/longText"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "APPROVED",
+            "PENDING",
+            "REJECTED",
+            "WITHDRAWN"
+          ]
+        },
+        "related_requirement_ids": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "risk_id",
+        "description",
+        "rating",
+        "proposal_disposition",
+        "status",
+        "source"
+      ],
+      "properties": {
+        "risk_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/longText"
+        },
+        "rating": {
+          "type": "string",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL",
+            "UNRATED"
+          ]
+        },
+        "proposal_disposition": {
+          "$ref": "#/$defs/nullableMediumText"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "OPEN",
+            "MITIGATED",
+            "ACCEPTED",
+            "CLOSED"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "decisionApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "subject",
+        "decision",
+        "status",
+        "authority_reference",
+        "decided_at",
+        "source"
+      ],
+      "properties": {
+        "decision_id": {
+          "$ref": "#/$defs/id"
+        },
+        "subject": {
+          "$ref": "#/$defs/shortText"
+        },
+        "decision": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "APPROVED",
+            "REJECTED",
+            "PENDING",
+            "NOT_REQUIRED"
+          ]
+        },
+        "authority_reference": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "decided_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/utcTimestamp"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "pricingScenarioReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "scenario_version",
+        "scenario_label",
+        "source"
+      ],
+      "properties": {
+        "scenario_id": {
+          "$ref": "#/$defs/id"
+        },
+        "scenario_version": {
+          "$ref": "#/$defs/version"
+        },
+        "scenario_label": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "deliveryCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "delivery_commitment_id",
+        "description",
+        "target_date",
+        "commitment_text",
+        "status",
+        "source"
+      ],
+      "properties": {
+        "delivery_commitment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "target_date": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/isoDate"
+            }
+          ]
+        },
+        "commitment_text": {
+          "$ref": "#/$defs/mediumText"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "COMMITTED",
+            "CONDITIONAL",
+            "PROVISIONAL",
+            "UNRESOLVED"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      }
+    },
+    "proposalInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_key",
+        "display_label",
+        "value_type",
+        "value",
+        "source"
+      ],
+      "properties": {
+        "input_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_.-]*$"
+        },
+        "display_label": {
+          "$ref": "#/$defs/shortText"
+        },
+        "value_type": {
+          "type": "string",
+          "enum": [
+            "TEXT",
+            "DATE",
+            "BOOLEAN",
+            "INTEGER"
+          ]
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "TEXT"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "DATE"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/isoDate"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "BOOLEAN"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "value_type": {
+                "const": "INTEGER"
+              }
+            },
+            "required": [
+              "value_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "supportingDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document_id",
+        "title",
+        "revision",
+        "relative_path",
+        "media_type",
+        "sha256",
+        "source"
+      ],
+      "properties": {
+        "document_id": {
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "$ref": "#/$defs/shortText"
+        },
+        "revision": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "relative_path": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/relativePath"
+            }
+          ]
+        },
+        "media_type": {
+          "type": "string",
+          "enum": [
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/plain",
+            "text/csv",
+            "image/png",
+            "image/jpeg"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "media_type": {
+                "const": "application/pdf"
+              }
+            },
+            "required": [
+              "media_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relative_path": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/relativePath"
+                      },
+                      {
+                        "pattern": "\\.pdf$"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "media_type": {
+                "const": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              }
+            },
+            "required": [
+              "media_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relative_path": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/relativePath"
+                      },
+                      {
+                        "pattern": "\\.docx$"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "media_type": {
+                "const": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              }
+            },
+            "required": [
+              "media_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relative_path": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/relativePath"
+                      },
+                      {
+                        "pattern": "\\.xlsx$"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "media_type": {
+                "const": "text/plain"
+              }
+            },
+            "required": [
+              "media_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relative_path": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/relativePath"
+                      },
+                      {
+                        "pattern": "\\.txt$"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "media_type": {
+                "const": "text/csv"
+              }
+            },
+            "required": [
+              "media_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relative_path": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/relativePath"
+                      },
+                      {
+                        "pattern": "\\.csv$"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "media_type": {
+                "const": "image/png"
+              }
+            },
+            "required": [
+              "media_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relative_path": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/relativePath"
+                      },
+                      {
+                        "pattern": "\\.png$"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "media_type": {
+                "const": "image/jpeg"
+              }
+            },
+            "required": [
+              "media_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relative_path": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/relativePath"
+                      },
+                      {
+                        "pattern": "\\.(?:jpg|jpeg)$"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

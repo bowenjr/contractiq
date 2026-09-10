@@ -166,6 +166,13 @@ from core.ops_foundation import (
     RoleProfileOverlapError,
     StaleRoleProfileError,
 )
+from core.proposal_exchange import CustomerIssueCommand
+from core.proposal_exchange_service import (
+    ProposalExchangeNotFoundError,
+    ProposalExchangeService,
+    ProposalImportError,
+    StaleProposalCandidateError,
+)
 from core.proposal_repository import ProposalRepository
 from core.proposal_service import ProposalService
 from core.proposals import (
@@ -394,6 +401,21 @@ negotiation_repository = NegotiationRepository(db)
 negotiation_service = NegotiationService(negotiation_repository)
 proposal_repository = ProposalRepository(db)
 proposal_service = ProposalService(proposal_repository, BASE_DIR / "proposal_artifacts")
+_proposal_artifact_setting = Path(
+    os.environ.get(
+        "CONTRACTIQ_PROPOSAL_ARTIFACT_ROOT",
+        str(BASE_DIR / "data" / "proposal_exchange_artifacts"),
+    )
+)
+proposal_exchange_service = ProposalExchangeService(
+    db,
+    bid_repository,
+    _proposal_artifact_setting,
+)
+bid_handover_service = BidHandoverService(
+    db,
+    proposal_issue_loader=proposal_exchange_service.handover_rows,
+)
 my_day_service = MyDayService(
     work_item_repository,
     bid_repository,
@@ -2875,6 +2897,8 @@ def _bid_workspace_context(
         "commercial_position_readiness": ops08_repository.readiness(bid_id),
         "commercial_dispositions": list(PositionDisposition),
         "proposal_inputs": _proposal_input_rows(bid_id),
+        "proposal_control": proposal_exchange_service.assess(bid_id),
+        "proposal_control_history": proposal_exchange_service.history(bid_id),
         "ops07_error": None,
         "ops07_entered": {},
         "selected_requirement_targets": [],
@@ -2924,6 +2948,209 @@ async def bid_commercial_contract(bid_id: str) -> HTMLResponse:
 @app.get("/bids/{bid_id}/proposal-negotiation", response_class=HTMLResponse)
 async def bid_proposal_negotiation(bid_id: str) -> HTMLResponse:
     return _render_bid_workspace(bid_id, BidWorkspaceSection.PROPOSAL_NEGOTIATION)
+
+
+def _proposal_issue_control_context(
+    bid_id: str,
+    *,
+    form_error: str | None = None,
+    entered: dict[str, str] | None = None,
+) -> dict[str, object]:
+    workspace = bid_control_center_service.workspace(bid_id, as_of=_working_date())
+    return {
+        "workspace": workspace,
+        "bid": workspace.bid,
+        "control": proposal_exchange_service.assess(bid_id),
+        "history": proposal_exchange_service.history(bid_id),
+        "form_error": form_error,
+        "entered": entered or {},
+        "now_local": datetime.now(WORKING_TIMEZONE).strftime("%Y-%m-%dT%H:%M"),
+    }
+
+
+def _proposal_issue_control_error(
+    bid_id: str,
+    message: str,
+    status_code: int,
+    entered: dict[str, str] | None = None,
+) -> HTMLResponse:
+    try:
+        context = _proposal_issue_control_context(
+            bid_id,
+            form_error=message,
+            entered=entered,
+        )
+    except BidNotFoundError:
+        return HTMLResponse(
+            "<!doctype html><html><body><h1>Bid not found</h1>"
+            '<p><a href="/bids">Return to Bids</a></p></body></html>',
+            status_code=404,
+        )
+    return render("proposal_issue_control.html", status_code=status_code, **context)
+
+
+@app.get("/bids/{bid_id}/proposal-issue-control", response_class=HTMLResponse)
+async def proposal_issue_control(bid_id: str) -> HTMLResponse:
+    try:
+        return render(
+            "proposal_issue_control.html",
+            **_proposal_issue_control_context(bid_id),
+        )
+    except BidNotFoundError:
+        return _proposal_issue_control_error(bid_id, "Bid not found", 404)
+
+
+@app.post("/bids/{bid_id}/proposal-exports", response_class=HTMLResponse)
+async def prepare_proposal_export(bid_id: str) -> Response:
+    try:
+        export, _replayed = proposal_exchange_service.export_package(bid_id, LOCAL_ACTOR)
+    except ProposalExchangeNotFoundError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 404)
+    except (ValueError, sqlite3.Error) as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 422)
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/proposal-exports/{quote(export.export_id)}/download",
+        status_code=303,
+    )
+
+
+@app.get("/bids/{bid_id}/proposal-exports/{export_id}/download")
+async def download_proposal_export(bid_id: str, export_id: str) -> Response:
+    try:
+        export = proposal_exchange_service.export_by_id(bid_id, export_id)
+    except ProposalExchangeNotFoundError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 404)
+    return Response(
+        export.canonical_package_json.encode("utf-8"),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{export.package_id}.json"',
+            "X-ContractIQ-Canonical-SHA256": export.canonical_sha256,
+        },
+    )
+
+
+@app.post("/bids/{bid_id}/proposal-manifests", response_class=HTMLResponse)
+async def import_proposal_manifest(bid_id: str, request: Request) -> Response:
+    form = await request.form()
+    export_id = str(form.get("export_id", ""))
+    entered = {"export_id": export_id}
+    manifest_upload = form.get("manifest")
+    if not isinstance(manifest_upload, StarletteUploadFile) or not manifest_upload.filename:
+        return _proposal_issue_control_error(
+            bid_id,
+            "Choose a Proposal Studio generation manifest.",
+            422,
+            entered,
+        )
+    manifest_bytes = await manifest_upload.read()
+    if not manifest_bytes or len(manifest_bytes) > 5_000_000:
+        return _proposal_issue_control_error(
+            bid_id,
+            "Generation manifest must be a non-empty JSON file no larger than 5 MB.",
+            422,
+            entered,
+        )
+    artifacts: dict[str, tuple[str, bytes]] = {}
+    for role in ("docx", "pdf"):
+        upload = form.get(role)
+        if isinstance(upload, StarletteUploadFile) and upload.filename:
+            content = await upload.read()
+            if len(content) > 100_000_000:
+                return _proposal_issue_control_error(
+                    bid_id,
+                    f"{role.upper()} artifact exceeds the 100 MB local import limit.",
+                    422,
+                    entered,
+                )
+            artifacts[role] = (upload.filename, content)
+    try:
+        proposal_exchange_service.import_manifest(
+            bid_id,
+            export_id,
+            manifest_bytes,
+            artifacts,
+            LOCAL_ACTOR,
+        )
+    except ProposalExchangeNotFoundError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 404, entered)
+    except StaleProposalCandidateError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 409, entered)
+    except (ProposalImportError, sqlite3.Error, OSError) as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 422, entered)
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/proposal-issue-control#approve",
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/proposal-candidates/{candidate_id}/approve")
+async def approve_proposal_candidate(
+    bid_id: str,
+    candidate_id: str,
+    expected_version: Annotated[int, Form()],
+) -> Response:
+    try:
+        proposal_exchange_service.approve_candidate(
+            bid_id,
+            candidate_id,
+            expected_version,
+            LOCAL_ACTOR,
+        )
+    except ProposalExchangeNotFoundError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 404)
+    except StaleProposalCandidateError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 409)
+    except (ValueError, sqlite3.Error) as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 422)
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/proposal-issue-control#record-issue",
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/proposal-candidates/{candidate_id}/issue")
+async def record_proposal_customer_issue(
+    bid_id: str,
+    candidate_id: str,
+    request: Request,
+) -> Response:
+    form = dict(await request.form())
+    entered = {key: str(value) for key, value in form.items() if isinstance(value, str)}
+    try:
+        raw_issued_at = datetime.fromisoformat(str(form.get("issued_at", "")))
+        issued_at = (
+            raw_issued_at.replace(tzinfo=WORKING_TIMEZONE)
+            if raw_issued_at.tzinfo is None
+            else raw_issued_at
+        ).astimezone(UTC)
+        offer_valid_until = (
+            date.fromisoformat(str(form["offer_valid_until"]))
+            if form.get("offer_valid_until")
+            else None
+        )
+        command = CustomerIssueCommand(
+            candidate_id=candidate_id,
+            expected_version=int(str(form.get("expected_version", "0"))),
+            issue_revision=str(form.get("issue_revision", "")),
+            issued_at=issued_at,
+            issue_method=str(form.get("issue_method", "")),
+            destination_reference=str(form.get("destination_reference", "")),
+            offer_valid_until=offer_valid_until,
+            note=str(form.get("note", "")),
+        )
+        proposal_exchange_service.issue(bid_id, command, LOCAL_ACTOR)
+    except StaleProposalCandidateError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 409, entered)
+    except ProposalExchangeNotFoundError as exc:
+        return _proposal_issue_control_error(bid_id, str(exc), 404, entered)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        message = validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc)
+        return _proposal_issue_control_error(bid_id, message, 422, entered)
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/proposal-issue-control#history",
+        status_code=303,
+    )
 
 
 @app.get("/bids/{bid_id}/award-handover", response_class=HTMLResponse)
