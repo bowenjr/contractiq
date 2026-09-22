@@ -114,7 +114,17 @@ class Approval(BaseModel):
     evidence_ref: str | None = None
     decision: str | None = None
     decided_at: datetime | None = None
+    expires_at: datetime | None = None
     provenance: Provenance
+
+    @model_validator(mode="after")
+    def validate_expiration(self) -> Self:
+        if self.obtained and self.decision is not None:
+            if self.expires_at is None:
+                raise ValueError("expires_at is required when obtained is true and decision is set")
+            if self.decided_at is not None and self.expires_at <= self.decided_at:
+                raise ValueError("expires_at must be strictly after decided_at")
+        return self
 
 
 class GateRecord(BaseModel):
