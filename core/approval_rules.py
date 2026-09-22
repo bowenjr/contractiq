@@ -120,7 +120,7 @@ def approval_gaps(
             continue
         bid = str(case["bid_id"])
         cid = str(case["case_id"])
-        route = next((r for r in routes if r.get("case_id") == cid), None)
+        matching = [r for r in routes if r.get("case_id") == cid]
         if not effective:
             add(
                 "APPROVAL_POLICY_NOT_EFFECTIVE",
@@ -129,9 +129,18 @@ def approval_gaps(
                 "No published authority policy is effective.",
             )
             continue
-        if route is None:
+        if not matching:
             add("APPROVAL_ROUTE_NOT_DETERMINED", bid, cid, "No frozen approval route exists.")
             continue
+        if len(matching) > 1:
+            add(
+                "APPROVAL_ROUTE_AMBIGUOUS",
+                bid,
+                cid,
+                "Multiple frozen approval routes exist for this case; the route is ambiguous.",
+            )
+            continue
+        route = matching[0]
         if route.get("state") == "PENDING":
             add("APPROVAL_PENDING", bid, cid, "Required approval stages remain pending.")
         if route.get("state") == "REJECTED":
