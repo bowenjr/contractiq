@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from core.negotiation import (
     Concession,
     ConditionalTrade,
@@ -43,11 +45,14 @@ class NegotiationService:
         return value
 
     def add_concession(
-        self, value: Concession, mandate: Mandate | None, actor: str, at
+        self, value: Concession, mandate: Mandate | None, actor: str, at: datetime
     ) -> Concession:
         validate_concession(value, mandate, actor, at)
         self.repository.add_concession(value, actor)
         return value
+
+    def withdraw_plan(self, plan_id: str, actor: str, reason: str) -> None:
+        self.repository.withdraw_plan(plan_id, actor, reason)
 
     def metrics(self, bid_id: str | None = None) -> dict[str, int]:
         return self.repository.metrics(bid_id)

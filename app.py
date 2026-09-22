@@ -5984,6 +5984,35 @@ async def create_negotiation_plan_html(request: Request) -> Response:
     )
 
 
+@app.post("/negotiations/plans/withdraw", response_class=HTMLResponse)
+async def withdraw_negotiation_plan_html(request: Request) -> Response:
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id") or "")
+    plan_id = str(form.get("plan_id") or "")
+    reason = str(form.get("reason") or "")
+    try:
+        negotiation_service.withdraw_plan(plan_id, LOCAL_ACTOR, reason)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return render(
+            "negotiations.html",
+            status_code=422,
+            plans=negotiation_repository.plans(bid_id or None),
+            metrics=negotiation_service.metrics(bid_id or None),
+            bid_id=bid_id,
+            contextual_position=None,
+            linked_position_labels=(
+                _linked_position_labels(bid_id, "negotiation_plan_id") if bid_id else {}
+            ),
+            form_error=str(exc),
+            entered=form,
+            **_bid_return_context(bid_id or None, BidWorkspaceSection.PROPOSAL_NEGOTIATION),
+        )
+    return RedirectResponse(
+        f"/negotiations?bid_id={quote(bid_id)}",
+        status_code=303,
+    )
+
+
 @app.get("/api/negotiations")
 async def negotiations_api(bid_id: str | None = None) -> JSONResponse:
     return JSONResponse(

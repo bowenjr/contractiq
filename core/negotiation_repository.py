@@ -18,6 +18,7 @@ from core.negotiation import (
     Mandate,
     NegotiationMovement,
     NegotiationPlan,
+    PlanLifecycle,
     PlanVersion,
 )
 
@@ -199,6 +200,28 @@ class NegotiationRepository:
             )
             self._audit(
                 conn, value.bid_id, actor, "negotiation_concession_recorded", value.concession_id
+            )
+            conn.commit()
+
+    def withdraw_plan(self, plan_id: str, actor: str, reason: str) -> None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT bid_id, lifecycle FROM negotiation_plans WHERE plan_id=?",
+                (plan_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("negotiation plan not found")
+            if row["lifecycle"] in (
+                PlanLifecycle.WITHDRAWN.value,
+                PlanLifecycle.CLOSED.value,
+            ):
+                raise ValueError("negotiation plan is already terminal and cannot be withdrawn")
+            conn.execute(
+                "UPDATE negotiation_plans SET lifecycle=? WHERE plan_id=?",
+                (PlanLifecycle.WITHDRAWN.value, plan_id),
+            )
+            self._audit(
+                conn, row["bid_id"], actor, "negotiation_plan_withdrawn", f"{plan_id}: {reason}"
             )
             conn.commit()
 
