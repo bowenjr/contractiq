@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import date, timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.bid_repository import BidRepository
+from core.bid_workflow import (
+    PACKAGE_NOT_IMPORTED_HEADING,
+    OutstandingItem,
+    blocker_heading,
+    intake_heading,
+)
 from core.enums import BidLevel, BidStatus, Gate
 from core.my_day import MyDayProjection
 from core.readiness import Blocker, ReadinessReport, ReadinessVerdict
@@ -38,6 +44,7 @@ class BidReadinessFilter(StrEnum):
 
 class BidWorkspaceSection(StrEnum):
     OVERVIEW = "overview"
+    PACKAGE_INTAKE = "package-intake-addenda"
     REQUIREMENTS_SCOPE = "requirements-scope"
     MANUFACTURERS_COVERAGE = "manufacturers-coverage"
     COMMERCIAL_CONTRACT = "commercial-contract"
@@ -93,6 +100,7 @@ class BidBlockerView(BaseModel):
 
     condition_id: str
     gate: Gate
+    heading: str
     description: str
     detail: str
     consequence: str
@@ -161,7 +169,7 @@ CURRENT_BID_STATUSES = frozenset({BidStatus.ACTIVE, BidStatus.HELD, BidStatus.SU
 HISTORY_BID_STATUSES = frozenset({BidStatus.WON, BidStatus.LOST, BidStatus.NO_BID})
 
 GATE_LABELS: dict[Gate, str] = {
-    Gate.G0: "Intake",
+    Gate.G0: "Bid setup",
     Gate.G1: "Bid / no-bid decision",
     Gate.G2: "Requirements, strategy and scope",
     Gate.G3: "Manufacturer and supplier coverage",
@@ -244,7 +252,7 @@ def classification_controls_for_level(level: BidLevel) -> list[ClassificationCon
     return [
         ClassificationControl(
             gate=Gate.G0,
-            label="Complete Bid intake",
+            label="Complete Bid setup",
             required=True,
             explanation="Required for every classification.",
         ),
@@ -343,6 +351,7 @@ def _blocker_view(bid: Bid, report_blocker: Blocker) -> BidBlockerView:
     return BidBlockerView(
         condition_id=report_blocker.condition_id,
         gate=gate,
+        heading=blocker_heading(report_blocker.condition_id, report_blocker.description),
         description=report_blocker.description,
         detail=report_blocker.detail,
         consequence=_GATE_CONSEQUENCE[gate],
@@ -367,7 +376,7 @@ def _next_action(
 ) -> tuple[str, str]:
     if blockers:
         blocker = blockers[0]
-        return f"Resolve: {blocker.description}", blocker.destination
+        return f"Resolve: {blocker.heading}", blocker.destination
     if waiting:
         item = waiting[0]
         return f"Follow up: {item.title}", f"/my-work/{item.work_item_id}"
@@ -439,6 +448,97 @@ def project_bid_workspace(
         next_action=next_action,
         next_action_destination=destination,
     )
+
+
+def outstanding_items(
+    blockers: Sequence[BidBlockerView],
+    *,
+    intake_attention: Sequence[object] = (),
+    package_imported: bool = True,
+    bid_id: str = "",
+    owner: str = "",
+    due_date: date | None = None,
+) -> list[OutstandingItem]:
+    """Merge every outstanding thing into one list stated as what is missing.
+
+    The gate engine, the package-intake attention rules and their destinations are
+    unchanged; this only rewrites presentation so the same blocker is never
+    explained more than once on a page.
+
+    Args:
+        blockers: Active TASK-06 blockers for this Bid, most severe first.
+        intake_attention: OPS-11 ``IntakeAttention`` records for this Bid.
+        package_imported: Whether any customer package has been received.
+        bid_id: The Bid whose resolve links are being built.
+        owner: The accountable Bid owner.
+        due_date: The internal due date, where one is meaningful.
+
+    Returns:
+        One deduplicated list, blocking items first, then stable by heading.
+    """
+    items: list[OutstandingItem] = []
+    if bid_id and not package_imported:
+        items.append(
+            OutstandingItem(
+                heading=PACKAGE_NOT_IMPORTED_HEADING,
+                detail="No customer package has been received into this Bid.",
+                consequence=(
+                    "Requirements, scope and the Bid Basis have no controlled customer source."
+                ),
+                owner=owner,
+                owing_party="Bid owner",
+                due_date=due_date,
+                evidence_source="Package intake register",
+                resolve_label="Import customer bid package",
+                resolve_path=f"/bids/{bid_id}/package-intake-addenda/import?mode=initial",
+                blocking=True,
+            )
+        )
+    for blocker in blockers:
+        items.append(
+            OutstandingItem(
+                heading=blocker.heading,
+                detail=blocker.detail,
+                consequence=blocker.consequence,
+                owner=blocker.owner,
+                owing_party=blocker.owing_party,
+                due_date=blocker.due_date,
+                evidence_source=blocker.evidence_source,
+                resolve_label="Resolve in this Bid",
+                resolve_path=blocker.destination,
+                blocking=True,
+            )
+        )
+    for record in intake_attention:
+        code = str(getattr(record, "code", ""))
+        message = str(getattr(record, "message", ""))
+        items.append(
+            OutstandingItem(
+                heading=intake_heading(code, message),
+                detail=message,
+                consequence=(
+                    "Proposal issue is blocked until this is resolved."
+                    if bool(getattr(record, "blocking", False))
+                    else "The Bid Basis may not reflect every customer release."
+                ),
+                owner=owner,
+                owing_party="Bid owner",
+                due_date=due_date,
+                evidence_source="Package intake register",
+                resolve_label="Resolve in Package intake",
+                resolve_path=str(getattr(record, "destination", "")),
+                blocking=bool(getattr(record, "blocking", False)),
+            )
+        )
+    seen: set[str] = set()
+    unique: list[OutstandingItem] = []
+    for item in items:
+        if item.heading in seen:
+            continue
+        seen.add(item.heading)
+        unique.append(item)
+    unique.sort(key=lambda item: (not item.blocking,))
+    return unique
 
 
 def _deadline_attention(
@@ -622,6 +722,7 @@ __all__ = [
     "classification_controls",
     "classification_controls_for_level",
     "governance_level_guides",
+    "outstanding_items",
     "project_bid_portfolio",
     "project_bid_workspace",
     "workspace_path",

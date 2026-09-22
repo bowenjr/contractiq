@@ -54,7 +54,7 @@
     {% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
     <form class="panel filters" method="get" action="/documents" aria-label="Document filters">
       <div><label for="filter-bid">Bid / opportunity</label><select id="filter-bid" name="bid_id"><option value="">All bids</option>{% for bid in bids %}<option value="{{ bid.bid_id }}"{% if selected_bid == bid.bid_id %} selected{% endif %}>{{ bid.bid_id }} — {{ bid.project_name }}</option>{% endfor %}</select></div>
-      <div><label for="filter-category">Category</label><select id="filter-category" name="category"><option value="">All categories</option>{% for value in categories %}<option value="{{ value.value }}"{% if selected_category == value.value %} selected{% endif %}>{{ value.value }}</option>{% endfor %}</select></div>
+      <div><label for="filter-category">Category</label><select id="filter-category" name="category"><option value="">All categories</option>{% for value in categories %}<option value="{{ value.value }}"{% if selected_category == value.value %} selected{% endif %}>{{ document_category_label(value) }}</option>{% endfor %}</select></div>
       <div><label for="filter-state">Lifecycle</label><select id="filter-state" name="lifecycle"><option value="">All states</option>{% for value in lifecycles %}<option value="{{ value.value }}"{% if selected_lifecycle == value.value %} selected{% endif %}>{{ value.value }}</option>{% endfor %}</select></div>
       <button class="btn btn-secondary" type="submit">Apply filters</button>
     </form>
@@ -66,13 +66,13 @@
           {% if document and version and not entry.logical_issues %}
           <div><div class="title">{{ document.title }}</div><div class="muted">{{ document.document_number or 'No document number' }}</div><div class="integrity">Integrity: not checked in this view</div></div>
           <div><div class="label">Bid / opportunity</div><div class="value">{{ bid_names.get(document.bid_id, document.bid_id) }}</div><div class="muted">{{ document.bid_id }}</div></div>
-          <div><span class="badge category">{{ document.category.value }}</span><div class="value">{{ document.issuer or 'Issuer not recorded' }}</div></div>
+          <div><span class="badge category">{{ document_category_label(document.category) }}</span><div class="value">{{ document.issuer or 'Issuer not recorded' }}</div></div>
           <div class="optional"><div class="label">Current version</div><div class="value">{{ version.version_label }}{% if version.issued_date %} · {{ version.issued_date }}{% endif %}</div><div class="muted">{{ version.original_filename }} · {{ version.byte_size }} bytes</div></div>
           <div><span class="badge {{ document.lifecycle_state.value }}">{{ document.lifecycle_state.value }}</span><div class="value hash">{{ version.sha256_digest[:12] }}…</div></div>
           {% else %}
           <div><div class="title">{{ entry.title }}</div><div class="muted">{{ entry.document_id }}</div><div class="integrity integrity-alert">CONTROL INTEGRITY ISSUE</div></div>
           <div><div class="label">Bid / opportunity</div><div class="value">{{ bid_names.get(entry.bid_id, entry.bid_id or 'Identity unavailable') }}</div></div>
-          <div><span class="badge WITHDRAWN">REVIEW</span><div class="value">{{ entry.category.value if entry.category else 'Category unavailable' }}</div></div>
+          <div><span class="badge WITHDRAWN">REVIEW</span><div class="value">{{ document_category_label(entry.category) if entry.category else 'Category unavailable' }}</div></div>
           <div class="optional"><div class="label">Diagnostic</div>{% for issue in entry.logical_issues %}<div class="value">{{ issue.status.value }}</div><div class="muted">{{ issue.reason }}</div>{% endfor %}</div>
           <div><div class="label">Evidence access</div><div class="value">Restricted pending review</div></div>
           {% endif %}
@@ -83,9 +83,9 @@
         <div id="register-error" class="error" role="alert"></div>
         <form id="register-form" enctype="multipart/form-data">
           <input type="hidden" name="actor" value="{{ actor }}">
-          <div class="field"><label for="bid_id">Bid / opportunity <span class="required">*</span></label><select id="bid_id" name="bid_id" required><option value="">Select a bid</option>{% for bid in bids %}<option value="{{ bid.bid_id }}">{{ bid.bid_id }} — {{ bid.project_name }}</option>{% endfor %}</select></div>
+          <div class="field"><label for="bid_id">Bid / opportunity <span class="required">*</span></label><select id="bid_id" name="bid_id" required><option value="">Select a bid</option>{% for bid in bids %}<option value="{{ bid.bid_id }}"{% if bid.bid_id == selected_bid %} selected{% endif %}>{{ bid.bid_id }} — {{ bid.project_name }}</option>{% endfor %}</select></div>
           <div class="field"><label for="title">Title <span class="required">*</span></label><input id="title" name="title" maxlength="300" required></div>
-          <div class="grid"><div class="field"><label for="document_number">Document number</label><input id="document_number" name="document_number" maxlength="200"></div><div class="field"><label for="category">Category <span class="required">*</span></label><select id="category" name="category" required>{% for value in categories %}<option value="{{ value.value }}">{{ value.value }}</option>{% endfor %}</select></div></div>
+          <div class="grid"><div class="field"><label for="document_number">Document number</label><input id="document_number" name="document_number" maxlength="200"></div><div class="field"><label for="category">Category <span class="required">*</span></label><select id="category" name="category" required>{% for value in categories %}<option value="{{ value.value }}">{{ document_category_label(value) }}</option>{% endfor %}</select></div></div>
           <div class="field"><label for="issuer">Issuer / source party</label><input id="issuer" name="issuer" maxlength="500"></div>
           <div class="grid"><div class="field"><label for="version_label">Version label <span class="required">*</span></label><input id="version_label" name="version_label" value="Original" maxlength="200" required></div><div class="field"><label for="issued_date">Issued date</label><input id="issued_date" name="issued_date" type="date"></div></div>
           <div class="field"><label for="file">Local file <span class="required">*</span></label><input id="file" name="file" type="file" required><div class="muted">Stored as untrusted bytes; ContractIQ does not parse or render this file.</div></div>

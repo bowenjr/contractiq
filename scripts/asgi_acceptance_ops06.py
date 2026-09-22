@@ -124,9 +124,12 @@ async def main() -> None:
                 assert status == 200
                 assert level_one.encode() in page
                 assert b"Example EPCM" in page
-                assert b"Gate and readiness rail" in page
+                assert b"Gate and readiness evidence" in page
                 assert b"Next required action" in page
-                assert page.count(b"Bid workspace sections") == 1
+                # OPS-11BX: one spine, one primary action, on every section.
+                assert page.count(b'aria-label="Bid workflow stages"') == 1
+                assert page.count(b'aria-label="Next required action"') == 1
+                assert page.count(b'class="button-lg"') == 1
             assert app.bid_repository.get_bid(level_one) == before_one
             assert app.bid_repository.list_audit(level_one) == before_audit
 
@@ -177,9 +180,11 @@ async def main() -> None:
 
             register_returns = (
                 ("/requirements", "requirements-scope"),
-                ("/documents", "requirements-scope"),
+                # Controlled customer documents belong to the Package intake stage.
+                ("/documents", "package-intake-addenda"),
                 ("/scope-interfaces", "requirements-scope"),
                 ("/suppliers", "manufacturers-coverage"),
+                ("/vendor-documents", "manufacturers-coverage"),
                 ("/commercial", "commercial-contract"),
                 ("/contract-risks", "commercial-contract"),
                 ("/decisions", "commercial-contract"),

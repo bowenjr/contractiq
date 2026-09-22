@@ -162,7 +162,7 @@ def test_ui_creates_explicit_and_internal_and_hides_storage_identity(
     bid_page = asyncio.run(requirement_ui_app.bid_requirements_scope(valid_bid.bid_id))
     assert "Bid workspace" in _html(bid_page)
     assert "Mandatory submission" in _html(bid_page)
-    assert "Gate and readiness rail" in _html(bid_page)
+    assert "Gate and readiness evidence" in _html(bid_page)
 
 
 def test_ui_workflow_review_withdrawal_and_stale_error(

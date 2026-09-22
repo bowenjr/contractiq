@@ -477,7 +477,39 @@ class MyDayService:
         commercial_attention: list[dict[str, str]] = []
         contract_risk_attention: list[dict[str, str]] = []
         approval_attention: list[dict[str, str]] = []
+        intake_attention: list[dict[str, str]] = []
         with self.db._conn() as conn:
+            intake_ready = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='bid_release_acknowledgement_events'"
+                ).fetchone()
+                is not None
+            )
+            if intake_ready:
+                rows = conn.execute(
+                    """SELECT r.bid_id,a.acknowledgement_event_id,a.due_at
+                    FROM bid_release_acknowledgement_events a
+                    JOIN bid_received_releases r ON r.release_id=a.release_id
+                    WHERE a.event_type='REQUIRED' AND NOT EXISTS(SELECT 1 FROM
+                    bid_release_acknowledgement_events newer
+                    WHERE newer.supersedes_event_id=a.acknowledgement_event_id)
+                    ORDER BY a.due_at,a.acknowledgement_event_id"""
+                ).fetchall()
+                intake_attention.extend(
+                    {
+                        "bid_id": str(row["bid_id"]),
+                        "entity_id": str(row["acknowledgement_event_id"]),
+                        "code": (
+                            "ACKNOWLEDGEMENT_OVERDUE"
+                            if row["due_at"] is not None
+                            and datetime.fromisoformat(str(row["due_at"])).date() < as_of
+                            else "ACKNOWLEDGEMENT_DUE"
+                        ),
+                        "severity": "HIGH",
+                    }
+                    for row in rows
+                )
             approval_tables_ready = (
                 conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decision_cases'"
@@ -737,6 +769,7 @@ class MyDayService:
             commercial_attention=commercial_attention,
             contract_risk_attention=contract_risk_attention,
             approval_attention=approval_attention,
+            intake_attention=intake_attention,
         )
 
 

@@ -26,7 +26,7 @@ def test_workflow_copy_exposes_business_actions_and_no_post_award_flow() -> None
     ):
         assert label in bid
     assert "Vendor-document responsibilities, confirmations and exceptions" in package
-    assert "Back to Bid Manufacturers &amp; Coverage" in package
+    assert "Back to Bid Manufacturers and supplier coverage" in package
     assert "<h1>My Role</h1>" in role
     assert "Create role profile" not in role
     assert "post-award submission" not in bid.casefold()

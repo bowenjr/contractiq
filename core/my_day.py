@@ -94,6 +94,7 @@ class MyDayCounts(BaseModel):
     commercial_attention: int = 0
     contract_risk_attention: int = 0
     approval_attention: int = 0
+    intake_attention: int = 0
 
 
 class MyDayProjection(BaseModel):
@@ -117,6 +118,7 @@ class MyDayProjection(BaseModel):
     commercial_attention: list[dict[str, str]] = Field(default_factory=list)
     contract_risk_attention: list[dict[str, str]] = Field(default_factory=list)
     approval_attention: list[dict[str, str]] = Field(default_factory=list)
+    intake_attention: list[dict[str, str]] = Field(default_factory=list)
     counts: MyDayCounts
 
 
@@ -277,6 +279,7 @@ def project_my_day(
     commercial_attention: list[dict[str, str]] | None = None,
     contract_risk_attention: list[dict[str, str]] | None = None,
     approval_attention: list[dict[str, str]] | None = None,
+    intake_attention: list[dict[str, str]] | None = None,
 ) -> MyDayProjection:
     """Classify and order supplied snapshots without I/O or hidden time access."""
     if horizon_days < 1:
@@ -345,6 +348,7 @@ def project_my_day(
         commercial_attention=commercial_attention or [],
         contract_risk_attention=contract_risk_attention or [],
         approval_attention=approval_attention or [],
+        intake_attention=intake_attention or [],
         counts=MyDayCounts(
             overdue=sum(item.is_overdue for item in active),
             due_today=sum(item.is_due_today for item in active),
@@ -359,5 +363,6 @@ def project_my_day(
             commercial_attention=len(commercial_attention or []),
             contract_risk_attention=len(contract_risk_attention or []),
             approval_attention=len(approval_attention or []),
+            intake_attention=len(intake_attention or []),
         ),
     )

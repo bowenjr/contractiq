@@ -24,6 +24,11 @@ def _section(page: str, marker: str) -> str:
     return page[start : page.index("</section>", start) + len("</section>")]
 
 
+def _nav(page: str) -> str:
+    start = page.index('aria-label="Bid workflow stages"')
+    return page[start : page.index("</nav>", start) + len("</nav>")]
+
+
 @pytest.fixture
 def ops06_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     monkeypatch.setenv("CONTRACTIQ_DB_PATH", str(tmp_path / "ops06.db"))
@@ -86,11 +91,18 @@ def test_all_six_sections_share_bid_header_rail_and_context(
         assert valid_bid.project_name in page
         assert str(valid_bid.customer_due_date) in page
         assert str(valid_bid.internal_due_date) in page
-        assert "Gate and readiness rail" in page
+        assert "Gate and readiness evidence" in page
         assert "Next required action" in page
-        assert page.count("Bid workspace sections") == 1
-    assert len({_section(page, 'aria-label="Bid header"') for page in pages}) == 1
-    assert len({_section(page, 'aria-label="Gate and readiness rail"') for page in pages}) == 1
+        # One spine per page: one next action, one nine-stage navigator.
+        assert page.count('aria-label="Next required action"') == 1
+        assert page.count('aria-label="Bid workflow stages"') == 1
+        assert page.count('class="button-lg"') == 1
+    assert len({_section(page, 'aria-label="Next required action"') for page in pages}) == 1
+    # Identical nine-stage navigator everywhere, apart from the you-are-here marker.
+    normalised = {
+        _nav(page).replace(" viewing", "").replace(' aria-current="true"', "") for page in pages
+    }
+    assert len(normalised) == 1
     assert "Vendor Document Requirements" in pages[2]
     assert "post-award execution" in pages[5]
     assert ops06_app.bid_repository.get_bid(valid_bid.bid_id) == before_bid
@@ -209,52 +221,59 @@ def test_operational_registers_return_directly_to_the_active_bid(
         (
             lambda: ops06_app.requirements_register(request, bid_id=valid_bid.bid_id),
             "requirements-scope",
-            "Requirements &amp; Scope",
+            "Requirements and scope",
         ),
         (
+            # Controlled customer documents are stage 3, whose workspace section is
+            # Package intake; the register returns to the stage it belongs to.
             lambda: ops06_app.controlled_documents(request, bid_id=valid_bid.bid_id),
-            "requirements-scope",
-            "Requirements &amp; Scope",
+            "package-intake-addenda",
+            "Package intake",
+        ),
+        (
+            lambda: ops06_app.vendor_documents_dashboard(bid_id=valid_bid.bid_id),
+            "manufacturers-coverage",
+            "Manufacturers and supplier coverage",
         ),
         (
             lambda: ops06_app.scope_interfaces_register(valid_bid.bid_id),
             "requirements-scope",
-            "Requirements &amp; Scope",
+            "Requirements and scope",
         ),
         (
             lambda: ops06_app.suppliers_register(valid_bid.bid_id),
             "manufacturers-coverage",
-            "Manufacturers &amp; Coverage",
+            "Manufacturers and supplier coverage",
         ),
         (
             lambda: ops06_app.commercial_register(valid_bid.bid_id),
             "commercial-contract",
-            "Commercial &amp; Contract",
+            "Commercial, contract risk and approvals",
         ),
         (
             lambda: ops06_app.contract_risks_register(valid_bid.bid_id),
             "commercial-contract",
-            "Commercial &amp; Contract",
+            "Commercial, contract risk and approvals",
         ),
         (
             lambda: ops06_app.decisions_register(valid_bid.bid_id),
             "commercial-contract",
-            "Commercial &amp; Contract",
+            "Commercial, contract risk and approvals",
         ),
         (
             lambda: ops06_app.deliverables_register(valid_bid.bid_id),
             "proposal-negotiation",
-            "Proposal &amp; Negotiation",
+            "Proposal and negotiation",
         ),
         (
             lambda: ops06_app.proposals_register(valid_bid.bid_id),
             "proposal-negotiation",
-            "Proposal &amp; Negotiation",
+            "Proposal and negotiation",
         ),
         (
             lambda: ops06_app.negotiations_register(valid_bid.bid_id),
             "proposal-negotiation",
-            "Proposal &amp; Negotiation",
+            "Proposal and negotiation",
         ),
     )
     for route, section, label in routes:

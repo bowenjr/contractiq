@@ -1,37 +1,117 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ bid.project_name }} · ContractIQ</title><link rel="stylesheet" href="/static/style.css"><style>
-.bid-header{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px}.workspace-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:18px 0}.workspace-tabs a{padding:8px 10px;border:1px solid #d0d5dd;border-radius:5px;text-decoration:none}.workspace-tabs a.active{background:#175cd3;color:#fff}.rail{border-left:5px solid #b42318}.rail.clear{border-left-color:#067647}.grid{display:grid;grid-template-columns:repeat(2,minmax(270px,1fr));gap:15px}.row{padding:10px 0;border-bottom:1px solid #eaecf0}.muted{color:#667085}.label{font-size:.8rem;color:#667085;text-transform:uppercase}.metric{font-size:1.4rem;font-weight:700}.button{display:inline-block;padding:9px 13px;background:#175cd3;color:#fff;text-decoration:none;border-radius:5px}.navigator-row{display:grid;grid-template-columns:1.5fr .7fr 2fr auto;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid #eaecf0}.stage-status{font-weight:750}.stage-status.Blocked{color:#b42318}.stage-status.Complete{color:#067647}@media(max-width:900px){.bid-header,.grid,.navigator-row{grid-template-columns:1fr}}
+.bid-bar{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;margin:6px 0 12px}
+.bid-bar h1{font-size:clamp(1.3rem,1.9vw,1.7rem);margin:0 0 .2rem}
+.bid-bar .facts{color:var(--muted);font-size:.86rem;margin:0}
+.bid-bar .facts b{color:var(--ink);font-weight:700}
+.next-action{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;border-left:5px solid var(--brand);margin-bottom:12px}
+.next-action h2{font-size:1.32rem;margin:0 0 .25rem}
+.next-action .context{color:var(--muted);font-size:.85rem;margin:0}
+a.button-lg{display:inline-block;flex:0 0 auto;padding:12px 20px;border-radius:6px;background:var(--brand);color:#fff;font-weight:750;font-size:1rem;text-decoration:none}
+a.button-lg:hover{background:var(--brand-hover);color:#fff}
+.status-strip{display:flex;gap:8px 18px;flex-wrap:wrap;align-items:center;margin:0 0 12px;padding:10px 14px;border:1px solid var(--line);border-left:5px solid var(--accent);border-radius:var(--radius);background:var(--surface-soft);font-size:.9rem}
+.status-strip.clear{border-left-color:var(--good)}
+.stage-nav{padding-top:12px;padding-bottom:6px;margin-bottom:12px}
+.stages{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:26px minmax(150px,1.2fr) 118px minmax(0,2fr) minmax(0,auto)}
+.stage{display:grid;grid-column:1/-1;grid-template-columns:subgrid;gap:10px 12px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)}
+.stage:last-child{border-bottom:0}
+.stage>*{min-width:0}
+.stage-actions{text-align:right}
+.stage-no{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--line);color:var(--ink);font-size:.76rem;font-weight:750}
+.stage-label{font-weight:700;font-size:.93rem;text-decoration:none;color:var(--ink)}
+.stage-label:hover{color:var(--brand);text-decoration:underline}
+.stage-summary{color:var(--muted);font-size:.82rem;min-width:0;overflow-wrap:anywhere}
+.stage-action{font-size:.84rem;font-weight:700;white-space:normal}
+.stage.future{opacity:.6}
+.stage.future .stage-no{background:transparent;border:1px dashed var(--line);color:var(--muted)}
+.stage.viewing{background:var(--info-bg);border-radius:5px}
+.stage.current{box-shadow:inset 3px 0 0 var(--brand)}
+.stage.current .stage-label::after{content:" · current";color:var(--brand);font-weight:700;font-size:.78rem}
+.stage.viewing .stage-no{background:var(--brand);color:#fff}
+.stage.settled .stage-no{background:var(--good);color:#fff}
+.stage.blocked .stage-no{background:var(--bad);color:#fff}
+.s-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.72rem;font-weight:750;white-space:nowrap;background:var(--line);color:var(--muted)}
+.s-badge.complete{background:var(--good-bg);color:var(--good)}
+.s-badge.ready-for-review{background:var(--info-bg);color:var(--brand)}
+.s-badge.in-progress{background:var(--warn-bg);color:var(--warn)}
+.s-badge.blocked{background:var(--bad-bg);color:var(--bad)}
+.s-badge.not-applicable{background:transparent;border:1px solid var(--line)}
+.outstanding-row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1.6fr) auto;gap:12px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
+.outstanding-row:last-child{border-bottom:0}
+.outstanding-row h3{margin:0 0 .2rem;font-size:.95rem}
+.outstanding-row p{margin:0;font-size:.85rem;color:var(--muted)}
+@media(max-width:1100px){.stages{grid-template-columns:26px minmax(140px,1fr) 112px minmax(0,auto)}.stage-summary{grid-column:2/-1}}
+@media(max-width:900px){.stages,.stage,.outstanding-row{grid-template-columns:1fr}.stage-summary{grid-column:auto}.stage-actions{text-align:left}.next-action{align-items:stretch}}
 </style></head><body><main class="page-shell">
 {% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+{% set here = '/bids/' ~ bid.bid_id if section.value == 'overview' else '/bids/' ~ bid.bid_id ~ '/' ~ section.value %}
+{% set current_stage = workflow.current_stage %}
+{# Two spine stages can share one workspace section. Exactly one row is marked as
+   the stage being viewed, so the navigator never shows two current positions. #}
+{% set viewing = namespace(key=none) %}
+{% for stage in workflow.stages if stage.section_path == here and viewing.key is none %}{% set viewing.key = stage.key %}{% endfor %}
+{% if current_stage.section_path == here %}{% set viewing.key = current_stage.key %}{% endif %}
 <p class="muted"><a href="/my-day">My Day</a> → <a href="/bids">Bids</a> → {{ bid.project_name }} → {{ bid_section_label }}</p>
-<div class="page-heading"><div><p class="eyebrow">Bid workspace</p><h1>{{ bid.project_name }}</h1><p>{{ bid.bid_id }} · {{ bid.customer }}</p></div><div><a href="/my-day">Return to My Day</a> · <a href="/bids">Return to Bids</a></div></div>
-<section class="card bid-header" aria-label="Bid header">
-  <div><div class="label">Bid number</div><strong>{{ bid.bid_id }}</strong></div><div><div class="label">Customer</div><strong>{{ bid.customer }}</strong></div><div><div class="label">Project / opportunity</div><strong>{{ bid.project_name }}</strong></div><div><div class="label">Governance level</div><strong>{{ bid.classification.value|replace('_',' ')|title }} — {{ governance_guide.name }}</strong><br><a href="/bids/{{ bid.bid_id }}/classification">Why this level and can I change it?</a></div>
-  <div><div class="label">Customer due</div><strong>{{ bid.customer_due_date }}</strong></div><div><div class="label">Internal due</div><strong>{{ bid.internal_due_date }}</strong></div><div><div class="label">Bid status</div><strong>{{ bid.status.value|replace('_',' ')|title }}</strong></div><div><div class="label">Current gate</div><strong>{{ workspace.current_gate_label }}</strong></div>
-  <div><div class="label">Readiness verdict</div><strong>{{ readiness.verdict.value|upper }}</strong></div><div class="wide"><div class="label">Next required action</div><a href="{{ workspace.next_action_destination }}"><strong>{{ workspace.next_action }}</strong></a></div>
+
+<header class="bid-bar">
+  <div>
+    <p class="eyebrow">Bid workspace · {{ bid_section_label }}</p>
+    <h1>{{ bid.project_name }}</h1>
+    <p class="facts"><b>{{ bid.bid_id }}</b> · {{ bid.customer }} · {{ bid.classification.value|replace('_',' ')|title }} {{ governance_guide.name }} · Owner <b>{{ bid.bc_owner }}</b> · Customer due <b>{{ bid.customer_due_date }}</b> · Internal due <b>{{ bid.internal_due_date }}</b> · {{ bid.status.value|replace('_',' ')|title }}</p>
+  </div>
+  <p class="facts"><a href="/bids">← All Bids</a> · <a href="/my-day">My Day</a></p>
+</header>
+
+<section class="card next-action" id="next-action" aria-label="Next required action">
+  <div>
+    <p class="eyebrow">Next required action</p>
+    <h2>{{ workflow.next_action_label }}</h2>
+    <p class="context">Stage {{ workflow.stages|selectattr('label','equalto',workflow.next_action_stage_label)|map(attribute='number')|first }} of 9 · {{ workflow.next_action_stage_label }}</p>
+  </div>
+  <a class="button-lg" href="{{ workflow.next_action_path }}">{{ workflow.next_action_label }}</a>
 </section>
-<details class="card" aria-label="Governance summary"><summary>{{ bid.classification.value|replace('_',' ')|title }} — {{ governance_guide.name }} · governance rationale and controls</summary>{% if classification_assessment %}<p><strong>Recommended minimum:</strong> {{ classification_assessment.recommended_level.value|replace('_',' ')|title }}{% if classification_assessment.selected_level != classification_assessment.recommended_level %} · Saved higher level: {{ classification_assessment.selected_level.value|replace('_',' ')|title }}{% endif %}</p><p><strong>Why:</strong> {{ classification_assessment.rationale|join('; ') }}.</p>{% if classification_assessment.override_rationale %}<p><strong>Reason for higher level:</strong> {{ classification_assessment.override_rationale }}</p>{% endif %}{% else %}<p><strong>Legacy/manual classification — review classification.</strong> No historical rationale has been fabricated.</p>{% endif %}<p><strong>Required controls:</strong> {{ governance_guide.controls|join(', ') }}.</p><p><strong>Difference from adjacent levels:</strong> {{ governance_guide.adjacent_difference }}</p><p><strong>Next:</strong> {{ governance_guide.next_action }} <a href="/bids/{{ bid.bid_id }}/classification">Review or reassess classification</a>.</p></details>
-<nav class="workspace-tabs" aria-label="Bid workspace sections">
-  <a href="/bids/{{ bid.bid_id }}"{% if section.value == 'overview' %} class="active" aria-current="page"{% endif %}>Overview &amp; Plan</a>
-  <a href="/bids/{{ bid.bid_id }}/requirements-scope"{% if section.value == 'requirements-scope' %} class="active" aria-current="page"{% endif %}>Requirements &amp; Scope</a>
-  <a href="/bids/{{ bid.bid_id }}/manufacturers-coverage"{% if section.value == 'manufacturers-coverage' %} class="active" aria-current="page"{% endif %}>Manufacturers &amp; Coverage</a>
-  <a href="/bids/{{ bid.bid_id }}/commercial-contract"{% if section.value == 'commercial-contract' %} class="active" aria-current="page"{% endif %}>Commercial &amp; Contract</a>
-  <a href="/bids/{{ bid.bid_id }}/proposal-negotiation"{% if section.value == 'proposal-negotiation' %} class="active" aria-current="page"{% endif %}>Proposal &amp; Negotiation</a>
-  <a href="/bids/{{ bid.bid_id }}/award-handover"{% if section.value == 'award-handover' %} class="active" aria-current="page"{% endif %}>Award &amp; Handover</a>
+
+<nav class="card stage-nav" aria-label="Bid workflow stages">
+  <ol class="stages">
+  {% for stage in workflow.stages %}
+    {# A stage the work has not reached stays visible for orientation but never
+       competes with the current position, even when its prerequisites already fail. #}
+    {% set future = stage.number > current_stage.number and stage.status.value in ['Not started', 'Blocked'] %}
+    <li class="stage{{ ' viewing' if stage.key == viewing.key }}{{ ' settled' if stage.settled }}{{ ' blocked' if stage.status.value == 'Blocked' and not future }}{{ ' future' if future }}{{ ' current' if stage.key == workflow.current_stage_key }}"{% if stage.key == viewing.key %} aria-current="true"{% endif %}>
+      <span class="stage-no">{{ stage.number }}</span>
+      <a class="stage-label" href="{{ stage.section_path }}">{{ stage.label }}</a>
+      <span><span class="s-badge {{ stage.status.slug }}">{{ stage.status.value }}</span></span>
+      <span class="stage-summary">{{ stage.summary }}{% if stage.blocked_reason %} — {{ stage.blocked_reason }}{% endif %}</span>
+      <span class="stage-actions">{% if stage.actionable and not stage.settled and stage.key != workflow.current_stage_key %}<a class="stage-action" href="{{ stage.action_path }}">{{ stage.action_label }}</a>{% elif stage.settled and stage.actionable %}<a class="stage-action" href="{{ stage.action_path }}">{{ stage.action_label }}</a>{% endif %}</span>
+    </li>
+  {% endfor %}
+  </ol>
 </nav>
-<section class="card rail{% if readiness.verdict.value == 'clear' %} clear{% endif %}" aria-label="Gate and readiness rail"><div class="page-heading"><div><h2>{{ workspace.current_gate_label }} · {{ readiness.verdict.value|upper }}</h2><p>{{ workspace.current_gate_description }}</p></div><div><strong>Next gate</strong><br>{{ workspace.next_gate_label or 'Accepted handover is the boundary' }}</div></div>
-{% if workspace.blockers %}<h3>Blocking reasons</h3>{% for blocker in workspace.blockers %}<article class="row"><strong>{{ blocker.description }}</strong><p>{{ blocker.detail }}</p><p><strong>Why it matters:</strong> {{ blocker.consequence }} · <strong>Owner:</strong> {{ blocker.owner }} · <strong>Owing party:</strong> {{ blocker.owing_party }}{% if blocker.due_date %} · <strong>Due:</strong> {{ blocker.due_date }}{% endif %}</p><p class="muted">Evidence: {{ blocker.evidence_source }} · <a href="{{ blocker.destination }}">Resolve here</a></p></article>{% endfor %}{% else %}<p><strong>No active blocker exists for the current gate.</strong></p>{% endif %}
-{% if workspace.waiting_items %}<h3>Waiting on others</h3>{% for item in workspace.waiting_items %}<p><a href="/my-work/{{ item.work_item_id }}">{{ item.title }}</a> · {{ item.waiting_party_label }}{% if item.chase_date %} · follow up {{ item.chase_date }}{% endif %}</p>{% endfor %}{% endif %}
-{% if workspace.waiting_control_attention %}<h3>Manufacturer or supplier responses outstanding</h3>{% for item in workspace.waiting_control_attention %}<p><a href="/bids/{{ bid.bid_id }}/manufacturers-coverage">{{ item.code|replace('_',' ')|title }} · {{ item.entity_id }}</a></p>{% endfor %}{% endif %}
-{% if workspace.decision_attention %}<h3>Decisions required</h3>{% for item in workspace.decision_attention %}<p><a href="/decisions?bid_id={{ bid.bid_id }}">Pending decision {{ item.entity_id }}</a></p>{% endfor %}{% endif %}
-<p><strong>Next required action:</strong> <a href="{{ workspace.next_action_destination }}">{{ workspace.next_action }}</a></p></section>
-<section class="card"><h2>Controls for {{ bid.classification.value|replace('_',' ')|title }}</h2>{% for control in workspace.classification_controls %}<p><strong>{{ 'Required' if control.required else 'Available' }}:</strong> <a href="{{ '/bids/' ~ bid.bid_id if control.gate.value in ['g0','g1'] else '/bids/' ~ bid.bid_id ~ '/commercial-contract' }}">{{ control.label }}</a> — {{ control.explanation }}</p>{% endfor %}</section>
+
+<p class="status-strip{{ ' clear' if readiness.verdict.value == 'clear' }}">
+  <strong>{{ workflow.status_line }}</strong>
+  <span>{{ workflow.readiness_line }}</span>
+  {% if workflow.outstanding %}<a href="#outstanding">See what is outstanding</a>{% endif %}
+</p>
 
 {% if section.value == 'overview' %}
-<section class="card" id="navigator"><div class="page-heading"><div><h2>Bid Setup and Response Navigator</h2><p>Completeness guides the work sequence; TASK-06 remains the only readiness verdict.</p></div><strong>Setup / response completeness ≠ {{ readiness.verdict.value|upper }} readiness</strong></div>
-{% for stage in navigator %}<article class="navigator-row"><div><strong>{{ loop.index }}. {{ stage.label }}</strong>{% if stage.blocker %}<div class="muted">{{ stage.blocker }}</div>{% endif %}</div><div class="stage-status {{ stage.status }}">{{ stage.status }}</div><div>{{ stage.completeness }}</div><div><a class="button" href="{{ stage.primary_path }}">{{ stage.primary_label }}</a><br><a href="{{ stage.detail_path }}">View details</a></div></article>{% endfor %}</section>
-<section class="card"><h2>Next best actions</h2>{% for stage in next_best_actions %}<p><a href="{{ stage.primary_path }}"><strong>{{ stage.primary_label }}</strong></a> — {{ stage.completeness }}</p>{% endfor %}</section>
-<section class="grid"><div class="card"><h2>Overview &amp; Plan</h2><p>Confirm Bid identity, dates, ownership, classification and the controlled pursuit decision.</p><dl><dt>Bid owner</dt><dd>{{ bid.bc_owner }}</dd><dt>Sales owner</dt><dd>{{ bid.sales_owner }}</dd><dt>Release date</dt><dd>{{ bid.release_date }}</dd><dt>Anticipated award</dt><dd>{{ bid.anticipated_award_date or 'Not recorded' }}</dd></dl><p><a href="/decisions?bid_id={{ bid.bid_id }}">Open decisions and approvals</a></p></div><div class="card"><h2>Current control position</h2><p><strong>{{ readiness.summary }}</strong></p><p>{{ coverage.total_active }} active customer requirements · {{ coverage.exception_total }} exceptions · {{ documents|length }} controlled documents</p></div></section>
+<section class="card" id="bid-setup">
+  <div class="page-heading">
+    <div><h2>Bid setup</h2><p>Bid identity, dates, ownership and governance level. Received customer files belong to Package intake.</p></div>
+    <a href="/bids/{{ bid.bid_id }}/classification">Review or reassess classification</a>
+  </div>
+  <dl>
+    <dt>Bid owner</dt><dd>{{ bid.bc_owner }}</dd>
+    <dt>Sales owner</dt><dd>{{ bid.sales_owner }}</dd>
+    <dt>Customer</dt><dd>{{ bid.customer }} · {{ bid.customer_type.value|replace('_',' ')|title }}</dd>
+    <dt>Release date</dt><dd>{{ bid.release_date }}</dd>
+    <dt>Anticipated award</dt><dd>{{ bid.anticipated_award_date or 'Not recorded' }}</dd>
+    <dt>Governance level</dt><dd>{{ bid.classification.value|replace('_',' ')|title }} — {{ governance_guide.name }}</dd>
+  </dl>
+  <p class="actions"><a href="/decisions?bid_id={{ bid.bid_id }}">Open decisions and approvals</a> · <a href="/my-work?bid_id={{ bid.bid_id }}">Open My Work for this Bid</a></p>
+</section>
+{% elif section.value == 'package-intake-addenda' %}
+{% include '_package_intake_section.html' %}
 {% elif section.value == 'requirements-scope' %}
 <section class="card" id="requirements"><div class="page-heading"><div><h2>Customer requirements</h2><p>A customer requirement records what the customer asked for. Our proposed response remains a separate authoritative fact.</p></div><div><a class="button" href="/requirements?bid_id={{ bid.bid_id }}#create">Add requirement</a> · <a href="/bids/{{ bid.bid_id }}/requirements-handover.csv">Export handover</a></div></div>{% if requirements %}{% for requirement in requirements %}<div class="row"><a href="/requirements/{{ requirement.requirement_id }}"><strong>{{ requirement.title }}</strong></a><div class="muted">{{ requirement.disposition.value|replace('_',' ')|title }} · Owner: {{ requirement.owner or 'not assigned' }} · Our response: {{ requirement.response_text or 'not recorded' }}</div></div>{% endfor %}{% else %}<p>No customer requirements are recorded. Add one from its controlled customer source.</p>{% endif %}</section>
 <section class="card" id="scope-and-interfaces"><div class="page-heading"><div><h2>Scope and interfaces</h2><p>A scope item records what this Bid proposes to supply, exclude, or qualify. An interface records a boundary, dependency, or shared responsibility.</p></div><a href="/scope-interfaces?bid_id={{ bid.bid_id }}">Advanced scope and relationship controls</a></div>
@@ -44,7 +124,7 @@
 <form id="add-manufacturer-package" method="post" action="/vendor-documents/packages" class="grid"><input type="hidden" name="bid_id" value="{{ bid.bid_id }}"><input type="hidden" name="origin_section" value="bid"><label>Manufacturer or supplier<input name="proposed_manufacturer" required></label><label>Equipment or supply package<input name="package_name" required></label><label>Package code<input name="package_code" required></label><label>Responsible internal owner<input name="internal_owner" required value="{{ bid.bc_owner }}"></label><label>Customer VDRL reference, if applicable<input name="source_vdrl_reference"></label><label>Response source or package note<textarea name="notes"></textarea></label><button type="submit">Add manufacturer/equipment package</button></form>
 {% for item in manufacturer_packages %}{% set package = item.package %}<article class="row"><div class="page-heading"><div><a href="/vendor-documents/packages/{{ package.package_id }}"><strong>{{ package.proposed_manufacturer }} — {{ package.package_name }}</strong></a><p>{{ package.package_code }} · Owner: {{ package.internal_owner }} · Customer requirements covered: {{ item.linked_customer_requirements }}</p></div><a href="/vendor-documents/packages/{{ package.package_id }}">Advanced package details</a></div><p><strong>Manufacturer response:</strong> {{ 'Coverage ready for handover' if item.readiness.ready else 'Response or evidence remains unresolved' }} · <strong>Exceptions/actions:</strong> {{ item.readiness.blockers|length }} · <strong>VDRL coverage:</strong> {{ item.requirements|length }} responsibility row(s).</p></article>{% else %}<p><strong>No manufacturer or supplier coverage has been recorded for this Bid.</strong></p><p>Add the proposed supplier and equipment or supply package, then record exact confirmations, exceptions, and vendor-document responsibilities where applicable.</p>{% endfor %}<p><a href="/suppliers?bid_id={{ bid.bid_id }}">Supplier assurance details</a> · <a href="/vendor-documents?bid_id={{ bid.bid_id }}">All package and VDRL controls</a></p></section>
 {% elif section.value == 'commercial-contract' %}
-<section class="card" id="commercial"><div class="page-heading"><div><h2>Commercial and contract review</h2><p>Configured topics prompt assessment. Authored positions, readiness concerns, contract risks, and approval requirements remain distinct records.</p></div>{% if commercial_positions %}<a href="/commercial?bid_id={{ bid.bid_id }}">Advanced commercial review</a>{% endif %}</div>{% if not commercial_positions %}<p><strong>Commercial review has not been set up for this Bid.</strong></p><form method="post" action="/commercial"><input type="hidden" name="bid_id" value="{{ bid.bid_id }}"><input type="hidden" name="operation" value="initialize"><input type="hidden" name="default_owner" value="{{ bid.bc_owner }}"><button type="submit">Set up commercial review topics</button></form>{% else %}<p>{{ commercial_position_readiness.reviewed }} of {{ commercial_position_readiness.total }} applicable topics assessed. Readiness concerns are derived and create no risk or approval record automatically.</p><div class="table-wrap"><table><thead><tr><th>Topic and position</th><th>Disposition / owner</th><th>Linked records</th><th>Unresolved action / readiness</th><th>Actions</th></tr></thead><tbody>{% for row in commercial_positions %}<tr><td><strong>{{ row.label }}</strong><br>Customer: {{ row.customer_position or 'Not recorded' }}<br>Our Bid: {{ row.proposed_position or 'Not recorded' }}</td><td>{{ row.disposition|replace('_',' ')|title }}<br>{{ row.owner or 'Owner not assigned' }}{% if row.reviewer %} · Reviewer: {{ row.reviewer }}{% endif %}</td><td>{{ row.risk_count }} risk(s) · {{ row.approval_count }} approval(s) · {{ row.negotiation_count }} negotiation(s)</td><td>{{ row.current_outcome or 'Review required' }}<br>{{ 'Affects readiness' if row.disposition in ['NOT_REVIEWED','QUALIFY','CLARIFICATION_REQUIRED','REJECT'] else 'No current topic concern' }}</td><td><a href="/commercial/{{ row.position_id }}">{{ 'Review position' if row.disposition == 'NOT_REVIEWED' else 'Create or revise position' }}</a><br><a href="/commercial/{{ row.position_id }}#position-form">Mark not applicable (reason required)</a><br><a href="/contract-risks?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}&topic={{ row.label|urlencode }}#author">Create linked risk</a><br><a href="/negotiations?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}#start-negotiation">Start clarification</a> · <a href="/negotiations?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}#start-negotiation">Start negotiation</a><br><a href="/decisions?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}#decision-case">Request approval</a><br><a href="/work/from/commercial/{{ row.position_id }}">Create follow-up work</a></td></tr>{% endfor %}</tbody></table></div>{% endif %}</section>
+<section class="card" id="commercial"><div class="page-heading"><div><h2>Commercial and contract review</h2><p>Configured topics prompt assessment. Authored positions, readiness concerns, contract risks, and approval requirements remain distinct records.</p></div>{% if commercial_positions %}<a href="/commercial?bid_id={{ bid.bid_id }}">Advanced commercial review</a>{% endif %}</div>{% if not commercial_positions %}<p><strong>Commercial review has not been set up for this Bid.</strong></p><form method="post" action="/commercial"><input type="hidden" name="bid_id" value="{{ bid.bid_id }}"><input type="hidden" name="origin_section" value="bid"><input type="hidden" name="operation" value="initialize"><input type="hidden" name="default_owner" value="{{ bid.bc_owner }}"><button type="submit">Set up commercial review topics</button></form>{% else %}<p>{{ commercial_position_readiness.reviewed }} of {{ commercial_position_readiness.total }} applicable topics assessed. Readiness concerns are derived and create no risk or approval record automatically.</p><div class="table-wrap"><table><thead><tr><th>Topic and position</th><th>Disposition / owner</th><th>Linked records</th><th>Unresolved action / readiness</th><th>Actions</th></tr></thead><tbody>{% for row in commercial_positions %}<tr><td><strong>{{ row.label }}</strong><br>Customer: {{ row.customer_position or 'Not recorded' }}<br>Our Bid: {{ row.proposed_position or 'Not recorded' }}</td><td>{{ row.disposition|replace('_',' ')|title }}<br>{{ row.owner or 'Owner not assigned' }}{% if row.reviewer %} · Reviewer: {{ row.reviewer }}{% endif %}</td><td>{{ row.risk_count }} risk(s) · {{ row.approval_count }} approval(s) · {{ row.negotiation_count }} negotiation(s)</td><td>{{ row.current_outcome or 'Review required' }}<br>{{ 'Affects readiness' if row.disposition in ['NOT_REVIEWED','QUALIFY','CLARIFICATION_REQUIRED','REJECT'] else 'No current topic concern' }}</td><td><a href="/commercial/{{ row.position_id }}">{{ 'Review position' if row.disposition == 'NOT_REVIEWED' else 'Create or revise position' }}</a><br><a href="/commercial/{{ row.position_id }}#position-form">Mark not applicable (reason required)</a><br><a href="/contract-risks?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}&topic={{ row.label|urlencode }}#author">Create linked risk</a><br><a href="/negotiations?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}#start-negotiation">Start clarification</a> · <a href="/negotiations?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}#start-negotiation">Start negotiation</a><br><a href="/decisions?bid_id={{ bid.bid_id }}&position_id={{ row.position_id }}#decision-case">Request approval</a><br><a href="/work/from/commercial/{{ row.position_id }}">Create follow-up work</a></td></tr>{% endfor %}</tbody></table></div>{% endif %}</section>
 {% elif section.value == 'proposal-negotiation' %}
 <section class="card"><div class="page-heading"><div><p class="eyebrow">Primary proposal action</p><h2>Proposal readiness and issue control</h2><p>Prepare the local Proposal Studio package, verify returned generation evidence, reuse approvals, and record the exact offer manually issued to the customer.</p></div><a class="button" href="/bids/{{ bid.bid_id }}/proposal-issue-control">{{ proposal_control.next_action }}</a></div><p><strong>Status:</strong> {{ proposal_control.status.value|replace('_',' ')|title }} · <strong>Blockers:</strong> {{ proposal_control.blockers|length }} · <strong>Artifacts:</strong> {{ 'Verified' if proposal_control.artifacts_verified else 'Not verified' }} · <strong>Latest customer issue:</strong> {{ proposal_control_history.baselines[0].issue_revision if proposal_control_history.baselines else 'Not issued' }}</p>{% if proposal_control.changed_areas %}<p><strong>Stale areas:</strong> {{ proposal_control.changed_areas|join(', ')|replace('_',' ')|title }}</p>{% endif %}</section>
 <section class="card"><div class="page-heading"><div><h2>Derived proposal inputs</h2><p>These inputs flow from authoritative Bid records. Their source remains visible and no duplicate proposal-input record is required.</p></div><div><a href="/commercial-proposal-input.csv?bid_id={{ bid.bid_id }}">Formula-safe commercial export</a> · <a href="/proposals?bid_id={{ bid.bid_id }}">Proposal applicability</a></div></div><div class="table-wrap"><table><thead><tr><th>Business area</th><th>Input</th><th>Bid response / status</th><th>Authoritative origin</th></tr></thead><tbody>{% for row in proposal_inputs %}<tr><td>{{ row.area }}</td><td>{{ row.input }}</td><td>{{ row.response }}</td><td><a href="{{ row.href }}">{{ row.origin }}</a></td></tr>{% else %}<tr><td colspan="4">No proposal inputs are available yet. Complete customer requirements and proposed Bid positions first.</td></tr>{% endfor %}</tbody></table></div></section><section class="card"><h2>Negotiation</h2><p>Qualified, clarification-required, and rejected commercial positions can start an explicitly confirmed negotiation.</p><p><a href="/negotiations?bid_id={{ bid.bid_id }}">Open negotiation controls</a></p></section>
@@ -52,4 +132,52 @@
 <section class="card"><div class="page-heading"><div><p class="eyebrow">Primary handover action</p><h2>Whole-Bid pre-award handover</h2><p>One reconciled view brings requirements, evidence, accountability, commercial positions, risks, approvals, deliverables and outstanding actions together.</p></div><a class="button" href="/bids/{{ bid.bid_id }}/handover">Open Bid Handover</a></div><p><span class="badge {{ 'ready' if handover_report.handover_ready else 'blocked' }}">{{ 'Ready' if handover_report.handover_ready else 'Not ready' }}</span> {% if handover_report.blockers %}{{ handover_report.blockers|length }} unresolved blocking reason(s).{% else %}No unresolved blockers.{% endif %}</p><div class="actions"><a href="/bids/{{ bid.bid_id }}/handover.csv">Download consolidated CSV</a></div></section>
 <section class="grid"><div class="card"><h2>Award reconciliation</h2><p>This remediation does not introduce post-award execution tracking. Bid status: <strong>{{ bid.status.value|replace('_',' ')|title }}</strong></p></div><div class="card"><h2>Supporting evidence exports</h2><p class="muted">These domain exports are secondary to the authoritative Bid Handover.</p>{% for package in vendor_packages %}<p><a href="/vendor-documents/packages/{{ package.package_id }}/handover.csv">{{ package.package_code }} manufacturer evidence CSV</a></p>{% else %}<p>No manufacturer evidence export is available.</p>{% endfor %}<p><a href="/bids/{{ bid.bid_id }}/requirements-handover.csv">Requirements evidence CSV</a></p></div></section>
 {% endif %}
+
+{% if workflow.outstanding %}
+<details class="card" id="outstanding">
+  <summary><strong>What is outstanding ({{ workflow.blocking_count }} blocking)</strong> — owner, evidence and one resolve action each</summary>
+  {% for item in workflow.outstanding %}
+  <div class="outstanding-row">
+    <div>
+      <h3>{{ item.heading }}</h3>
+      <p><span class="s-badge {{ 'blocked' if item.blocking else 'in-progress' }}">{{ 'Blocking' if item.blocking else 'Advisory' }}</span> {{ item.detail }}</p>
+    </div>
+    <div>
+      <p><strong>Why it matters:</strong> {{ item.consequence }}</p>
+      <p><strong>Owner:</strong> {{ item.owner }} · <strong>Owing party:</strong> {{ item.owing_party }}{% if item.due_date %} · <strong>Due:</strong> {{ item.due_date }}{% endif %}</p>
+      <p>Evidence: {{ item.evidence_source }}</p>
+    </div>
+    <div><a class="button" href="{{ item.resolve_path }}">{{ item.resolve_label }}</a></div>
+  </div>
+  {% endfor %}
+</details>
+{% endif %}
+
+{% if workspace.waiting_items or workspace.waiting_control_attention or workspace.decision_attention %}
+<details class="card">
+  <summary><strong>Waiting on others</strong> — follow-up actions, outstanding supplier responses and pending decisions</summary>
+  {% for item in workspace.waiting_items %}<p><a href="/my-work/{{ item.work_item_id }}">{{ item.title }}</a> · {{ item.waiting_party_label }}{% if item.chase_date %} · follow up {{ item.chase_date }}{% endif %}</p>{% endfor %}
+  {% for item in workspace.waiting_control_attention %}<p><a href="/bids/{{ bid.bid_id }}/manufacturers-coverage">{{ item.code|replace('_',' ')|capitalize }} · {{ item.entity_id }}</a></p>{% endfor %}
+  {% for item in workspace.decision_attention %}<p><a href="/decisions?bid_id={{ bid.bid_id }}">Pending decision {{ item.entity_id }}</a></p>{% endfor %}
+</details>
+{% endif %}
+
+<details class="card" id="governance">
+  <summary><strong>Governance level and required controls</strong> — {{ bid.classification.value|replace('_',' ')|title }}, {{ governance_guide.name }}</summary>
+  {% if classification_assessment %}<p><strong>Recommended minimum:</strong> {{ classification_assessment.recommended_level.value|replace('_',' ')|title }}{% if classification_assessment.selected_level != classification_assessment.recommended_level %} · <strong>Saved higher level:</strong> {{ classification_assessment.selected_level.value|replace('_',' ')|title }}{% endif %}</p><p><strong>Why:</strong> {{ classification_assessment.rationale|join('; ') }}.</p>{% if classification_assessment.override_rationale %}<p><strong>Reason for higher level:</strong> {{ classification_assessment.override_rationale }}</p>{% endif %}{% else %}<p><strong>Legacy/manual classification — review classification.</strong> No historical rationale has been fabricated.</p>{% endif %}
+  {% for control in workspace.classification_controls %}<p><strong>{{ 'Required' if control.required else 'Not required' }}:</strong> <a href="{{ '/bids/' ~ bid.bid_id if control.gate.value in ['g0','g1'] else '/bids/' ~ bid.bid_id ~ '/commercial-contract' }}">{{ control.label }}</a> — {{ control.explanation }}</p>{% endfor %}
+  <p><strong>Required controls:</strong> {{ governance_guide.controls|join(', ') }}.</p>
+  <p><strong>Difference from adjacent levels:</strong> {{ governance_guide.adjacent_difference }}</p>
+  <p><a href="/bids/{{ bid.bid_id }}/classification">Review or reassess classification</a></p>
+</details>
+
+<details class="card" id="gate-evidence">
+  <summary><strong>Gate and readiness evidence</strong> — {{ workspace.current_gate_label }}, TASK-06 verdict {{ readiness.verdict.value|upper }}</summary>
+  <p>{{ workspace.current_gate_description }}</p>
+  <p><strong>Next gate:</strong> {{ workspace.next_gate_label or 'Accepted handover is the boundary' }}</p>
+  <p>{{ readiness.summary }}</p>
+  <p class="muted">{{ readiness.advisory }}</p>
+  <p class="muted">TASK-06 is the only readiness engine. Stage status above reports workflow completeness and never changes this verdict.</p>
+</details>
+
 </main></body></html>

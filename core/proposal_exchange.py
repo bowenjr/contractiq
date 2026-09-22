@@ -31,6 +31,9 @@ class ProposalBlocker(BaseModel):
     message: str
     destination: str
     record_id: str | None = None
+    # Short statement of what is missing. Presentation only: it never changes the
+    # authoritative condition, its evaluation or its code.
+    heading: str | None = None
 
 
 class ProposalReadinessAssessment(BaseModel):

@@ -1,0 +1,180 @@
+{% if intake_error %}
+<section class="card rail" role="alert">
+  <h2>Package intake needs attention</h2>
+  <p><strong>{{ intake_error }}</strong></p>
+  <p>Your entered values remain below. Correct the issue and try again.</p>
+  {% if intake_retained_values %}<dl>{% for label, value in intake_retained_values %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>{% endif %}
+</section>
+{% endif %}
+
+{% if intake_import %}
+<section class="card" aria-label="Import received package">
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">Received package intake</p>
+      <h2>{% if intake_import.mode == 'addendum' %}Select the addendum or revised package folder{% else %}Select the received customer package folder{% endif %}</h2>
+      <p>Select the folder that contains the files received from the customer. ContractIQ will preview it before making its protected managed copy.</p>
+    </div>
+    <a href="/bids/{{ bid.bid_id }}/package-intake-addenda">Return to Package intake</a>
+  </div>
+  <p><strong>Received package</strong> means files physically received and preserved by ContractIQ. The source inbox is temporary; it is not continuously synchronized.</p>
+</section>
+
+{% if not intake_import.selected_folder %}
+<section class="card" aria-label="Available intake folders">
+  <div class="page-heading"><div><h2>Select an available intake folder</h2><p>Refresh is safe: it reads configured inboxes and creates no database or audit record.</p></div><a class="button" href="/bids/{{ bid.bid_id }}/package-intake-addenda/import?mode={{ intake_import.mode }}">Refresh folder list</a></div>
+  {% for inbox in intake_import.inboxes %}
+    <article class="row">
+      <h3>{{ inbox.display_name }}</h3>
+      {% if inbox.warning %}<p class="muted">{{ inbox.warning }}</p>{% endif %}
+      {% for folder in inbox.folders %}
+        <div class="row">
+          <strong>{{ folder.display_name }}</strong>
+          <p>{{ folder.file_count }} file(s) · {{ human_bytes(folder.total_bytes) }} · last changed {{ folder.last_modified_at }}</p>
+          {% if folder.warning %}<p class="muted">{{ folder.warning }}</p>{% else %}
+            {% if folder.already_imported %}<span class="badge">Already imported</span>{% endif %}
+            <form method="get" action="/bids/{{ bid.bid_id }}/package-intake-addenda/import">
+              <input type="hidden" name="source_root_alias" value="{{ inbox.source_root_alias }}">
+              <input type="hidden" name="source_folder" value="{{ folder.folder_name }}">
+              <input type="hidden" name="mode" value="{{ intake_import.mode }}">
+              <button type="submit">Select folder</button>
+            </form>
+          {% endif %}
+        </div>
+      {% else %}<p>No package folders are available in this inbox.</p>{% endfor %}
+    </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card" aria-label="Selected intake folder">
+  <div class="page-heading"><div><h2>Selected folder: {{ intake_import.selected_folder.display_name }}</h2><p>{{ intake_import.selected_folder.file_count }} file(s) · {{ human_bytes(intake_import.selected_folder.total_bytes) }} · last changed {{ intake_import.selected_folder.last_modified_at }}</p></div><a href="/bids/{{ bid.bid_id }}/package-intake-addenda/import?mode={{ intake_import.mode }}">Choose another folder</a></div>
+  {% if intake_import.selected_folder.already_imported %}<p class="muted">This folder's current bytes match a previously imported release. You may review it, but importing it again creates a separate customer-receipt occurrence only when you confirm.</p>{% endif %}
+  <form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/preview" class="form-grid">
+    <input type="hidden" name="source_root_alias" value="{{ intake_import.selected_folder.source_root_alias }}">
+    <input type="hidden" name="source_folder" value="{{ intake_import.selected_folder.folder_name }}">
+    <input type="hidden" name="intake_mode" value="{{ intake_import.mode }}">
+    {% if intake_import.mode == 'initial' %}
+      <input type="hidden" name="release_type" value="INITIAL_PACKAGE">
+      <p class="wide"><strong>Release type:</strong> Initial bid package</p>
+    {% else %}
+      <label>Release type<select name="release_type" required><option value="ADDENDUM">Addendum</option><option value="CLARIFICATION">Clarification</option><option value="REVISED_PACKAGE">Revised package</option><option value="OTHER">Other customer release</option></select></label>
+    {% endif %}
+    <label>Customer package or release reference<input name="exact_customer_reference" value="{{ intake_entered.exact_customer_reference or '' }}" placeholder="For example: Addendum 01"></label>
+    <label>Customer issue date<input type="date" name="customer_issue_date" value="{{ intake_entered.customer_issue_date or '' }}"></label>
+    <label>Received from<select name="received_channel" required><option value="EMAIL">Email</option><option value="PORTAL">Portal</option><option value="OTHER">Other</option></select></label>
+    <p class="wide muted">ContractIQ records the date and time of receipt itself when you confirm the import. You do not need to enter it.</p>
+    <label class="wide">Receipt note<textarea name="note">{{ intake_entered.note or '' }}</textarea></label>
+    <div class="wide actions"><button type="submit">Preview folder and file inventory</button></div>
+  </form>
+</section>
+{% endif %}
+
+{% if intake_preview %}
+<section class="card rail" aria-label="Managed ingestion preview">
+  <h2>Preview: {{ intake_preview.folder_name }}</h2>
+  <p><strong>{{ intake_preview.file_count }} file(s), {{ human_bytes(intake_preview.total_bytes) }}.</strong> This preview has not changed the source folder, database or managed storage.</p>
+  {% if intake_preview.directories %}<p><strong>Nested folders:</strong> {{ intake_preview.directories|join(', ') }}</p>{% endif %}
+  {% for warning in intake_preview.warnings %}<p class="muted">{{ warning }}</p>{% endfor %}
+  <div class="table-wrap"><table><thead><tr><th>Relative filename</th><th>File type</th><th>Size</th><th>Review note</th></tr></thead><tbody>
+    {% for file in intake_preview.files %}<tr><td>{{ file.original_relative_path }}</td><td>{{ file.detected_media_type or 'Unidentified' }}</td><td>{{ human_bytes(file.byte_size) }}</td><td>{% if file.is_archive %}Retain; do not expand{% elif file.is_duplicate %}Potential exact-byte duplicate{% elif file.needs_identification %}Identify file type{% else %}Ready for inventory{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  <form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/register"><input type="hidden" name="confirmation_token" value="{{ intake_preview.token }}"><button type="submit">Confirm managed ingestion</button></form>
+</section>
+{% endif %}
+
+{% elif selected_release %}
+<section class="card" aria-label="Received package context">
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">Bid package control</p>
+      <h2>Received package {{ selected_release.exact_customer_reference or ('Receipt ' ~ selected_release.receipt_sequence) }}</h2>
+      <p>{{ selected_release.release_type|replace('_',' ')|title }} · received {{ selected_release.received_at }} · {{ selected_release.files|length }} file(s). The full package register stays on Package intake.</p>
+    </div>
+    <a href="/bids/{{ bid.bid_id }}/package-intake-addenda">Return to Package intake</a>
+  </div>
+</section>
+
+{% else %}
+<section class="card" aria-label="Bid package status">
+  <div class="page-heading"><div><p class="eyebrow">Bid package control</p><h2>Package intake and addenda</h2><p>Start with the files received from the customer. Review them, then confirm the exact set of customer documents this offer is based on.</p></div>{% if intake.current_snapshot %}<a href="/bids/{{ bid.bid_id }}/package-intake-addenda/bid-basis-register">Open Bid Basis Register</a>{% endif %}</div>
+  <div class="grid">
+    <div><div class="label">Current Bid basis</div><strong>{{ intake.current_snapshot.label if intake.current_snapshot else 'Not yet confirmed' }}</strong></div>
+    <div><div class="label">Latest received package</div><strong>{{ intake_status.latest_received.exact_customer_reference or ('Receipt ' ~ intake_status.latest_received.receipt_sequence) if intake_status.latest_received else 'None' }}</strong></div>
+    <div><div class="label">Latest known customer addendum</div><strong>{{ intake_status.latest_known_addendum.exact_customer_reference or 'None recorded' if intake_status.latest_known_addendum else 'None recorded' }}</strong></div>
+    <div><div class="label">Received but not incorporated</div><strong>{{ intake_operational.received_not_incorporated }}</strong></div>
+    <div><div class="label">Expected but missing releases</div><strong>{{ intake_operational.expected_missing }}</strong></div>
+    <div><div class="label">Files requiring review</div><strong>{{ intake_operational.files_requiring_review }}</strong></div>
+    <div><div class="label">Unresolved addendum directives</div><strong>{{ intake_operational.unresolved_directives }}</strong></div>
+    
+  </div>
+  <p><strong>Proposal-readiness effect:</strong> {% if intake.attention %}{{ intake.attention|selectattr('blocking')|list|length }} intake item(s) currently block proposal issue.{% else %}No package-intake issue is currently recorded.{% endif %}</p>
+  <div class="actions">
+    {% if intake.releases %}<a class="button" href="/bids/{{ bid.bid_id }}/package-intake-addenda/import?mode=addendum">Import addendum or revised package</a>{% else %}<a class="button" href="/bids/{{ bid.bid_id }}/package-intake-addenda/import?mode=initial">Import customer bid package</a>{% endif %}
+    {% if intake_status.latest_received %}<a href="/bids/{{ bid.bid_id }}/package-intake-addenda/releases/{{ intake_status.latest_received.release_id }}">Review received files</a>{% endif %}
+    {% if intake.releases %}<a href="#publish-basis">Confirm current Bid basis</a>{% endif %}
+  </div>
+</section>
+
+<section class="card"><h2>What these terms mean</h2><dl><dt>Received package</dt><dd>Files physically received and preserved by ContractIQ.</dd><dt>Addendum</dt><dd>A later customer release that adds, changes or withdraws Bid information.</dd><dt>Incorporated</dt><dd>Reviewed and deliberately included in the Bid Basis.</dd><dt>Current Bid basis</dt><dd>The exact set of customer releases and documents on which the offer is being prepared.</dd><dt>Expected or missing addendum</dt><dd>A customer release known to exist but not yet received.</dd></dl></section>
+
+
+
+<section class="card"><h2>Received packages and releases</h2>{% for release in intake.releases %}<article class="row"><div class="page-heading"><div><a href="/bids/{{ bid.bid_id }}/package-intake-addenda/releases/{{ release.release_id }}"><strong>{{ release.exact_customer_reference or ('Receipt ' ~ release.receipt_sequence) }}</strong></a><p>{{ release.release_type|replace('_',' ')|title }} · received {{ release.received_at }} via {{ release.received_channel|replace('_',' ')|title }} · {{ release.file_count }} file(s)</p></div><span class="badge {{ 'ready' if release.incorporated else 'blocked' }}">{{ 'In current Bid Basis' if release.incorporated else ('Reviewed; not yet in Bid Basis' if release.partial else 'Review and incorporation outstanding') }}</span></div></article>{% else %}<p>No package has been received yet. Import the initial bid package to begin.</p>{% endfor %}</section>
+
+<section class="card" id="publish-basis"><h2>Confirm current Bid basis</h2><p>The current Bid basis is the exact set of customer releases and documents your offer is being prepared against. Confirming it records that set, so everything quoted afterwards can be traced to exactly what the customer issued.</p>{% if intake.releases %}<form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/basis-snapshots"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><input type="hidden" name="expected_current_snapshot_id" value="{{ intake.current_snapshot.snapshot_id if intake.current_snapshot else '' }}"><p>Tick every reviewed customer release this offer is based on. Releases already confirmed stay ticked and cannot be dropped without being replaced.</p>{% for release in intake.releases|reverse %}<label class="checkbox-option"><input type="checkbox" name="release_ids" value="{{ release.release_id }}"{% if release.incorporated or intake.releases|length == 1 %} checked{% endif %}> {{ release.exact_customer_reference or ('Receipt ' ~ release.receipt_sequence) }} · {{ release.release_type|replace('_',' ')|title }}</label>{% endfor %}<label>Name this Bid basis<input name="label" required value="Bid Basis {{ (intake.current_snapshot.snapshot_sequence + 1) if intake.current_snapshot else 1 }}"></label><label>Note (optional)<textarea name="note"></textarea></label><button type="submit">Confirm current Bid basis</button></form>{% else %}<p>Import and review a received package before confirming the Bid basis.</p>{% endif %}</section>
+
+<details class="card"><summary><strong>Missing something? Record expected or missing addendum</strong></summary><p>Use this only when the customer says a release exists but its files have not been received. It is not required to import an ordinary initial package.</p><form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/notices" class="form-grid"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><input type="hidden" name="release_type" value="ADDENDUM"><input type="hidden" name="expectation" value="EXPECTED"><label>Expected addendum reference<input name="exact_customer_reference"></label><label>Customer issue date<input type="date" name="customer_issue_date"></label><label>Expected receipt date<input type="date" name="expected_receipt_date"></label><label>How did you learn of it?<select name="channel"><option value="EMAIL">Email</option><option value="PORTAL">Portal</option><option value="OTHER">Other</option></select></label><label class="wide">What did the customer say?<textarea name="summary" required></textarea></label><label class="wide">Reference or note (optional)<input name="evidence_reference"></label><div class="wide actions"><button type="submit">Record expected or missing addendum</button></div></form>
+  {% for notice in intake.notices %}<article class="row"><strong>{{ notice.exact_customer_reference or 'Expected customer release' }}</strong> · {{ notice.summary }}{% if notice.expectation == 'EXPECTED' %} · expected {{ notice.expected_receipt_date or 'date not supplied' }}{% endif %}{% if intake.releases %}<form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/notice-links"><input type="hidden" name="notice_id" value="{{ notice.notice_id }}"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><label>Resolve with received release<select name="release_id">{% for release in intake.releases %}<option value="{{ release.release_id }}">{{ release.exact_customer_reference or ('Receipt ' ~ release.receipt_sequence) }}</option>{% endfor %}</select></label><input type="hidden" name="relationship" value="FULFILS"><button type="submit">Mark received</button></form>{% endif %}</article>{% else %}<p class="muted">No expected or missing addendum is recorded.</p>{% endfor %}
+</details>
+
+<details class="card"><summary><strong>Technical inventory details and history</strong></summary><p>{{ intake.content_form_counts.get('TEXTUAL', 0) }} textual · {{ intake.content_form_counts.get('DRAWING', 0) }} drawing · {{ intake.content_form_counts.get('MIXED', 0) }} mixed · {{ intake.content_form_counts.get('UNKNOWN', 0) }} unknown.</p><p>{{ intake.duplicate_count }} exact-byte duplicate occurrence(s) · {{ intake.excluded_count }} explicitly excluded file(s). Archives are retained and are not expanded automatically.</p><p class="muted">Hashes, provenance and correction history are available from the individual received release when needed.</p></details>
+{% endif %}
+
+{% if selected_release %}
+<section class="card" id="files"><div class="page-heading"><div><h2>Review received files: {{ selected_release.exact_customer_reference or ('Receipt ' ~ selected_release.receipt_sequence) }}</h2><p>Confirm what each received file is, then put the ones this offer relies on under document control.</p></div><div><a href="/bids/{{ bid.bid_id }}/package-intake-addenda">Return to Package intake</a></div></div>
+{% if selected_release.outstanding_summary %}<div class="rail" role="status"><p><strong>Still to do on this package</strong></p>{% for line in selected_release.outstanding_summary %}<p>{{ line }}</p>{% endfor %}</div>{% else %}<p><strong>Every received file in this package has been reviewed.</strong> The next step is to confirm the current Bid basis on <a href="/bids/{{ bid.bid_id }}/package-intake-addenda#publish-basis">Package intake</a>.</p>{% endif %}
+<section class="card" aria-label="Bulk received-file review"><h3>Review selected files</h3><p>Choose files from one or more folders, then apply one decision. ContractIQ checks every selected file before recording anything.</p><form id="bulk-review" method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/releases/{{ selected_release.release_id }}/bulk-dispositions" class="form-grid"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><label>Include in Bid basis review?<select name="analysis_eligibility" data-bulk-eligibility required><option value="NOT_ASSESSED"{% if intake_entered.analysis_eligibility == 'NOT_ASSESSED' %} selected{% endif %}>Not yet decided</option><option value="ELIGIBLE"{% if intake_entered.analysis_eligibility == 'ELIGIBLE' %} selected{% endif %}>Include</option><option value="EXCLUDED"{% if intake_entered.analysis_eligibility == 'EXCLUDED' %} selected{% endif %}>Exclude</option></select></label><label>Common file kind <span class="muted">(optional; never proposed automatically)</span><select name="content_form"><option value="">Do not change file kind</option>{% for value in content_forms %}<option value="{{ value.value }}"{% if intake_entered.content_form == value.value %} selected{% endif %}>{{ content_form_label(value.value) }}</option>{% endfor %}</select></label><label data-bulk-exclusion{% if intake_entered.analysis_eligibility != 'EXCLUDED' %} hidden{% endif %}>Why are these files excluded?<input name="exclusion_reason" value="{{ intake_entered.exclusion_reason or '' }}"></label><div class="actions wide"><button type="submit">Apply review decision to selected files</button></div></form></section>
+{% for group in selected_release.file_groups %}<details class="card intake-folder"{% if group.open %} open{% endif %}><summary><strong>{{ group.label }}</strong> · {{ group.file_count }} file(s) · {{ group.awaiting_review }} awaiting review · {{ group.included }} included · {{ group.excluded }} excluded · {{ group.under_control }} under document control</summary><div class="intake-folder-body"><div class="actions"><button type="button" data-select-folder>Select all files in this folder</button><button type="button" data-clear-folder>Clear folder selection</button></div>{% for file in group.files %}<input form="bulk-review" type="hidden" name="review_tokens" value="{{ file.file_id }}|{{ file.disposition_event_id }}"><details class="row intake-file"><summary><label><input form="bulk-review" type="checkbox" name="file_ids" value="{{ file.file_id }}" data-folder-file> Select this file</label> <strong>{{ file.original_relative_path }}</strong> · {{ file.review_status }} · {{ file.size_label }}</summary><article><h3>{{ file.original_relative_path }}</h3><p>{{ file.detected_media_type or 'Unidentified file type' }} · {{ file.size_label }} · <a href="/bids/{{ bid.bid_id }}/package-intake-addenda/releases/{{ selected_release.release_id }}/files/{{ file.file_id }}/download">Open a copy</a></p><p><strong>{{ file.review_status }}</strong>{% if file.exclusion_reason %} · {{ file.exclusion_reason }}{% endif %}<br><strong>Under document control as:</strong> {% if file.document_version_id %}{{ file.document_number or '' }} {{ file.control_title or '' }} {{ file.version_label or '' }}{% else %}Not yet under document control{% endif %}</p><div class="grid">
+<form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/files/{{ file.file_id }}/dispositions"><h4>What is this file?</h4><input type="hidden" name="release_id" value="{{ selected_release.release_id }}"><input type="hidden" name="supersedes_event_id" value="{{ file.disposition_event_id }}"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><label>What kind of file is this?<select name="content_form">{% for value in content_forms %}<option value="{{ value.value }}"{% if value.value == file.content_form %} selected{% endif %}>{{ content_form_label(value.value) }}</option>{% endfor %}</select></label><label>Include in Bid basis review?<select name="analysis_eligibility" data-eligibility>{% for value in analysis_eligibilities %}<option value="{{ value.value }}"{% if value.value == file.analysis_eligibility %} selected{% endif %}>{{ eligibility_label(value.value) }}</option>{% endfor %}</select></label>{% if file.show_confidence %}<label>Confidence in the proposed classification (0–1)<input type="number" min="0" max="1" step="0.01" name="confidence" value="{{ file.confidence if file.confidence is not none else '' }}"></label>{% endif %}<label data-exclusion{% if not file.is_excluded %} hidden{% endif %}>Why is it excluded?<input name="exclusion_reason" value="{{ file.exclusion_reason or '' }}"></label>{% if file.has_duplicate %}<label>This file is the same bytes as<select name="duplicate_of_file_id"><option value="">Not designated</option>{% for candidate in selected_release.files %}{% if candidate.file_id != file.file_id and candidate.sha256 == file.sha256 and candidate.byte_size == file.byte_size %}<option value="{{ candidate.file_id }}"{% if candidate.file_id == file.duplicate_of_file_id %} selected{% endif %}>{{ candidate.original_relative_path }}</option>{% endif %}{% endfor %}</select></label>{% endif %}<button type="submit">Save this review</button></form>
+{% if file.document_version_id %}<div><h4>Under document control</h4><p>This received file is the controlled document <strong>{{ file.control_title or file.document_number or 'recorded version' }}</strong> ({{ file.version_label or 'current version' }}).</p><p><a href="/documents/{{ file.document_id }}?bid_id={{ bid.bid_id }}">Open the controlled document</a></p></div>{% else %}<details class="control-file"><summary><strong>Put under document control</strong></summary><form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/files/{{ file.file_id }}/controlled-document"><p class="muted">ContractIQ uses the copy it already holds. You do not need to find or upload this file again.</p><input type="hidden" name="release_id" value="{{ selected_release.release_id }}"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><input type="hidden" name="supersedes_link_id" value="{{ file.file_document_link_id or '' }}"><label>Document title <span class="muted">— proposed from the filename; correct it if it is wrong</span><input name="title" required maxlength="300" value="{{ file.proposed_title }}"></label><label>Document number (optional)<input name="document_number" maxlength="200"></label><label>What kind of document is it?<select name="category" required>{% for value in document_categories %}<option value="{{ value.value }}">{{ document_category_label(value) }}</option>{% endfor %}</select></label><label>Version<input name="version_label" required maxlength="200" value="Original"></label><button type="submit">Put under document control</button></form></details>{% endif %}
+</div><details><summary>Advanced: evidence and provenance</summary><p>SHA-256 of the received bytes: <span class="hash">{{ file.sha256 }}</span></p><p class="muted">ContractIQ inventoried this file and verified its managed copy. It has not read or interpreted the document's contents.</p>{% if file.document_version_id %}<form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/files/{{ file.file_id }}/document-links"><input type="hidden" name="release_id" value="{{ selected_release.release_id }}"><input type="hidden" name="supersedes_link_id" value="{{ file.file_document_link_id or '' }}"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><label>Exact controlled document version<select name="document_version_id" required>{% for item in controlled_versions %}<option value="{{ item.version.document_version_id }}"{% if item.version.document_version_id == file.document_version_id %} selected{% endif %}>{{ item.document.document_number or '' }} {{ item.document.title }} — {{ item.version.version_label }}</option>{% endfor %}</select></label><label>How this file relates to that version<select name="relationship"><option value="EXACT_BYTES">Exact bytes</option><option value="REPRESENTS_VERSION">Represents version</option><option value="SUPPORTING_EVIDENCE">Supporting evidence</option></select></label><button type="submit">Correct this link</button></form>{% endif %}</details></article></details>{% endfor %}</div></details>{% endfor %}
+<details><summary>Advanced: verification and raw outstanding items</summary><form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/releases/{{ selected_release.release_id }}/reverify"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><button type="submit">Reverify managed originals</button></form>{% if selected_release.incorporation_issues %}<ul>{% for issue in selected_release.incorporation_issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% endif %}</details>
+</section>
+
+{% if selected_release.is_addendum %}
+<section class="grid" id="directives"><form class="card" method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/releases/{{ selected_release.release_id }}/directives"><h2>What does this addendum change?</h2><p class="muted">Record each instruction the customer gave in this release.</p><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><label>This addendum<select name="directive_type" required>{% for code, label in directive_type_choices %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select></label><label>In the customer's exact words<textarea name="description" required></textarea></label><label>Does it change the offer?<select name="materiality">{% for value in directive_materialities %}<option value="{{ value.value }}">{% if value.value == 'MATERIAL' %}Yes — it changes the offer{% else %}No — it does not change the offer{% endif %}</option>{% endfor %}</select></label><label>Which received file says so?<select name="source_file_id"><option value="">Not identified</option>{% for file in selected_release.files %}<option value="{{ file.file_id }}">{{ file.original_relative_path }}</option>{% endfor %}</select></label><label>Where in that file? (optional)<input name="source_locator" placeholder="For example: clause 3.2"></label><label>Which controlled document does it affect?<select name="target_document_version_id"><option value="">Not yet identified</option>{% for item in controlled_versions %}<option value="{{ item.version.document_version_id }}">{{ item.document.title }} — {{ item.version.version_label }}</option>{% endfor %}</select></label><button type="submit">Record this change</button></form>
+{% if selected_release.acknowledgement %}<details class="card" id="acknowledgement"><summary><strong>Customer acknowledgement</strong></summary><p class="muted">An acknowledgement record already exists for this release. Update it here.</p><form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/releases/{{ selected_release.release_id }}/acknowledgements"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><input type="hidden" name="supersedes_event_id" value="{{ selected_release.acknowledgement.acknowledgement_event_id }}"><label>Event<select name="event_type">{% for value in acknowledgement_types %}<option value="{{ value.value }}">{{ value.value|replace('_',' ')|title }}</option>{% endfor %}</select></label><label>Due at<input type="datetime-local" name="due_at"></label><label>Acknowledgement reference<input name="acknowledgement_reference"></label><label>Approved gate exception<select name="approval_id"><option value="">None</option>{% for approval in intake_approvals %}<option value="{{ approval.approval_id }}">{{ approval.approval_type.value|replace('_',' ')|title }} — {{ approval.decision or approval.authority }}</option>{% endfor %}</select></label><label>Approved decision route<select name="route_id"><option value="">None</option>{% for route in intake_approval_routes %}<option value="{{ route.route_id }}">{{ route.case_id }} — approved route</option>{% endfor %}</select></label><label>Note<textarea name="note"></textarea></label><button type="submit">Record acknowledgement event</button></form></details>{% endif %}</section>
+
+<section class="card"><h2>Changes recorded from this addendum</h2>{% for directive in selected_release.directives %}<article class="row"><strong>{{ directive_type_label(directive.directive_type) }}{% if directive.materiality == 'MATERIAL' %} · changes the offer{% endif %}</strong><p>{{ directive.description }}</p><p>Outcome: {% if directive.disposition_status %}{{ directive.disposition_status|replace('_',' ')|title }}{% else %}Not yet decided{% endif %}{% if directive.rationale %} · {{ directive.rationale }}{% endif %}</p><form method="post" action="/bids/{{ bid.bid_id }}/package-intake-addenda/directives/{{ directive.directive_id }}/dispositions"><input type="hidden" name="release_id" value="{{ selected_release.release_id }}"><input type="hidden" name="supersedes_disposition_id" value="{{ directive.disposition_id or '' }}"><input type="hidden" name="operation_id" value="{{ new_operation_id() }}"><label>What did you do about it?<select name="status">{% for value in directive_dispositions %}<option value="{{ value.value }}">{{ value.value|replace('_',' ')|title }}</option>{% endfor %}</select></label><label>Why<textarea name="rationale" required></textarea></label><label>Resulting controlled document version<select name="resulting_document_version_id"><option value="">None</option>{% for item in controlled_versions %}<option value="{{ item.version.document_version_id }}">{{ item.document.title }} — {{ item.version.version_label }}</option>{% endfor %}</select></label><details><summary>Advanced: internal waiver evidence</summary><label>Approved gate exception<select name="approval_id"><option value="">None</option>{% for approval in intake_approvals %}<option value="{{ approval.approval_id }}">{{ approval.approval_type.value|replace('_',' ')|title }} — {{ approval.decision or approval.authority }}</option>{% endfor %}</select></label><label>Approved decision route<select name="route_id"><option value="">None</option>{% for route in intake_approval_routes %}<option value="{{ route.route_id }}">{{ route.case_id }} — approved route</option>{% endfor %}</select></label></details><button type="submit">Record the outcome</button></form></article>{% else %}<p>No change has been recorded from this addendum yet.</p>{% endfor %}</section>
+{% endif %}
+
+<script>
+document.querySelectorAll('form select[data-eligibility]').forEach(function(select){
+  var reason = select.closest('form').querySelector('[data-exclusion]');
+  if (!reason) { return; }
+  var sync = function(){ reason.hidden = select.value !== 'EXCLUDED'; };
+  select.addEventListener('change', sync);
+  sync();
+});
+document.querySelectorAll('[data-select-folder]').forEach(function(button){
+  button.addEventListener('click', function(){
+    button.closest('.intake-folder').querySelectorAll('[data-folder-file]').forEach(function(box){ box.checked = true; });
+  });
+});
+document.querySelectorAll('[data-clear-folder]').forEach(function(button){
+  button.addEventListener('click', function(){
+    button.closest('.intake-folder').querySelectorAll('[data-folder-file]').forEach(function(box){ box.checked = false; });
+  });
+});
+document.querySelectorAll('[data-folder-file]').forEach(function(box){
+  box.addEventListener('click', function(event){ event.stopPropagation(); });
+});
+document.querySelectorAll('[data-bulk-eligibility]').forEach(function(select){
+  var reason = select.closest('form').querySelector('[data-bulk-exclusion]');
+  var sync = function(){ reason.hidden = select.value !== 'EXCLUDED'; };
+  select.addEventListener('change', sync);
+  sync();
+});
+</script>
+
+{% endif %}

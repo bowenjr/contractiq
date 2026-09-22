@@ -22,6 +22,29 @@ class DocumentCategory(str, Enum):  # noqa: UP042 - persisted strings are intent
     OTHER = "OTHER"
 
 
+DOCUMENT_CATEGORY_LABELS: dict[DocumentCategory, str] = {
+    DocumentCategory.SOLICITATION: "Solicitation / bid invitation",
+    DocumentCategory.ADDENDUM: "Addendum",
+    DocumentCategory.SPECIFICATION: "Specification",
+    DocumentCategory.DRAWING: "Drawing",
+    DocumentCategory.COMMERCIAL: "Commercial document",
+    DocumentCategory.CONTRACTUAL: "Contract / legal document",
+    DocumentCategory.SUPPLIER: "Supplier document",
+    DocumentCategory.INTERNAL: "Internal document",
+    DocumentCategory.DELIVERABLE: "Deliverable",
+    DocumentCategory.OTHER: "Other document",
+}
+
+
+def document_category_label(value: DocumentCategory | str | None) -> str:
+    """Return a plain business label without changing the persisted category value."""
+    try:
+        category = value if isinstance(value, DocumentCategory) else DocumentCategory(str(value))
+    except ValueError:
+        return "Other document"
+    return DOCUMENT_CATEGORY_LABELS[category]
+
+
 class DocumentLifecycle(str, Enum):  # noqa: UP042
     ACTIVE = "ACTIVE"
     WITHDRAWN = "WITHDRAWN"

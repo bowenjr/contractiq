@@ -135,9 +135,7 @@ async def main() -> None:
             for path in (f"/bids/{bid_id}", f"/bids/{bid_id}/classification"):
                 status, response_headers, content = await request(app.app, "GET", path)
                 assert status == 200 and response_headers["content-type"].startswith("text/html")
-                assert (
-                    b"Setup and Response Navigator" in content or b"Why this governance" in content
-                )
+                assert b"Bid workflow stages" in content or b"Why this governance" in content
                 assert b"Required controls" in content
                 assert b"Recommended minimum" in content
             assert len(app.bid_repository.list_audit()) == before_get
@@ -344,7 +342,7 @@ async def main() -> None:
             )[0] == 303
             package = app.vendor_document_repository.list_packages(bid_id)[0]
             _, _, package_only_overview = await request(app.app, "GET", f"/bids/{bid_id}")
-            assert b"Manufacturers and coverage" in package_only_overview
+            assert b"Manufacturers and supplier coverage" in package_only_overview
             assert b"In progress" in package_only_overview
             vdrl_form = {
                 "customer_requirement_code": "ARC-FLASH",
@@ -496,7 +494,7 @@ async def main() -> None:
             )
             assert returned_status == 200
             assert returned_headers["content-type"].startswith("text/html")
-            assert b"Setup and Response Navigator" in returned_body
+            assert b"Bid workflow stages" in returned_body
 
             before_rejected = len(app.bid_repository.list_audit())
             status, headers, content = await request(
@@ -529,6 +527,7 @@ async def main() -> None:
                 "decisions": f"/decisions?bid_id={bid_id}",
                 "proposals": f"/proposals?bid_id={bid_id}",
                 "deliverables": f"/deliverables?bid_id={bid_id}",
+                "handover": f"/bids/{bid_id}/award-handover",
             }
             pages: dict[str, bytes] = {}
             for name, path in page_paths.items():
@@ -554,9 +553,11 @@ async def main() -> None:
                     f"/bids/{bid_id}/requirements-scope",
                 ),
                 (
+                    # Manufacturer coverage is recorded in the Bid workspace itself,
+                    # so the workflow action no longer leaves the Bid for the register.
                     "Open manufacturer workflow",
                     "overview",
-                    f"/vendor-documents?bid_id={bid_id}#create-package",
+                    f"/bids/{bid_id}/manufacturers-coverage#add-manufacturer-package",
                 ),
                 (
                     "Open package",
@@ -640,8 +641,10 @@ async def main() -> None:
                 ("Create proposal", "proposals", "POST", "/proposals/families"),
                 ("Create deliverable", "deliverables", "POST", "/deliverables"),
                 (
+                    # OPS-11BX: the handover export belongs to the Bid Basis and
+                    # handover stage, not to the Bid overview.
                     "Download handover",
-                    "overview",
+                    "handover",
                     "GET",
                     f"/bids/{bid_id}/requirements-handover.csv",
                 ),

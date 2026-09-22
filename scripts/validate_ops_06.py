@@ -141,7 +141,7 @@ def main() -> None:
         assert [row.bid.status for row in archived.rows] == [BidStatus.WON]
         workspace = service.workspace(held.bid_id, as_of=as_of)
         assert workspace.bid.bid_id == held.bid_id
-        assert workspace.current_gate_label == "Intake"
+        assert workspace.current_gate_label == "Bid setup"
         assert workspace.next_action_destination == f"/bids/{held.bid_id}/requirements-scope"
         try:
             BidPortfolioFilters.model_validate({"readiness": "escalate"})

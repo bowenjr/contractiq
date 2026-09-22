@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ position.label }} · Commercial &amp; Contract</title><link rel="stylesheet" href="/static/style.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ position.label }} · Commercial, contract risk and approvals</title><link rel="stylesheet" href="/static/style.css"></head>
 <body><main class="page-shell">
 {% set current_nav='bids' %}{% include '_primary_navigation.html' %}
-<p class="breadcrumbs"><a href="/bids/{{ position.bid_id }}/commercial-contract">Back to Bid — Commercial &amp; Contract</a> / <a href="/commercial?bid_id={{ position.bid_id }}">Advanced review</a> / {{ position.label }}</p>
+<p class="breadcrumbs"><a href="/bids/{{ position.bid_id }}/commercial-contract">Back to Bid — Commercial, contract risk and approvals</a> / <a href="/commercial?bid_id={{ position.bid_id }}">Advanced review</a> / {{ position.label }}</p>
 <header class="page-heading"><div><p class="eyebrow">{{ position.topic_key|replace('_',' ')|title }}</p><h1>{{ position.label }}</h1><p class="muted">{{ position.description }} · Immutable revision {{ position.current_version }}</p></div><a class="button secondary" href="/work/from/commercial/{{ position.position_id }}">Create My Work action</a></header>
 {% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 <form method="post" action="/commercial/positions/{{ position.position_id }}" enctype="multipart/form-data" class="form-grid">

@@ -7,7 +7,10 @@ DANGEROUS_CSV_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 def csv_safe_cell(value: object) -> object:
     """Neutralize spreadsheet formulas without changing persisted source data."""
-    if not isinstance(value, str) or not value.startswith(DANGEROUS_CSV_PREFIXES):
+    if not isinstance(value, str):
+        return value
+    trimmed = value.lstrip()
+    if not (value.startswith(("\t", "\r", "\n")) or trimmed.startswith(DANGEROUS_CSV_PREFIXES[:4])):
         return value
     return "'" + value
 

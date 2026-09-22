@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+from core.bid_package_intake import IntakeAttention
 from core.bid_repository import BidRepository
+from core.bid_workflow import blocker_heading, intake_heading, proposal_heading
 from core.database import Database
 from core.proposal_exchange import (
     CustomerIssueCommand,
@@ -110,11 +112,13 @@ class ProposalExchangeService:
         artifact_root: Path,
         *,
         now_factory: Callable[[], datetime] | None = None,
+        intake_blocker_loader: Callable[[str], Sequence[IntakeAttention]] | None = None,
     ) -> None:
         self.db = db
         self.bid_repository = bid_repository
         self.artifact_root = artifact_root
         self._now = now_factory or (lambda: datetime.now(UTC))
+        self._intake_blocker_loader = intake_blocker_loader
         self._migrate()
 
     def _conn(self) -> sqlite3.Connection:
@@ -341,14 +345,47 @@ class ProposalExchangeService:
                 ORDER BY deliverable_id""",
                 (bid_id,),
             )
-            document_rows = self._rows(
-                conn,
-                """SELECT d.id,d.control_title,d.control_version,v.* FROM documents d
-                JOIN document_versions v ON v.document_version_id=d.current_version_id
-                WHERE d.bid_id=? AND d.control_managed=1 AND d.control_lifecycle='ACTIVE'
-                ORDER BY d.id""",
-                (bid_id,),
-            )
+            intake_table = conn.execute(
+                """SELECT 1 FROM sqlite_master WHERE type='table'
+                AND name='bid_received_releases'"""
+            ).fetchone()
+            intake_populated = False
+            basis_snapshot = None
+            if intake_table is not None:
+                intake_populated = (
+                    conn.execute(
+                        """SELECT 1 FROM bid_received_releases WHERE bid_id=? UNION ALL
+                        SELECT 1 FROM bid_release_notices WHERE bid_id=? LIMIT 1""",
+                        (bid_id, bid_id),
+                    ).fetchone()
+                    is not None
+                )
+                basis_snapshot = conn.execute(
+                    """SELECT snapshot_id FROM bid_basis_snapshots WHERE bid_id=?
+                    ORDER BY snapshot_sequence DESC LIMIT 1""",
+                    (bid_id,),
+                ).fetchone()
+            if intake_populated and basis_snapshot is not None:
+                document_rows = self._rows(
+                    conn,
+                    """SELECT d.id,d.control_title,d.control_version,v.*
+                    FROM bid_basis_snapshot_documents sd JOIN documents d
+                    ON d.id=sd.document_id JOIN document_versions v
+                    ON v.document_version_id=sd.document_version_id
+                    WHERE sd.snapshot_id=? ORDER BY d.id""",
+                    (basis_snapshot["snapshot_id"],),
+                )
+            elif intake_populated:
+                document_rows = []
+            else:
+                document_rows = self._rows(
+                    conn,
+                    """SELECT d.id,d.control_title,d.control_version,v.* FROM documents d
+                    JOIN document_versions v ON v.document_version_id=d.current_version_id
+                    WHERE d.bid_id=? AND d.control_managed=1 AND d.control_lifecycle='ACTIVE'
+                    ORDER BY d.id""",
+                    (bid_id,),
+                )
 
         response_status = {
             "COMPLY": "COMPLIANT",
@@ -849,7 +886,12 @@ class ProposalExchangeService:
         blockers: list[ProposalBlocker] = []
 
         def add(
-            code: str, area: str, message: str, destination: str, record_id: str | None = None
+            code: str,
+            area: str,
+            message: str,
+            destination: str,
+            record_id: str | None = None,
+            heading: str | None = None,
         ) -> None:
             blockers.append(
                 ProposalBlocker(
@@ -858,6 +900,7 @@ class ProposalExchangeService:
                     message=message,
                     destination=destination,
                     record_id=record_id,
+                    heading=heading or proposal_heading(code, area),
                 )
             )
 
@@ -876,8 +919,24 @@ class ProposalExchangeService:
                 add(
                     f"GATE_{gate_blocker.condition_id.upper()}",
                     "Bid gate",
-                    f"{gate_blocker.description} {gate_blocker.detail}".strip(),
+                    # The gate states each condition positively; the blocker line
+                    # must say what is missing and then give the evaluated evidence.
+                    gate_blocker.detail.strip() or gate_blocker.description,
                     f"/bids/{bid_id}{section}",
+                    heading=blocker_heading(gate_blocker.condition_id, gate_blocker.description),
+                )
+        if self._intake_blocker_loader is not None:
+            for intake_blocker in self._intake_blocker_loader(bid_id):
+                add(
+                    intake_blocker.code,
+                    "Package intake and Bid Basis",
+                    intake_blocker.message,
+                    intake_blocker.destination,
+                    intake_blocker.record_id,
+                    heading=intake_heading(
+                        intake_blocker.code,
+                        intake_blocker.code.replace("_", " ").capitalize(),
+                    ),
                 )
         requirements = cast(list[JsonObject], package["requirements"])
         if not requirements:

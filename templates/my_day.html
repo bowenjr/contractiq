@@ -138,6 +138,7 @@
       <div class="metric"><div class="metric-value">{{ projection.counts.readiness_holds }}</div><div class="metric-label">Readiness holds</div></div>
       <div class="metric"><div class="metric-value">{{ projection.counts.requirement_attention }}</div><div class="metric-label">Requirement attention</div></div>
       <div class="metric"><div class="metric-value">{{ projection.counts.supplier_attention }}</div><div class="metric-label">Supplier attention</div></div>
+      <div class="metric"><div class="metric-value">{{ projection.counts.intake_attention }}</div><div class="metric-label">Package intake</div></div>
     </section>
 
     {% macro work_rows(items, empty_message) %}
@@ -180,7 +181,7 @@
     </section>
 
     <section class="section" aria-labelledby="blockers-heading">
-      <div class="section-head"><h2 id="blockers-heading">Bid blockers</h2><span class="section-count">{{ bid_blockers|length + projection.readiness_holds|length + projection.requirement_attention|length + blocking_supplier_attention|length + projection.deliverable_attention|length + projection.commercial_attention|length + projection.contract_risk_attention|length }}</span></div>
+      <div class="section-head"><h2 id="blockers-heading">Bid blockers</h2><span class="section-count">{{ bid_blockers|length + projection.readiness_holds|length + projection.requirement_attention|length + blocking_supplier_attention|length + projection.deliverable_attention|length + projection.commercial_attention|length + projection.contract_risk_attention|length + projection.intake_attention|length }}</span></div>
       {{ work_rows(bid_blockers, 'No blocked Bid work items.') }}
       <div class="panel">
       {% for snapshot in projection.readiness_holds %}
@@ -197,7 +198,8 @@
       {% for row in projection.deliverable_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/proposal-negotiation#deliverables" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code|replace('_',' ')|title }}</div><div class="item-detail">Bid deliverable · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: a required Bid deliverable remains incomplete.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-BLOCKED">Blocking attention</span></div></a>{% endfor %}
       {% for row in projection.commercial_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/commercial-contract#commercial" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code|replace('_',' ')|title }}</div><div class="item-detail">Commercial control · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: pricing or commercial completeness remains unresolved.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-BLOCKED">Blocking attention</span></div></a>{% endfor %}
       {% for row in projection.contract_risk_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/commercial-contract#contract-risk" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ row.code|replace('_',' ')|title }}</div><div class="item-detail">Contract exposure · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: contract risk remains unresolved.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-BLOCKED">Blocking attention</span></div></a>{% endfor %}
-      {% if not projection.readiness_holds and not projection.requirement_attention and not blocking_supplier_attention and not projection.deliverable_attention and not projection.commercial_attention and not projection.contract_risk_attention %}<div class="empty">No control-register blockers require attention.</div>{% endif %}
+      {% for row in projection.intake_attention %}<a class="work-row" href="/bids/{{ row.bid_id }}/package-intake-addenda" style="color:inherit;text-decoration:none"><div><div class="item-title">{{ intake_heading(row.code, row.code|replace('_',' ')|capitalize) }}</div><div class="item-detail">Release acknowledgement · {{ row.entity_id }}</div></div><div>{{ row.bid_id }}</div><div>Consequence: proposal issue is blocked until acknowledged or approval-backed exception.</div><div>Owner: {{ bid_owners.get(row.bid_id, 'Bid owner') }}</div><div><span class="badge status-BLOCKED">Package attention</span></div></a>{% endfor %}
+      {% if not projection.readiness_holds and not projection.requirement_attention and not blocking_supplier_attention and not projection.deliverable_attention and not projection.commercial_attention and not projection.contract_risk_attention and not projection.intake_attention %}<div class="empty">No control-register blockers require attention.</div>{% endif %}
       </div>
     </section>
 

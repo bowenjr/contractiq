@@ -6,5 +6,10 @@
       "Bash(.venv/Scripts/python.exe -c \"from core.analysis_engine import AnalysisEngine; print\\('OK'\\)\")",
       "Bash(venv/Scripts/python.exe:*)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "memory",
+    "sequential-thinking",
+    "alice"
+  ]
 }

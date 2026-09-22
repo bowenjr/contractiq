@@ -13,6 +13,7 @@ from core.document_control import (
     DocumentVersion,
     DocumentVersionCreate,
     DocumentVersionState,
+    document_category_label,
 )
 from core.schemas import Provenance
 
@@ -68,6 +69,12 @@ def test_closed_categories_and_states_reject_free_form_values() -> None:
             version=1,
             provenance=Provenance.from_human("jason"),
         )
+
+
+def test_document_category_labels_are_business_language_over_stored_values() -> None:
+    assert document_category_label(DocumentCategory.SOLICITATION) == "Solicitation / bid invitation"
+    assert document_category_label("CONTRACTUAL") == "Contract / legal document"
+    assert document_category_label("unexpected") == "Other document"
 
 
 def test_metadata_edit_requires_change_and_preserves_nullable_fields() -> None:
