@@ -60,6 +60,41 @@ class TradeState(StrEnum):
     REVERSED = "REVERSED"
 
 
+# Forward-only state machine for conditional trades. Progressing a trade appends a
+# new row carrying the new state (see NegotiationRepository.progress_trade); these
+# are the legal moves. Terminal states have no outgoing transitions.
+TRADE_TRANSITIONS: dict[TradeState, frozenset[TradeState]] = {
+    TradeState.DRAFT: frozenset({TradeState.PLANNED, TradeState.WITHDRAWN}),
+    TradeState.PLANNED: frozenset(
+        {TradeState.AUTHORIZED, TradeState.WITHDRAWN, TradeState.SUPERSEDED}
+    ),
+    TradeState.AUTHORIZED: frozenset(
+        {TradeState.OFFERED, TradeState.WITHDRAWN, TradeState.SUPERSEDED}
+    ),
+    TradeState.OFFERED: frozenset(
+        {
+            TradeState.TENTATIVELY_AGREED,
+            TradeState.REJECTED,
+            TradeState.WITHDRAWN,
+            TradeState.SUPERSEDED,
+        }
+    ),
+    TradeState.TENTATIVELY_AGREED: frozenset(
+        {
+            TradeState.COMMITTED,
+            TradeState.REJECTED,
+            TradeState.WITHDRAWN,
+            TradeState.SUPERSEDED,
+        }
+    ),
+    TradeState.COMMITTED: frozenset({TradeState.REVERSED}),
+    TradeState.REJECTED: frozenset(),
+    TradeState.WITHDRAWN: frozenset(),
+    TradeState.SUPERSEDED: frozenset(),
+    TradeState.REVERSED: frozenset(),
+}
+
+
 class MovementType(StrEnum):
     CUSTOMER_POSITION_RECORDED = "CUSTOMER_POSITION_RECORDED"
     COMPANY_OFFER_MADE = "COMPANY_OFFER_MADE"
@@ -177,6 +212,8 @@ class ConditionalTrade(BaseModel):
     value_state: ValueState = ValueState.CLAIMED
     state: TradeState = TradeState.PLANNED
     created_at: datetime
+    trade_lineage_id: str | None = None
+    state_version: int = Field(default=1, ge=1)
 
 
 class NegotiationMovement(BaseModel):
@@ -224,3 +261,14 @@ def validate_concession(
         and concession.amount > mandate.limit_amount
     ):
         raise ValueError("concession exceeds mandate limit")
+
+
+def validate_trade_transition(current: TradeState, new: TradeState) -> None:
+    """Reject trade state changes that are not a legal forward progression."""
+    if new not in TRADE_TRANSITIONS[current]:
+        allowed = ", ".join(sorted(s.value for s in TRADE_TRANSITIONS[current]))
+        if not allowed:
+            allowed = "none (terminal state)"
+        raise ValueError(
+            f"trade cannot move from {current.value} to {new.value}; allowed: {allowed}"
+        )

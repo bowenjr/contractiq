@@ -11,6 +11,7 @@ from core.negotiation import (
     NegotiationMovement,
     NegotiationPlan,
     PlanVersion,
+    TradeState,
     validate_concession,
 )
 from core.negotiation_repository import NegotiationRepository
@@ -53,6 +54,15 @@ class NegotiationService:
 
     def withdraw_plan(self, plan_id: str, actor: str, reason: str) -> None:
         self.repository.withdraw_plan(plan_id, actor, reason)
+
+    def revoke_mandate(self, mandate_id: str, actor: str, reason: str) -> None:
+        self.repository.revoke_mandate(mandate_id, actor, reason)
+
+    def progress_trade(self, trade_id: str, new_state: TradeState, actor: str, reason: str) -> None:
+        self.repository.progress_trade(trade_id, new_state, actor, reason)
+
+    def current_trade(self, trade_id: str) -> ConditionalTrade:
+        return self.repository.current_trade(trade_id)
 
     def metrics(self, bid_id: str | None = None) -> dict[str, int]:
         return self.repository.metrics(bid_id)
