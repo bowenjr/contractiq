@@ -2,7 +2,7 @@
 
 ## Status
 
-COMPLETE — AWAITING MANUAL BROWSER ACCEPTANCE
+MANUAL ACCEPTANCE RECORDED — PASS WITH DEFERRED USABILITY FINDINGS (2026-09-25)
 
 ## Files created
 
@@ -103,4 +103,27 @@ uv run python -m uvicorn app:app --reload
 5. Handle one individual exception, then put one file under document control without uploading it.
 6. Confirm the current Bid basis and inspect both viewport sizes for clipping and competing actions.
 
-OPS-11BZ STATUS: AWAITING MANUAL BROWSER ACCEPTANCE
+OPS-11BZ STATUS: AWAITING MANUAL BROWSER ACCEPTANCE (superseded below)
+
+## Manual acceptance record
+
+OPS-11BZ MANUAL ACCEPTANCE: PASS WITH DEFERRED USABILITY FINDINGS
+
+- Acceptance date: 2026-09-25
+- Accepted implementation checkpoint: commit `8e7b2fb` ("WIP ops-11: bid package intake + addendum control (pre-fork checkpoint)"), on `ops-11-bid-package-intake-addendum-control`.
+- Verification evidence for this checkpoint is the "Test results" and "Validation command output" sections above; no additional test run was performed to produce this acceptance record.
+
+Accepted functional behaviour: initial bid-package ingestion, configured-folder discovery/preview, managed-copy ingestion, folder-grouped bulk review, controlled-document creation from the managed original, addendum recording and Bid Basis controls, and persistence/restart behaviour all work. No functional or evidence-integrity blocker was found during manual testing.
+
+Deferred usability findings (accepted usability debt, not authorization to change OPS-11 during publication):
+
+1. Adding and incorporating addenda needs a simpler, more guided workflow.
+2. Package processing remains clunky and difficult to navigate.
+3. Jason will document the desired workflow changes before further redesign.
+4. No further OPS-11 workflow redesign is authorized by this acceptance record.
+
+## Branch topology note
+
+The local-LLM development line is maintained separately on branch `local-llm` (worktree `contractiq-local`). The canonical/original branch (`ops-11-bid-package-intake-addendum-control` and its successors) must not receive local-LLM experimentation.
+
+OPS-11BZ STATUS: MANUAL ACCEPTANCE PASS WITH DEFERRED USABILITY FINDINGS — 2026-09-25
