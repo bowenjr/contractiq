@@ -45,14 +45,18 @@ from core.approval_authority import (
 from core.approval_repository import ApprovalRepository
 from core.approval_service import ApprovalService
 from core.bid_control_center import (
+    GATE_LABELS,
     BidControlCenterService,
     BidDeadlineAttention,
     BidNotFoundError,
     BidPortfolioFilters,
+    BidPortfolioRow,
     BidPortfolioView,
     BidReadinessFilter,
     BidWorkspaceAttention,
     BidWorkspaceSection,
+    MyDayBidBucket,
+    build_bid_portfolio,
     governance_level_guides,
     outstanding_items,
     workspace_path,
@@ -190,7 +194,12 @@ from core.managed_document_storage import (
     ManagedFileTooLargeError,
     ManagedStorageFailureError,
 )
-from core.my_day import ProjectedWorkItem, WorkItemSnapshot, work_item_order_key
+from core.my_day import (
+    MyDayProjection,
+    ProjectedWorkItem,
+    WorkItemSnapshot,
+    work_item_order_key,
+)
 from core.negotiation import (
     Concession,
     ConditionalTrade,
@@ -1045,72 +1054,31 @@ def _proposal_input_rows(bid_id: str) -> list[dict[str, str]]:
     return rows
 
 
-def _my_day_bid_summaries(projection: object, bids: list[Bid]) -> list[dict[str, object]]:
-    """Aggregate attention into one deterministic primary summary per active Bid."""
-    attention_names = (
-        ("requirement_attention", "requirements"),
-        ("supplier_attention", "manufacturer coverage"),
-        ("deliverable_attention", "proposal inputs"),
-        ("commercial_attention", "commercial review"),
-        ("contract_risk_attention", "contract risks"),
-        ("approval_attention", "approvals"),
+def _my_day_bid_rows_by_bucket(
+    projection: MyDayProjection,
+    bids: list[Bid],
+    active_work_items: list[WorkItem],
+    as_of: date,
+) -> dict[MyDayBidBucket, list[BidPortfolioRow]]:
+    """Group the one shared per-Bid portfolio row by My Day bucket.
+
+    Reuses the already-loaded My Day projection instead of calling
+    ``MyDayService.get_my_day()`` a second time, and reuses
+    ``bid_repository.list_audit()``/``work_item_repository.list(active_only=True)``
+    exactly as the Bids portfolio page does, so the two pages cannot disagree.
+    """
+    portfolio = build_bid_portfolio(
+        projection,
+        bids,
+        active_work_items,
+        bid_repository.list_audit(),
+        BidPortfolioFilters(view=BidPortfolioView.ALL),
+        as_of,
     )
-    summaries: list[dict[str, object]] = []
-    for bid in bids:
-        if bid.status in {BidStatus.LOST, BidStatus.NO_BID, BidStatus.WON}:
-            continue
-        workspace = bid_control_center_service.workspace(bid.bid_id, as_of=_working_date())
-        grouped: dict[str, int] = {}
-        for attribute, label in attention_names:
-            count = sum(
-                1
-                for item in getattr(projection, attribute)
-                if (
-                    str(item.requirement.bid_id)
-                    if hasattr(item, "requirement")
-                    else str(item.get("bid_id", ""))
-                )
-                == bid.bid_id
-            )
-            if count:
-                grouped[label] = count
-        work = [
-            item
-            for item in work_item_repository.list(bid.bid_id)
-            if item.status not in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}
-        ]
-        if work:
-            grouped["My Work"] = len(work)
-        commercial_count = grouped.get("commercial review", 0)
-        if workspace.blockers:
-            primary = workspace.blockers[0].heading
-        elif commercial_count:
-            primary = (
-                f"Commercial review incomplete — {commercial_count} topics require assessment."
-            )
-        elif work:
-            primary = sorted(work, key=lambda item: work_item_order_key(item, _working_date()))[
-                0
-            ].title
-        else:
-            primary = workspace.next_action
-        meaningful_dates = [bid.internal_due_date, bid.customer_due_date]
-        if bid.anticipated_award_date:
-            meaningful_dates.append(bid.anticipated_award_date)
-        summaries.append(
-            {
-                "bid": bid,
-                "stage": workspace.current_gate_label,
-                "status": "Ready"
-                if workspace.readiness.verdict.value == "clear"
-                else "Needs attention",
-                "primary": primary,
-                "counts": grouped,
-                "nearest_date": min(meaningful_dates),
-                "underlying_count": sum(grouped.values()) + len(workspace.blockers),
-            }
-        )
-    return summaries
+    grouped: dict[MyDayBidBucket, list[BidPortfolioRow]] = {bucket: [] for bucket in MyDayBidBucket}
+    for row in portfolio.rows:
+        grouped[row.my_day_bucket].append(row)
+    return grouped
 
 
 def _json_item(
@@ -1230,6 +1198,10 @@ async def my_day(request: Request) -> HTMLResponse:
         key=lambda snapshot: (snapshot.item.updated_at, snapshot.item.work_item_id),
         reverse=True,
     )
+    active_work_items = work_item_repository.list(active_only=True)
+    bid_rows_by_bucket = _my_day_bid_rows_by_bucket(
+        projection, bids, active_work_items, projection_date
+    )
     return render(
         "my_day.html",
         projection=projection,
@@ -1242,7 +1214,10 @@ async def my_day(request: Request) -> HTMLResponse:
         bid_owners=bid_owners,
         award_handover_bids=[bid for bid in bids if bid.status is BidStatus.WON],
         archived_items=archived_items,
-        bid_summaries=_my_day_bid_summaries(projection, bids),
+        bids_requiring_action=bid_rows_by_bucket[MyDayBidBucket.REQUIRES_ACTION],
+        bids_waiting=bid_rows_by_bucket[MyDayBidBucket.WAITING],
+        bids_on_track_or_upcoming=bid_rows_by_bucket[MyDayBidBucket.ON_TRACK_OR_UPCOMING],
+        gate_labels=GATE_LABELS,
         category_labels=WORK_CATEGORY_LABELS,
         status_labels=WORK_ITEM_STATUS_LABELS,
     )
@@ -2658,6 +2633,7 @@ def _bids_browser_context(
         "bids": [row.bid for row in portfolio.rows],
         "filters": selected,
         "filter_values": selected_values,
+        "gate_labels": GATE_LABELS,
         "portfolio_views": portfolio_views,
         "portfolio_view_values": [item.value for item in portfolio_views],
         "bid_statuses": bid_statuses,

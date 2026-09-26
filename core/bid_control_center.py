@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -16,9 +16,9 @@ from core.bid_workflow import (
     intake_heading,
 )
 from core.enums import BidLevel, BidStatus, Gate
-from core.my_day import MyDayProjection
+from core.my_day import MyDayProjection, ProjectedRequirementAttention, work_item_attention_reasons
 from core.readiness import Blocker, ReadinessReport, ReadinessVerdict
-from core.schemas import Bid
+from core.schemas import AuditEntry, Bid
 from core.work_item_repository import WorkItemRepository
 from core.work_items import WorkItem, WorkItemStatus
 
@@ -27,6 +27,9 @@ class BidPortfolioView(StrEnum):
     CURRENT = "current"
     HISTORY = "history"
     ALL = "all"
+    UPCOMING = "upcoming"
+    DORMANT = "dormant"
+    ISSUED = "issued"
 
 
 class BidDeadlineAttention(StrEnum):
@@ -52,6 +55,24 @@ class BidWorkspaceSection(StrEnum):
     AWARD_HANDOVER = "award-handover"
 
 
+class MyDayBidBucket(StrEnum):
+    """One deterministic My Day grouping per active Bid — see `_my_day_bucket`."""
+
+    REQUIRES_ACTION = "requires_action"
+    WAITING = "waiting"
+    ON_TRACK_OR_UPCOMING = "on_track_or_upcoming"
+    HISTORY = "history"
+
+
+DORMANT_AFTER_DAYS = 14
+"""Presentation policy only: no recorded activity for this many days is "dormant".
+
+This is an explicit UI threshold, not an inherent business fact, and is unrelated to the
+`upcoming_horizon_days` deadline-attention window even though both currently default to the
+same number of days.
+"""
+
+
 class BidPortfolioFilters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -70,6 +91,16 @@ class BidPortfolioFilters(BaseModel):
             raise ValueError("Current view cannot be combined with a history-only Bid status")
         if self.view is BidPortfolioView.HISTORY and self.status in CURRENT_BID_STATUSES:
             raise ValueError("History view cannot be combined with a current Bid status")
+        if self.view is BidPortfolioView.ISSUED and self.status is not BidStatus.SUBMITTED:
+            raise ValueError("Issued view can only be combined with the Submitted Bid status")
+        if self.view in {
+            BidPortfolioView.UPCOMING,
+            BidPortfolioView.DORMANT,
+        } and self.status not in {BidStatus.ACTIVE, BidStatus.HELD}:
+            raise ValueError(
+                f"{self.view.value.title()} view can only be combined with "
+                "the Active or Held Bid status"
+            )
         return self
 
 
@@ -111,18 +142,34 @@ class BidBlockerView(BaseModel):
     destination: str
 
 
+class BidEvidenceLink(BaseModel):
+    """One destination shown for a Bid only when its underlying signal is actually present."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    label: str
+    href: str
+
+
 class BidPortfolioRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bid: Bid
     readiness: ReadinessReport
     highest_blocker: BidBlockerView | None
+    additional_blocker_count: int = 0
     waiting_count: int
+    overdue_work_count: int = 0
     decision_count: int
+    other_attention_count: int = 0
+    supplier_response_position: str = "Clear"
+    last_activity: datetime | None = None
     next_action: str
     next_action_destination: str
     deadline_attention: BidDeadlineAttention
     sort_tier: int = Field(ge=0, le=6)
+    my_day_bucket: MyDayBidBucket = MyDayBidBucket.HISTORY
+    evidence_links: list[BidEvidenceLink] = Field(default_factory=list)
 
 
 class BidPortfolioProjection(BaseModel):
@@ -555,6 +602,12 @@ def _deadline_attention(
     return BidDeadlineAttention.NONE
 
 
+def _is_dormant(last_activity: datetime | None, as_of: date) -> bool:
+    if last_activity is None:
+        return False
+    return (as_of - last_activity.date()).days >= DORMANT_AFTER_DAYS
+
+
 def _portfolio_tier(
     bid: Bid,
     readiness: ReadinessReport,
@@ -579,12 +632,177 @@ def _portfolio_tier(
     return 4
 
 
-def _view_includes(view: BidPortfolioView, status: BidStatus) -> bool:
+def _other_attention_count(
+    bid_id: str,
+    requirement_attention: list[ProjectedRequirementAttention],
+    deliverable_attention: list[dict[str, str]],
+    commercial_attention: list[dict[str, str]],
+    contract_risk_attention: list[dict[str, str]],
+    intake_attention: list[dict[str, str]],
+) -> int:
+    """Count non-blocker attention already surfaced elsewhere in My Day for one Bid."""
+    count = sum(1 for item in requirement_attention if item.requirement.bid_id == bid_id)
+    for collection in (
+        deliverable_attention,
+        commercial_attention,
+        contract_risk_attention,
+        intake_attention,
+    ):
+        count += sum(1 for item in collection if item.get("bid_id") == bid_id)
+    return count
+
+
+def _supplier_response_position(bid_id: str, supplier_attention: list[dict[str, str]]) -> str:
+    """Business-worded supplier-response state, derived from already-loaded attention."""
+    items = [item for item in supplier_attention if item.get("bid_id") == bid_id]
+    if not items:
+        return "Clear"
+    if any(
+        "NO_RESPONSE" in item.get("code", "") or "SILENT" in item.get("code", "") for item in items
+    ):
+        return "Awaiting supplier response"
+    return "Supplier attention open"
+
+
+def _overdue_work_count(bid_work: list[WorkItem], as_of: date) -> int:
+    return sum(
+        1
+        for item in bid_work
+        if any(reason.endswith("OVERDUE") for reason in work_item_attention_reasons(item, as_of))
+    )
+
+
+def _my_day_bucket(
+    bid: Bid,
+    blockers: list[BidBlockerView],
+    readiness: ReadinessReport,
+    deadline: BidDeadlineAttention,
+    decisions: list[dict[str, str]],
+    waiting_count: int,
+    overdue_work_count: int,
+    other_attention_count: int,
+) -> MyDayBidBucket:
+    """Classify one Bid into exactly one live My Day bucket.
+
+    A Bid is never WAITING merely because a waiting record exists: REQUIRES_ACTION is
+    checked first and wins over WAITING whenever Jason has a higher-priority direct action.
+    """
+    if bid.status in HISTORY_BID_STATUSES:
+        return MyDayBidBucket.HISTORY
+    requires_action = (
+        bool(blockers)
+        or readiness.verdict is not ReadinessVerdict.CLEAR
+        or deadline is BidDeadlineAttention.OVERDUE
+        or bool(decisions)
+        or overdue_work_count > 0
+        or other_attention_count > 0
+    )
+    if requires_action:
+        return MyDayBidBucket.REQUIRES_ACTION
+    if waiting_count > 0:
+        return MyDayBidBucket.WAITING
+    return MyDayBidBucket.ON_TRACK_OR_UPCOMING
+
+
+def _evidence_links(
+    bid: Bid,
+    *,
+    requirement_count: int,
+    supplier_or_waiting_controls: bool,
+    commercial_or_contract_risk_count: int,
+    intake_count: int,
+    decisions: list[dict[str, str]],
+    waiting: list[WorkItem],
+) -> list[BidEvidenceLink]:
+    """Only link to a Bid section whose underlying signal is actually present."""
+    links = [BidEvidenceLink(label="Bid overview", href=f"/bids/{bid.bid_id}")]
+    if requirement_count:
+        links.append(
+            BidEvidenceLink(
+                label="Requirements and scope",
+                href=f"/bids/{bid.bid_id}/requirements-scope",
+            )
+        )
+    if supplier_or_waiting_controls:
+        links.append(
+            BidEvidenceLink(
+                label="Manufacturers and coverage",
+                href=f"/bids/{bid.bid_id}/manufacturers-coverage",
+            )
+        )
+    if commercial_or_contract_risk_count:
+        links.append(
+            BidEvidenceLink(
+                label="Commercial and contract",
+                href=f"/bids/{bid.bid_id}/commercial-contract",
+            )
+        )
+    if intake_count:
+        links.append(
+            BidEvidenceLink(
+                label="Package intake and addenda",
+                href=f"/bids/{bid.bid_id}/package-intake-addenda",
+            )
+        )
+    if decisions:
+        links.append(
+            BidEvidenceLink(
+                label="Decisions and approvals",
+                href=f"/decisions?bid_id={bid.bid_id}",
+            )
+        )
+    if waiting:
+        links.append(
+            BidEvidenceLink(
+                label="Waiting work items",
+                href=f"/my-work?bid_id={bid.bid_id}",
+            )
+        )
+    return links
+
+
+def _view_includes(
+    view: BidPortfolioView,
+    bid: Bid,
+    deadline: BidDeadlineAttention,
+    dormant: bool,
+) -> bool:
     if view is BidPortfolioView.ALL:
         return True
     if view is BidPortfolioView.CURRENT:
-        return status in CURRENT_BID_STATUSES
-    return status in HISTORY_BID_STATUSES
+        return bid.status in CURRENT_BID_STATUSES
+    if view is BidPortfolioView.HISTORY:
+        return bid.status in HISTORY_BID_STATUSES
+    if view is BidPortfolioView.ISSUED:
+        return bid.status is BidStatus.SUBMITTED
+    if view is BidPortfolioView.UPCOMING:
+        return bid.status in {BidStatus.ACTIVE, BidStatus.HELD} and deadline is (
+            BidDeadlineAttention.UPCOMING
+        )
+    return bid.status in {BidStatus.ACTIVE, BidStatus.HELD} and dormant
+
+
+def last_activity_by_bid(
+    audit_entries: list[AuditEntry],
+    bids: list[Bid],
+) -> dict[str, datetime]:
+    """Pure reduction of already-loaded audit rows to one timestamp per Bid.
+
+    ``audit_entries`` must already be ordered ascending by timestamp (as
+    ``BidRepository.list_audit`` returns them) so the last write per ``bid_id`` in
+    iteration order is the maximum. Bids with no audit rows fall back to
+    ``Bid.updated_at``. This reports the last *recorded* audit activity — it does not
+    distinguish human actions from system-generated ones (for example gate
+    re-evaluations), because the codebase has no existing classification of audit
+    action strings into human versus system origin to reuse.
+    """
+    latest: dict[str, datetime] = {}
+    for entry in audit_entries:
+        if entry.bid_id is not None:
+            latest[entry.bid_id] = entry.timestamp
+    for bid in bids:
+        latest.setdefault(bid.bid_id, bid.updated_at)
+    return latest
 
 
 def project_bid_portfolio(
@@ -596,11 +814,28 @@ def project_bid_portfolio(
     as_of: date,
     upcoming_horizon_days: int = 14,
     supplier_attention: list[dict[str, str]] | None = None,
+    requirement_attention: list[ProjectedRequirementAttention] | None = None,
+    deliverable_attention: list[dict[str, str]] | None = None,
+    commercial_attention: list[dict[str, str]] | None = None,
+    contract_risk_attention: list[dict[str, str]] | None = None,
+    intake_attention: list[dict[str, str]] | None = None,
+    last_activity: dict[str, datetime] | None = None,
 ) -> BidPortfolioProjection:
     """Filter and rank bids deterministically without reading storage or a clock."""
+    supplier_attention = supplier_attention or []
+    requirement_attention = requirement_attention or []
+    deliverable_attention = deliverable_attention or []
+    commercial_attention = commercial_attention or []
+    contract_risk_attention = contract_risk_attention or []
+    intake_attention = intake_attention or []
+    last_activity = last_activity or {}
     rows: list[BidPortfolioRow] = []
     for bid in bids:
-        if not _view_includes(filters.view, bid.status):
+        readiness = readiness_by_bid[bid.bid_id]
+        deadline = _deadline_attention(bid, as_of, upcoming_horizon_days)
+        bid_last_activity = last_activity.get(bid.bid_id, bid.updated_at)
+        dormant = _is_dormant(bid_last_activity, as_of)
+        if not _view_includes(filters.view, bid, deadline, dormant):
             continue
         if filters.status is not None and bid.status is not filters.status:
             continue
@@ -608,20 +843,18 @@ def project_bid_portfolio(
             continue
         if filters.owner and filters.owner.casefold() not in bid.bc_owner.casefold():
             continue
-        readiness = readiness_by_bid[bid.bid_id]
         if (
             filters.readiness is not BidReadinessFilter.ANY
             and readiness.verdict.value != filters.readiness.value
         ):
             continue
-        deadline = _deadline_attention(bid, as_of, upcoming_horizon_days)
         if filters.deadline is not BidDeadlineAttention.ANY and deadline is not filters.deadline:
             continue
         bid_work = [item for item in work_items if item.bid_id == bid.bid_id]
         waiting = [item for item in bid_work if item.status is WorkItemStatus.WAITING]
         waiting_controls = [
             item
-            for item in supplier_attention or []
+            for item in supplier_attention
             if item.get("bid_id") == bid.bid_id
             and ("NO_RESPONSE" in item.get("code", "") or "SILENT" in item.get("code", ""))
         ]
@@ -634,17 +867,61 @@ def project_bid_portfolio(
             waiting_controls,
             decisions,
         )
+        requirement_count = sum(
+            1 for item in requirement_attention if item.requirement.bid_id == bid.bid_id
+        )
+        commercial_or_contract_risk_count = sum(
+            1
+            for item in (*commercial_attention, *contract_risk_attention)
+            if item.get("bid_id") == bid.bid_id
+        )
+        intake_count = sum(1 for item in intake_attention if item.get("bid_id") == bid.bid_id)
+        other_attention_count = _other_attention_count(
+            bid.bid_id,
+            requirement_attention,
+            deliverable_attention,
+            commercial_attention,
+            contract_risk_attention,
+            intake_attention,
+        )
+        overdue_work_count = _overdue_work_count(bid_work, as_of)
         rows.append(
             BidPortfolioRow(
                 bid=bid,
                 readiness=readiness,
                 highest_blocker=blockers[0] if blockers else None,
+                additional_blocker_count=max(len(blockers) - 1, 0),
                 waiting_count=len(waiting) + len(waiting_controls),
+                overdue_work_count=overdue_work_count,
                 decision_count=len(decisions),
+                other_attention_count=other_attention_count,
+                supplier_response_position=_supplier_response_position(
+                    bid.bid_id, supplier_attention
+                ),
+                last_activity=bid_last_activity,
                 next_action=next_action,
                 next_action_destination=destination,
                 deadline_attention=deadline,
                 sort_tier=_portfolio_tier(bid, readiness, deadline, len(decisions)),
+                my_day_bucket=_my_day_bucket(
+                    bid,
+                    blockers,
+                    readiness,
+                    deadline,
+                    decisions,
+                    len(waiting) + len(waiting_controls),
+                    overdue_work_count,
+                    other_attention_count,
+                ),
+                evidence_links=_evidence_links(
+                    bid,
+                    requirement_count=requirement_count,
+                    supplier_or_waiting_controls=bool(waiting_controls),
+                    commercial_or_contract_risk_count=commercial_or_contract_risk_count,
+                    intake_count=intake_count,
+                    decisions=decisions,
+                    waiting=waiting,
+                ),
             )
         )
     rows.sort(
@@ -681,16 +958,15 @@ class BidControlCenterService:
         *,
         as_of: date,
     ) -> BidPortfolioProjection:
+        bids = self.bid_repository.list_bids()
         day = self._my_day_loader(as_of)
-        readiness = {item.bid_id: item.report for item in day.readiness_reports}
-        return project_bid_portfolio(
-            self.bid_repository.list_bids(),
-            readiness,
+        return build_bid_portfolio(
+            day,
+            bids,
             self.work_repository.list(active_only=True),
-            day.approval_attention,
+            self.bid_repository.list_audit(),
             filters,
             as_of,
-            supplier_attention=day.supplier_attention,
         )
 
     def workspace(self, bid_id: str, *, as_of: date) -> BidWorkspaceProjection:
@@ -709,9 +985,49 @@ class BidControlCenterService:
         )
 
 
+def build_bid_portfolio(
+    day: MyDayProjection,
+    bids: list[Bid],
+    work_items: list[WorkItem],
+    audit_entries: list[AuditEntry],
+    filters: BidPortfolioFilters,
+    as_of: date,
+    upcoming_horizon_days: int = 14,
+) -> BidPortfolioProjection:
+    """Build the shared Bid-portfolio projection from already-loaded batch sources.
+
+    Callers that already hold a `MyDayProjection` for this `as_of` (the `/my-day` route)
+    must pass it in here rather than triggering a second `MyDayService.get_my_day()` call,
+    which repeats that service's own internal per-Bid supplier/deliverable-attention
+    queries. `BidControlCenterService.portfolio()` is the only caller allowed to load a
+    fresh projection, for callers (the `/bids` route) that do not already have one.
+    """
+    readiness = {item.bid_id: item.report for item in day.readiness_reports}
+    return project_bid_portfolio(
+        bids,
+        readiness,
+        work_items,
+        day.approval_attention,
+        filters,
+        as_of,
+        upcoming_horizon_days=upcoming_horizon_days,
+        supplier_attention=day.supplier_attention,
+        requirement_attention=day.requirement_attention,
+        deliverable_attention=day.deliverable_attention,
+        commercial_attention=day.commercial_attention,
+        contract_risk_attention=day.contract_risk_attention,
+        intake_attention=day.intake_attention,
+        last_activity=last_activity_by_bid(audit_entries, bids),
+    )
+
+
 __all__ = [
+    "CURRENT_BID_STATUSES",
+    "DORMANT_AFTER_DAYS",
+    "HISTORY_BID_STATUSES",
     "BidControlCenterService",
     "BidDeadlineAttention",
+    "BidEvidenceLink",
     "BidNotFoundError",
     "BidPortfolioFilters",
     "BidPortfolioView",
@@ -719,9 +1035,12 @@ __all__ = [
     "BidWorkspaceSection",
     "BidWorkspaceAttention",
     "GovernanceLevelGuide",
+    "MyDayBidBucket",
+    "build_bid_portfolio",
     "classification_controls",
     "classification_controls_for_level",
     "governance_level_guides",
+    "last_activity_by_bid",
     "outstanding_items",
     "project_bid_portfolio",
     "project_bid_workspace",

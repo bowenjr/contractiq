@@ -377,7 +377,7 @@ async def main() -> None:
             rendered: dict[str, bytes] = {}
             for path, marker in (
                 (f"/bids/{bid_id}/proposal-negotiation", b"Derived proposal inputs"),
-                ("/my-day", b'data-bid-summary="'),
+                ("/my-day", b'data-bid-row="'),
                 (f"/bids/{bid_id}/handover", b"Payment terms"),
             ):
                 status, _, page = await request(app.app, "GET", path)
@@ -386,11 +386,7 @@ async def main() -> None:
                 rendered[path] = page
             assert rendered[f"/bids/{bid_id}/handover"].count(b"Net 90 after delivery") >= 1
             assert (
-                len(
-                    re.findall(
-                        rb'data-bid-summary="' + bid_id.encode() + rb'"', rendered["/my-day"]
-                    )
-                )
+                len(re.findall(rb'data-bid-row="' + bid_id.encode() + rb'"', rendered["/my-day"]))
                 == 1
             )
         finally:

@@ -211,7 +211,7 @@ def test_ui_api_creates_transitions_completes_and_reopens_audited_item(
     assert completed_response.status_code == 200
     completed = _json(completed_response)
     completed_page = asyncio.run(ui_app.my_day(cast(Request, object())))
-    assert "Completed and cancelled history (1)" in _html(completed_page)
+    assert "Recently completed (1)" in _html(completed_page)
 
     reopened_response = asyncio.run(
         ui_app.transition_work_item(

@@ -35,6 +35,6 @@ def test_workflow_copy_exposes_business_actions_and_no_post_award_flow() -> None
 def test_my_day_uses_one_primary_bid_summary_and_business_status() -> None:
     root = Path(__file__).parents[2]
     template = (root / "templates" / "my_day.html").read_text()
-    assert 'data-bid-summary="{{ summary.bid.bid_id }}"' in template
-    assert "Commercial review incomplete" in (root / "app.py").read_text()
+    assert 'data-bid-row="{{ row.bid.bid_id }}"' in template
+    assert "Needs attention" in (root / "templates" / "my_day.html").read_text()
     assert "{{ row.severity }}" not in template

@@ -166,10 +166,40 @@
       </div>
     {% endmacro %}
 
-    <section class="section" aria-labelledby="bid-summary-heading">
-      <div class="section-head"><h2 id="bid-summary-heading">Active Bids</h2><span class="section-count">{{ bid_summaries|length }}</span></div>
+    {% macro bid_card(row) %}
+      <article class="hold" data-bid-row="{{ row.bid.bid_id }}">
+        <div class="hold-title">
+          <a href="/bids/{{ row.bid.bid_id }}"><span>{{ row.bid.project_name }} · {{ row.bid.customer }}</span></a>
+          <span class="badge {{ 'status-COMPLETED' if row.readiness.verdict.value == 'clear' else 'status-BLOCKED' }}">{{ 'Ready' if row.readiness.verdict.value == 'clear' else 'Needs attention' }}</span>
+        </div>
+        <p><strong>{{ row.bid.current_gate.value|upper }}</strong> — {{ gate_labels[row.bid.current_gate] }} · Deadline {{ row.bid.customer_due_date }}</p>
+        <p class="context">
+          {% if row.highest_blocker %}{{ row.highest_blocker.heading }}{% if row.additional_blocker_count %} (+{{ row.additional_blocker_count }} more){% endif %}{% else %}No active blocker{% endif %}
+          · Waiting: {{ row.waiting_count }} · Overdue: {{ row.overdue_work_count }} · Owner: {{ row.bid.bc_owner }} · Last activity: {{ row.last_activity.strftime('%Y-%m-%d') if row.last_activity else 'Not recorded' }}
+        </p>
+        <p><a class="btn btn-small" href="{{ row.next_action_destination }}">{{ row.next_action }}</a></p>
+        <details><summary>Open underlying evidence</summary><p>{% for link in row.evidence_links %}<a href="{{ link.href }}">{{ link.label }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p></details>
+      </article>
+    {% endmacro %}
+
+    <section class="section" aria-labelledby="requires-action-heading">
+      <div class="section-head"><h2 id="requires-action-heading">Bids requiring action</h2><span class="section-count">{{ bids_requiring_action|length }}</span></div>
       <div class="panel">
-      {% for summary in bid_summaries %}<article class="hold" data-bid-summary="{{ summary.bid.bid_id }}"><div class="hold-title"><a href="/bids/{{ summary.bid.bid_id }}"><span>{{ summary.bid.project_name }} · {{ summary.bid.customer }}</span></a><span class="badge {{ 'status-COMPLETED' if summary.status == 'Ready' else 'status-BLOCKED' }}">{{ summary.status }}</span></div><p><strong>{{ summary.stage }}</strong> · {{ summary.primary }}</p><p class="context">{% for area, count in summary.counts.items() %}{{ area|title }}: {{ count }}{% if not loop.last %} · {% endif %}{% else %}No unresolved business-area count{% endfor %} · Nearest date: {{ summary.nearest_date }}</p><details><summary>Open {{ summary.underlying_count }} underlying attention reason(s)</summary><p><a href="/bids/{{ summary.bid.bid_id }}">Open Bid overview</a> · <a href="/bids/{{ summary.bid.bid_id }}/requirements-scope">Requirements and scope</a> · <a href="/bids/{{ summary.bid.bid_id }}/manufacturers-coverage">Manufacturers and coverage</a> · <a href="/bids/{{ summary.bid.bid_id }}/commercial-contract">Commercial and contract</a></p></details></article>{% else %}<div class="empty">No active Bid requires a primary summary.</div>{% endfor %}
+      {% for row in bids_requiring_action %}{{ bid_card(row) }}{% else %}<div class="empty">No Bid currently requires direct action.</div>{% endfor %}
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="waiting-bids-heading">
+      <div class="section-head"><h2 id="waiting-bids-heading">Waiting for others</h2><span class="section-count">{{ bids_waiting|length }}</span></div>
+      <div class="panel">
+      {% for row in bids_waiting %}{{ bid_card(row) }}{% else %}<div class="empty">No Bid is currently waiting only on another party.</div>{% endfor %}
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="on-track-heading">
+      <div class="section-head"><h2 id="on-track-heading">On track or upcoming</h2><span class="section-count">{{ bids_on_track_or_upcoming|length }}</span></div>
+      <div class="panel">
+      {% for row in bids_on_track_or_upcoming %}{{ bid_card(row) }}{% else %}<div class="empty">No Bid is currently on track without attention.</div>{% endfor %}
       </div>
     </section>
 
@@ -221,12 +251,12 @@
     </details>
 
     <section class="section" aria-labelledby="standalone-heading">
-      <div class="section-head"><h2 id="standalone-heading">Standalone personal work</h2><span class="section-count">{{ standalone_work|length }}</span></div>
+      <div class="section-head"><h2 id="standalone-heading">My standalone work</h2><span class="section-count">{{ standalone_work|length }}</span></div>
       {{ work_rows(standalone_work, 'No standalone personal work requires attention.') }}
     </section>
 
     <details class="history">
-      <summary>Completed and cancelled history ({{ archived_items|length }})</summary>
+      <summary>Recently completed ({{ archived_items|length }})</summary>
       <div class="panel">
       {% if archived_items %}
         {% for snapshot in archived_items %}{% set item = snapshot.item %}

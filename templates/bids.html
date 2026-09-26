@@ -22,18 +22,23 @@
   <label>Deadline attention<select name="deadline">{% if filter_values.deadline not in deadline_filter_values %}<option value="{{ filter_values.deadline }}" selected>Invalid selection: {{ filter_values.deadline }}</option>{% endif %}{% for option in deadline_filters %}<option value="{{ option.value }}"{% if filter_values.deadline == option.value %} selected{% endif %}>{{ option.value|title }}</option>{% endfor %}</select></label>
   <div class="wide actions"><button type="submit">Apply filters</button><a href="/bids">Clear filters</a></div>
 </form></section>
-<section class="card"><h2>Bid portfolio</h2><p class="muted">{{ portfolio.rows|length }} Bid{% if portfolio.rows|length != 1 %}s{% endif %} shown · working date {{ portfolio.as_of }}</p><div class="table-wrap"><table><thead><tr><th>Bid ID</th><th>Customer / project</th><th>Classification</th><th>Stage / gate</th><th>Customer deadline</th><th>Internal deadline</th><th>Bid owner</th><th>Readiness</th><th>Highest blocker</th><th>Waiting</th><th>Next required action</th></tr></thead><tbody>
+<section class="card"><h2>Bid portfolio</h2><p class="muted">{{ portfolio.rows|length }} Bid{% if portfolio.rows|length != 1 %}s{% endif %} shown · working date {{ portfolio.as_of }}</p><div class="table-wrap"><table><thead><tr><th>Bid ID</th><th>Customer / project</th><th>Classification</th><th>Lifecycle/status</th><th>Current workflow gate</th><th>Customer deadline</th><th>Internal deadline</th><th>Bid owner</th><th>Readiness</th><th>Highest blocker</th><th>Waiting</th><th>Supplier response</th><th>Proposal</th><th>Last recorded activity</th><th>Next required action</th></tr></thead><tbody>
 {% for row in portfolio.rows %}<tr>
   <td><a href="/bids/{{ row.bid.bid_id }}"><strong>{{ row.bid.bid_id }}</strong></a></td>
   <td>{{ row.bid.customer }}<br><span class="muted">{{ row.bid.project_name }}</span></td>
   <td>{{ row.bid.classification.value|replace('_',' ')|title }}</td>
-  <td>{{ row.bid.status.value|replace('_',' ')|title }} · {{ row.bid.current_gate.value|upper }}</td>
+  <td>{{ row.bid.status.value|replace('_',' ')|title }}</td>
+  <td>{{ gate_labels[row.bid.current_gate] }}</td>
   <td{% if row.deadline_attention.value == 'upcoming' %} class="attention-upcoming"{% endif %}>{{ row.bid.customer_due_date }}</td>
   <td{% if row.deadline_attention.value == 'overdue' %} class="attention-overdue"{% endif %}>{{ row.bid.internal_due_date }}</td>
   <td>{{ row.bid.bc_owner }}</td><td><span class="tag">{{ row.readiness.verdict.value|upper }}</span></td>
-  <td>{% if row.highest_blocker %}<a href="{{ row.highest_blocker.destination }}">{{ row.highest_blocker.heading }}</a>{% else %}No active blocker{% endif %}</td>
-  <td>{{ row.waiting_count }}</td><td><a href="{{ row.next_action_destination }}">{{ row.next_action }}</a></td>
-</tr>{% else %}<tr><td colspan="11">No Bids match the selected filters.</td></tr>{% endfor %}
+  <td>{% if row.highest_blocker %}<a href="{{ row.highest_blocker.destination }}">{{ row.highest_blocker.heading }}</a>{% if row.additional_blocker_count %} <span class="muted">(+{{ row.additional_blocker_count }} more)</span>{% endif %}{% else %}No active blocker{% endif %}</td>
+  <td>{{ row.waiting_count }}</td>
+  <td>{{ row.supplier_response_position }}</td>
+  <td><a href="/bids/{{ row.bid.bid_id }}/proposal-issue-control">View proposal status</a></td>
+  <td>{{ row.last_activity.strftime('%Y-%m-%d') if row.last_activity else 'Not recorded' }}</td>
+  <td><a href="{{ row.next_action_destination }}">{{ row.next_action }}</a></td>
+</tr>{% else %}<tr><td colspan="15">No Bids match the selected filters.</td></tr>{% endfor %}
 </tbody></table></div></section>
 <section class="card" id="create-bid"><h2>Create Bid</h2><p class="muted">Enter the Bid facts once. ContractIQ calculates the minimum governance level before creation.</p><form method="post" action="/bids" class="form-grid">
 <label>Bid title <input name="project_name" required maxlength="300" value="{{ entered.project_name or '' }}"></label><label>Customer <input name="customer" required maxlength="300" value="{{ entered.customer or '' }}"></label>
