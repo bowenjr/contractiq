@@ -5,18 +5,25 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from enum import StrEnum
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.bid_repository import BidRepository
 from core.bid_workflow import (
     PACKAGE_NOT_IMPORTED_HEADING,
+    BidWorkflowProjection,
     OutstandingItem,
+    PackageIntakeFacts,
+    StageStatus,
     blocker_heading,
+    intake_control_action,
     intake_heading,
 )
 from core.enums import BidLevel, BidStatus, Gate
 from core.my_day import MyDayProjection, ProjectedRequirementAttention, work_item_attention_reasons
+from core.owner_decision_evidence import initial_requirements_assessment_available
+from core.owner_decisions import OwnerDecisionEvidenceSnapshot
 from core.readiness import Blocker, ReadinessReport, ReadinessVerdict
 from core.schemas import AuditEntry, Bid
 from core.work_item_repository import WorkItemRepository
@@ -156,6 +163,9 @@ class BidPortfolioRow(BaseModel):
 
     bid: Bid
     readiness: ReadinessReport
+    development_gate_label: str = ""
+    not_yet_assessed: tuple[str, ...] = ()
+    pending_before_issue_count: int = 0
     highest_blocker: BidBlockerView | None
     additional_blocker_count: int = 0
     waiting_count: int
@@ -166,6 +176,9 @@ class BidPortfolioRow(BaseModel):
     last_activity: datetime | None = None
     next_action: str
     next_action_destination: str
+    secondary_action: str | None = None
+    secondary_action_destination: str | None = None
+    stopped_reason: str | None = None
     deadline_attention: BidDeadlineAttention
     sort_tier: int = Field(ge=0, le=6)
     my_day_bucket: MyDayBidBucket = MyDayBidBucket.HISTORY
@@ -186,7 +199,11 @@ class BidWorkspaceProjection(BaseModel):
     as_of: date
     bid: Bid
     readiness: ReadinessReport
+    development_gate_label: str = ""
+    not_yet_assessed: tuple[str, ...] = ()
+    pending_before_issue_count: int = 0
     blockers: list[BidBlockerView]
+    issue_blockers: list[BidBlockerView]
     waiting_items: list[WorkItem]
     waiting_control_attention: list[dict[str, str]]
     decision_attention: list[dict[str, str]]
@@ -197,6 +214,7 @@ class BidWorkspaceProjection(BaseModel):
     next_gate_label: str | None
     next_action: str
     next_action_destination: str
+    workflow: BidWorkflowProjection | None = None
 
 
 class BidWorkspaceAttention(BaseModel):
@@ -282,6 +300,22 @@ def gate_destination(bid_id: str, gate: Gate) -> str:
     return workspace_path(bid_id, GATE_SECTION[gate])
 
 
+def blocker_destination(bid_id: str, condition_id: str, gate: Gate) -> str:
+    """Return a direct resolution path for a gate blocker when one exists."""
+    quoted_bid_id = quote(bid_id)
+    if condition_id == "g1.owner_pursuit_decided":
+        return f"/bids/{quoted_bid_id}/owner-decision"
+    if condition_id == "g4.margin_approved":
+        return f"/decisions?bid_id={quoted_bid_id}&approval_type=MARGIN#gate-approval"
+    if condition_id in {
+        "g4.required_approvals",
+        "g4.high_findings_have_authority",
+        "g6.senior_approvals_current",
+    }:
+        return f"/decisions?bid_id={quoted_bid_id}#gate-approval"
+    return gate_destination(bid_id, gate)
+
+
 def _next_gate(gate: Gate) -> Gate | None:
     gates = list(Gate)
     index = gates.index(gate)
@@ -318,9 +352,11 @@ def classification_controls_for_level(level: BidLevel) -> list[ClassificationCon
             label="Obtain margin approval",
             required=margin_required,
             explanation=(
-                "Required for Level 2, Level 3 and Level 4 by the current gate rule."
+                "Required for Level 2, Level 3 and Level 4 by the temporary "
+                "governance-level rule; value and margin thresholds are not enforced."
                 if margin_required
-                else "Not required for Level 0 or Level 1 by the current gate rule."
+                else "Not required for Level 0 or Level 1 by the temporary "
+                "governance-level rule; value and margin thresholds are not enforced."
             ),
         ),
     ]
@@ -406,12 +442,67 @@ def _blocker_view(bid: Bid, report_blocker: Blocker) -> BidBlockerView:
         owing_party=_GATE_OWING_PARTY[gate],
         due_date=due_date,
         evidence_source="Existing gate and authoritative control registers",
-        destination=gate_destination(bid.bid_id, gate),
+        destination=(
+            f"/decisions?bid_id={quote(bid.bid_id)}#authority-policies"
+            if report_blocker.condition_id == "g6.senior_approvals_current"
+            and "APPROVAL_POLICY_NOT_CONFIGURED" in report_blocker.detail
+            else blocker_destination(bid.bid_id, report_blocker.condition_id, gate)
+        ),
     )
 
 
 def _active_blockers(bid: Bid, readiness: ReadinessReport) -> list[BidBlockerView]:
     return [_blocker_view(bid, blocker) for blocker in readiness.blockers if not blocker.overridden]
+
+
+def _active_issue_blockers(bid: Bid, readiness: ReadinessReport) -> list[BidBlockerView]:
+    return [
+        _blocker_view(bid, blocker)
+        for blocker in readiness.issue_blockers
+        if not blocker.overridden
+    ]
+
+
+def workflow_development_blockers(
+    blockers: Sequence[BidBlockerView],
+    *,
+    package_received: bool,
+    evidence: OwnerDecisionEvidenceSnapshot,
+) -> list[BidBlockerView]:
+    """Hide G1 from presentation until review and initial assessment are complete.
+
+    This does not alter the readiness report.  Proposal controls still consume the
+    authoritative development blocker while the workflow presents the earlier
+    review or assessment action.
+    """
+    decision_step_reached = (
+        package_received
+        and evidence.received_files.undecided == 0
+        and initial_requirements_assessment_available(evidence)
+    )
+    return [
+        blocker
+        for blocker in blockers
+        if blocker.condition_id != "g1.owner_pursuit_decided" or decision_step_reached
+    ]
+
+
+def handover_gate_blockers(
+    blockers: Sequence[BidBlockerView], readiness: ReadinessReport
+) -> list[str]:
+    """Return every blocker line handover must consume, development and issue phase.
+
+    Handover is the last step of the controlled issue chain, so pending senior
+    approvals (issue-phase conditions the readiness verdict deliberately excludes
+    so drafting can proceed) still make it not ready.
+    """
+    lines = [f"{blocker.heading} — {blocker.detail}" for blocker in blockers]
+    lines.extend(
+        f"Pending before issue — {blocker.description} {blocker.detail}".strip()
+        for blocker in readiness.issue_blockers
+        if not blocker.overridden
+    )
+    return lines
 
 
 def _next_action(
@@ -440,6 +531,20 @@ def _next_action(
     return f"Prepare for {GATE_LABELS[next_gate]}", gate_destination(bid.bid_id, next_gate)
 
 
+def _not_yet_assessed(
+    readiness: ReadinessReport,
+    workflow: BidWorkflowProjection | None,
+) -> tuple[str, ...]:
+    """Combine missing gate registers with zero-count workflow stages."""
+    facts = list(readiness.not_yet_assessed)
+    if workflow is not None:
+        for key, label in (("requirements", "requirements"), ("scope", "scope")):
+            stage = next((item for item in workflow.stages if item.key == key), None)
+            if stage is not None and stage.status is StageStatus.NOT_STARTED:
+                facts.append(label)
+    return tuple(dict.fromkeys(facts))
+
+
 def project_bid_workspace(
     bid: Bid,
     readiness: ReadinessReport,
@@ -447,6 +552,7 @@ def project_bid_workspace(
     approval_attention: list[dict[str, str]],
     as_of: date,
     supplier_attention: list[dict[str, str]] | None = None,
+    workflow: BidWorkflowProjection | None = None,
 ) -> BidWorkspaceProjection:
     """Build one workspace shell from authoritative projections only."""
     waiting = sorted(
@@ -471,19 +577,28 @@ def project_bid_workspace(
         key=lambda item: (item.get("entity_id", ""), item.get("code", "")),
     )
     blockers = _active_blockers(bid, readiness)
-    next_action, destination = _next_action(
-        bid,
-        blockers,
-        waiting,
-        waiting_controls,
-        decisions,
-    )
+    issue_blockers = _active_issue_blockers(bid, readiness)
+    if workflow is None:
+        next_action, destination = _next_action(
+            bid,
+            blockers,
+            waiting,
+            waiting_controls,
+            decisions,
+        )
+    else:
+        next_action = workflow.next_action_label
+        destination = workflow.next_action_path
     next_gate = _next_gate(bid.current_gate)
     return BidWorkspaceProjection(
         as_of=as_of,
         bid=bid,
         readiness=readiness,
+        development_gate_label=readiness.development_gate_label,
+        not_yet_assessed=_not_yet_assessed(readiness, workflow),
+        pending_before_issue_count=readiness.pending_before_issue_count,
         blockers=blockers,
+        issue_blockers=issue_blockers,
         waiting_items=waiting,
         waiting_control_attention=waiting_controls,
         decision_attention=decisions,
@@ -494,17 +609,27 @@ def project_bid_workspace(
         next_gate_label=GATE_LABELS[next_gate] if next_gate else None,
         next_action=next_action,
         next_action_destination=destination,
+        workflow=workflow,
     )
+
+
+_COMMERCIAL_POSITIONS_EXPLANATION = (
+    "These positions are created when commercial factors are initialized in Commercial "
+    "(an explicit action; opening a page never creates them). Each needs an owner and a "
+    "disposition before gate G4 can pass. This is not a Package Intake step."
+)
 
 
 def outstanding_items(
     blockers: Sequence[BidBlockerView],
     *,
+    issue_blockers: Sequence[BidBlockerView] = (),
     intake_attention: Sequence[object] = (),
     package_imported: bool = True,
     bid_id: str = "",
     owner: str = "",
     due_date: date | None = None,
+    intake: PackageIntakeFacts | None = None,
 ) -> list[OutstandingItem]:
     """Merge every outstanding thing into one list stated as what is missing.
 
@@ -539,9 +664,39 @@ def outstanding_items(
                 resolve_label="Import customer bid package",
                 resolve_path=f"/bids/{bid_id}/package-intake-addenda/import?mode=initial",
                 blocking=True,
+                code="PACKAGE_NOT_IMPORTED",
+                scope="package_intake",
             )
         )
     for blocker in blockers:
+        resolve_label = {
+            "g1.owner_pursuit_decided": "Record owner decision",
+            "g4.margin_approved": "Record margin approval",
+        }.get(blocker.condition_id, "Resolve in this Bid")
+        detail = blocker.detail
+        if blocker.condition_id == "g4.commercial_review_clear":
+            detail = f"{detail} {_COMMERCIAL_POSITIONS_EXPLANATION}"
+        items.append(
+            OutstandingItem(
+                heading=blocker.heading,
+                detail=detail,
+                consequence=blocker.consequence,
+                owner=blocker.owner,
+                owing_party=blocker.owing_party,
+                due_date=blocker.due_date,
+                evidence_source=blocker.evidence_source,
+                resolve_label=resolve_label,
+                resolve_path=blocker.destination,
+                blocking=True,
+                code=blocker.condition_id,
+            )
+        )
+    for blocker in issue_blockers:
+        resolve_label = (
+            "Record margin approval"
+            if blocker.condition_id == "g4.margin_approved"
+            else "Record senior approval"
+        )
         items.append(
             OutstandingItem(
                 heading=blocker.heading,
@@ -551,17 +706,27 @@ def outstanding_items(
                 owing_party=blocker.owing_party,
                 due_date=blocker.due_date,
                 evidence_source=blocker.evidence_source,
-                resolve_label="Resolve in this Bid",
+                resolve_label=resolve_label,
                 resolve_path=blocker.destination,
-                blocking=True,
+                blocking=False,
+                code=blocker.condition_id,
+                scope="pending_before_issue",
             )
         )
     for record in intake_attention:
         code = str(getattr(record, "code", ""))
         message = str(getattr(record, "message", ""))
+        resolve_label = (
+            "Review files, then confirm Bid Basis"
+            if code == "RECEIVED_RELEASE_NOT_IN_BASIS"
+            else "Resolve in Package intake"
+        )
+        resolve_path = str(getattr(record, "destination", ""))
+        if code == "RECEIVED_RELEASE_NOT_IN_BASIS" and intake is not None:
+            resolve_label, resolve_path = intake_control_action(bid_id, intake)
         items.append(
             OutstandingItem(
-                heading=intake_heading(code, message),
+                heading=intake_heading(code, message, getattr(record, "release_type", None)),
                 detail=message,
                 consequence=(
                     "Proposal issue is blocked until this is resolved."
@@ -572,9 +737,11 @@ def outstanding_items(
                 owing_party="Bid owner",
                 due_date=due_date,
                 evidence_source="Package intake register",
-                resolve_label="Resolve in Package intake",
-                resolve_path=str(getattr(record, "destination", "")),
+                resolve_label=resolve_label,
+                resolve_path=resolve_path,
                 blocking=bool(getattr(record, "blocking", False)),
+                code=code or None,
+                scope="bid_basis" if code == "RECEIVED_RELEASE_NOT_IN_BASIS" else "package_intake",
             )
         )
     seen: set[str] = set()
@@ -820,6 +987,7 @@ def project_bid_portfolio(
     contract_risk_attention: list[dict[str, str]] | None = None,
     intake_attention: list[dict[str, str]] | None = None,
     last_activity: dict[str, datetime] | None = None,
+    workflow_by_bid: dict[str, BidWorkflowProjection] | None = None,
 ) -> BidPortfolioProjection:
     """Filter and rank bids deterministically without reading storage or a clock."""
     supplier_attention = supplier_attention or []
@@ -860,13 +1028,27 @@ def project_bid_portfolio(
         ]
         decisions = [item for item in approval_attention if item.get("bid_id") == bid.bid_id]
         blockers = _active_blockers(bid, readiness)
-        next_action, destination = _next_action(
-            bid,
-            blockers,
-            waiting,
-            waiting_controls,
-            decisions,
+        workflow = (workflow_by_bid or {}).get(bid.bid_id)
+        owner_stage = (
+            next((stage for stage in workflow.stages if stage.key == "owner-decision"), None)
+            if workflow is not None
+            else None
         )
+        if owner_stage is not None and owner_stage.status is StageStatus.NOT_STARTED:
+            # Review and the initial assessment come first: the portfolio headline must not
+            # present the owner decision as a blocker before that step can be performed.
+            blockers = [b for b in blockers if b.condition_id != "g1.owner_pursuit_decided"]
+        if workflow is None:
+            next_action, destination = _next_action(
+                bid,
+                blockers,
+                waiting,
+                waiting_controls,
+                decisions,
+            )
+        else:
+            next_action = workflow.next_action_label
+            destination = workflow.next_action_path
         requirement_count = sum(
             1 for item in requirement_attention if item.requirement.bid_id == bid.bid_id
         )
@@ -889,6 +1071,9 @@ def project_bid_portfolio(
             BidPortfolioRow(
                 bid=bid,
                 readiness=readiness,
+                development_gate_label=readiness.development_gate_label,
+                not_yet_assessed=_not_yet_assessed(readiness, workflow),
+                pending_before_issue_count=readiness.pending_before_issue_count,
                 highest_blocker=blockers[0] if blockers else None,
                 additional_blocker_count=max(len(blockers) - 1, 0),
                 waiting_count=len(waiting) + len(waiting_controls),
@@ -901,6 +1086,9 @@ def project_bid_portfolio(
                 last_activity=bid_last_activity,
                 next_action=next_action,
                 next_action_destination=destination,
+                secondary_action=workflow.secondary_action_label if workflow else None,
+                secondary_action_destination=workflow.secondary_action_path if workflow else None,
+                stopped_reason=workflow.stopped_reason if workflow is not None else None,
                 deadline_attention=deadline,
                 sort_tier=_portfolio_tier(bid, readiness, deadline, len(decisions)),
                 my_day_bucket=_my_day_bucket(
@@ -945,12 +1133,18 @@ class BidControlCenterService:
         my_day_loader: Callable[[date], MyDayProjection],
         readiness_loader: Callable[[str], ReadinessReport],
         workspace_attention_loader: Callable[[str, date], BidWorkspaceAttention],
+        workflow_loader: Callable[
+            [Bid, ReadinessReport, list[BidBlockerView], list[BidBlockerView]],
+            BidWorkflowProjection,
+        ]
+        | None = None,
     ) -> None:
         self.bid_repository = bid_repository
         self.work_repository = work_repository
         self._my_day_loader = my_day_loader
         self._readiness_loader = readiness_loader
         self._workspace_attention_loader = workspace_attention_loader
+        self._workflow_loader = workflow_loader
 
     def portfolio(
         self,
@@ -967,6 +1161,7 @@ class BidControlCenterService:
             self.bid_repository.list_audit(),
             filters,
             as_of,
+            workflow_loader=self._workflow_loader,
         )
 
     def workspace(self, bid_id: str, *, as_of: date) -> BidWorkspaceProjection:
@@ -975,6 +1170,13 @@ class BidControlCenterService:
             raise BidNotFoundError(f"Bid not found: {bid_id}")
         readiness = self._readiness_loader(bid_id)
         attention = self._workspace_attention_loader(bid_id, as_of)
+        blockers = _active_blockers(bid, readiness)
+        issue_blockers = _active_issue_blockers(bid, readiness)
+        workflow = (
+            self._workflow_loader(bid, readiness, blockers, issue_blockers)
+            if self._workflow_loader is not None
+            else None
+        )
         return project_bid_workspace(
             bid,
             readiness,
@@ -982,6 +1184,7 @@ class BidControlCenterService:
             attention.approval_attention,
             as_of,
             supplier_attention=attention.supplier_attention,
+            workflow=workflow,
         )
 
 
@@ -993,6 +1196,11 @@ def build_bid_portfolio(
     filters: BidPortfolioFilters,
     as_of: date,
     upcoming_horizon_days: int = 14,
+    workflow_loader: Callable[
+        [Bid, ReadinessReport, list[BidBlockerView], list[BidBlockerView]],
+        BidWorkflowProjection,
+    ]
+    | None = None,
 ) -> BidPortfolioProjection:
     """Build the shared Bid-portfolio projection from already-loaded batch sources.
 
@@ -1003,6 +1211,19 @@ def build_bid_portfolio(
     fresh projection, for callers (the `/bids` route) that do not already have one.
     """
     readiness = {item.bid_id: item.report for item in day.readiness_reports}
+    workflow_by_bid = (
+        {
+            bid.bid_id: workflow_loader(
+                bid,
+                readiness[bid.bid_id],
+                _active_blockers(bid, readiness[bid.bid_id]),
+                _active_issue_blockers(bid, readiness[bid.bid_id]),
+            )
+            for bid in bids
+        }
+        if workflow_loader is not None
+        else None
+    )
     return project_bid_portfolio(
         bids,
         readiness,
@@ -1018,6 +1239,7 @@ def build_bid_portfolio(
         contract_risk_attention=day.contract_risk_attention,
         intake_attention=day.intake_attention,
         last_activity=last_activity_by_bid(audit_entries, bids),
+        workflow_by_bid=workflow_by_bid,
     )
 
 
@@ -1045,4 +1267,5 @@ __all__ = [
     "project_bid_portfolio",
     "project_bid_workspace",
     "workspace_path",
+    "workflow_development_blockers",
 ]

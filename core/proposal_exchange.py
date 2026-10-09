@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.readiness_phases import BlockerPhase
+
 
 class ProposalControlStatus(StrEnum):
     NOT_STARTED = "NOT_STARTED"
@@ -34,6 +36,7 @@ class ProposalBlocker(BaseModel):
     # Short statement of what is missing. Presentation only: it never changes the
     # authoritative condition, its evaluation or its code.
     heading: str | None = None
+    phase: BlockerPhase = BlockerPhase.DEVELOPMENT
 
 
 class ProposalReadinessAssessment(BaseModel):
@@ -42,6 +45,7 @@ class ProposalReadinessAssessment(BaseModel):
     bid_id: str
     status: ProposalControlStatus
     blockers: tuple[ProposalBlocker, ...] = ()
+    pending_before_issue: tuple[str, ...] = ()
     changed_areas: tuple[str, ...] = ()
     current_export_id: str | None = None
     candidate_id: str | None = None
@@ -64,9 +68,17 @@ class ProposalExportRecord(BaseModel):
     canonical_sha256: str
     canonical_package_json: str
     area_hashes: dict[str, str]
+    is_draft: bool = False
+    pending_before_issue: tuple[str, ...] = ()
     supersedes_export_id: str | None = None
     created_by: str
     created_at: datetime
+
+    @property
+    def suggested_filename(self) -> str:
+        """Return the download name that makes draft status unmistakable."""
+        prefix = "DRAFT-" if self.is_draft else ""
+        return f"{prefix}{self.package_id}.json"
 
 
 class ImportedArtifact(BaseModel):

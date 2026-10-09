@@ -208,7 +208,7 @@ def test_approval_round_trips_provenance(
     assert loaded[0].provenance.created_by == Actor.HUMAN
 
 
-def test_update_approval_persists_full_model(
+def test_update_approval_is_rejected_and_the_row_is_unchanged(
     bid_repo: BidRepository,
     valid_bid: Bid,
     valid_provenance: Provenance,
@@ -221,18 +221,12 @@ def test_update_approval_persists_full_model(
         provenance=valid_provenance,
     )
     bid_repo.create_approval(approval)
-    updated = approval.model_copy(
-        update={
-            "obtained": True,
-            "authority": "Finance Director",
-            "decision": "Approved at 18% margin",
-            "decided_at": datetime(2026, 7, 20, 15, 0, tzinfo=UTC),
-        }
-    )
+    changed = approval.model_copy(update={"obtained": True, "authority": "Finance Director"})
 
-    bid_repo.update_approval(updated)
+    with pytest.raises(ValueError, match="cannot be edited in place"):
+        bid_repo.update_approval(changed)
 
-    assert bid_repo.list_approvals(valid_bid.bid_id) == [updated]
+    assert bid_repo.list_approvals(valid_bid.bid_id) == [approval]
 
 
 def test_upsert_gate_record_updates_without_duplicate(

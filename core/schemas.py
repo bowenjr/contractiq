@@ -115,6 +115,12 @@ class Approval(BaseModel):
     decision: str | None = None
     decided_at: datetime | None = None
     provenance: Provenance
+    # The immutable scenario-baseline selection this approval authorized. NULL means
+    # the historical row predates baseline binding and cannot be current authority.
+    pricing_baseline_id: str | None = None
+    # Append-only lineage: a later decision supersedes (never edits) an earlier one.
+    supersedes_approval_id: str | None = None
+    recorded_at: datetime | None = None
 
 
 class GateRecord(BaseModel):

@@ -36,5 +36,5 @@ def test_my_day_uses_one_primary_bid_summary_and_business_status() -> None:
     root = Path(__file__).parents[2]
     template = (root / "templates" / "my_day.html").read_text()
     assert 'data-bid-row="{{ row.bid.bid_id }}"' in template
-    assert "Needs attention" in (root / "templates" / "my_day.html").read_text()
+    assert "Development checks need attention" in (root / "templates" / "my_day.html").read_text()
     assert "{{ row.severity }}" not in template

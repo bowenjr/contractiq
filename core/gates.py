@@ -5,7 +5,9 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
 
-from core.enums import ApprovalType, BidLevel, Gate
+from core.enums import ApprovalType, BidLevel, BidStatus, Gate
+from core.owner_decisions import OwnerDecision, OwnerDecisionValue
+from core.readiness_phases import BlockerPhase, condition_phase
 from core.schemas import Approval, Bid
 
 
@@ -44,6 +46,7 @@ class GateContext:
     high_severity_findings: list[dict[str, object]]
     unconfirmed_counts: dict[str, int]
     prior_gate_results: dict[Gate, GateResult]
+    owner_decision: OwnerDecision | None = None
     has_compliance_matrix: bool = False
     has_supplier_register: bool = False
     supplier_coverage_clear: bool | None = None
@@ -52,6 +55,9 @@ class GateContext:
     has_strategy_record: bool = False
     commercial_review_clear: bool | None = None
     commercial_review_detail: str = ""
+    senior_approvals_required: bool = False
+    senior_approvals_clear: bool = True
+    senior_approvals_detail: str = ""
 
 
 def _condition(
@@ -144,12 +150,24 @@ def evaluate_g0(ctx: GateContext) -> GateResult:
 
 
 def evaluate_g1(ctx: GateContext) -> GateResult:
-    approval_required = ctx.bid.classification != BidLevel.LEVEL_0
+    decision_required = ctx.bid.classification != BidLevel.LEVEL_0
+    if decision_required and ctx.bid.status not in {BidStatus.ACTIVE, BidStatus.HELD}:
+        condition = ConditionResult(
+            condition_id="g1.owner_pursuit_decided",
+            description="The owner has decided to pursue this Bid.",
+            state=ConditionState.NOT_ASSESSABLE,
+            detail=f"G1 is not re-evaluated while the Bid is {ctx.bid.status.value}.",
+        )
+        return _gate_result(Gate.G1, [condition])
     condition = _condition(
-        "g1.bid_no_bid_approved",
-        "Bid/no-bid approval has been obtained.",
-        not approval_required or _has_obtained_approval(ctx, ApprovalType.BID_NO_BID),
-        "Bid/no-bid approval has not been obtained.",
+        "g1.owner_pursuit_decided",
+        "The owner has decided to pursue this Bid.",
+        not decision_required
+        or (
+            ctx.owner_decision is not None
+            and ctx.owner_decision.decision is OwnerDecisionValue.PURSUE
+        ),
+        "No current owner decision to pursue has been recorded.",
     )
     return _gate_result(Gate.G1, [condition])
 
@@ -229,7 +247,10 @@ def evaluate_g4(ctx: GateContext) -> GateResult:
         "g4.margin_approved",
         "Required margin approval has been obtained.",
         not margin_required or _has_obtained_approval(ctx, ApprovalType.MARGIN),
-        "MARGIN approval is required for Level 2 or higher and has not been obtained.",
+        (
+            "MARGIN approval is required by the temporary governance-level rule for "
+            "Level 2 or higher; value and margin thresholds are not enforced."
+        ),
     )
 
     has_global_authority = any(
@@ -309,11 +330,15 @@ def evaluate_g5(ctx: GateContext) -> GateResult:
         f"{unconfirmed_total} material analysis finding(s) remain unconfirmed.",
     )
 
-    failed_prior = [
-        gate.value.upper()
-        for gate in (Gate.G2, Gate.G3, Gate.G4)
-        if gate not in ctx.prior_gate_results or not ctx.prior_gate_results[gate].passed
-    ]
+    failed_prior = []
+    for gate in (Gate.G2, Gate.G3, Gate.G4):
+        result = ctx.prior_gate_results.get(gate)
+        if result is None or any(
+            condition.state == ConditionState.UNMET
+            and condition_phase(condition.condition_id) is BlockerPhase.DEVELOPMENT
+            for condition in result.conditions
+        ):
+            failed_prior.append(gate.value.upper())
     prior_condition = _condition(
         "g5.prior_gates_passed",
         "G2, G3, and G4 have passed.",
@@ -327,7 +352,7 @@ def evaluate_g5(ctx: GateContext) -> GateResult:
 
 
 def evaluate_g6(ctx: GateContext) -> GateResult:
-    condition = (
+    concession_condition = (
         ConditionResult(
             condition_id="g6.concessions_approved",
             description="Every post-bid concession has an approver.",
@@ -340,7 +365,14 @@ def evaluate_g6(ctx: GateContext) -> GateResult:
             "concession_log",
         )
     )
-    return _gate_result(Gate.G6, [condition])
+    senior_condition = _condition(
+        "g6.senior_approvals_current",
+        "Every derived senior-approval requirement is current and satisfied.",
+        not ctx.senior_approvals_required or ctx.senior_approvals_clear,
+        ctx.senior_approvals_detail
+        or "One or more derived senior-approval requirements are not satisfied.",
+    )
+    return _gate_result(Gate.G6, [concession_condition, senior_condition])
 
 
 def evaluate_g7(ctx: GateContext) -> GateResult:

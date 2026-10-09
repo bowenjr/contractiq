@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -138,7 +139,7 @@ def test_seventh_workspace_preview_register_review_and_no_get_mutation(
             {"confirmation_token": token_match.group(1).decode()},
         )
         assert status == 303
-        release_path = headers["location"]
+        release_path = urlsplit(headers["location"]).path
         status, _, detail = await request(ui_app.app, "GET", release_path)
         assert status == 200
         assert b"folder/synthetic.pdf" in detail
@@ -178,15 +179,17 @@ def test_seventh_workspace_preview_register_review_and_no_get_mutation(
         file_id = str(
             ui_app.bid_package_repository.release_detail(BID_ID, release_id)["files"][0]["file_id"]
         )
-        status, _, empty_bulk = await request(
+        status, empty_headers, empty_bulk = await request(
             ui_app.app,
             "POST",
             f"{path}/releases/{release_id}/bulk-dispositions",
             {"analysis_eligibility": "ELIGIBLE", "operation_id": "empty-bulk"},
         )
-        assert status == 422
-        assert b"Package intake needs attention" in empty_bulk
-        assert b"Review selected files" in empty_bulk
+        assert status == 303
+        assert empty_headers["location"] == (
+            f"{path}/releases/{release_id}?notice=none_selected&count=0#files"
+        )
+        assert b"Tuple" not in empty_bulk
         assert len(ui_app.bid_repository.list_audit(BID_ID)) == audit_after_register
         status, _, retained = await request(
             ui_app.app,
@@ -201,7 +204,7 @@ def test_seventh_workspace_preview_register_review_and_no_get_mutation(
             },
         )
         assert status == 422
-        assert b"excluded files require an exclusion reason" in retained
+        assert b"Enter why this file is excluded, or choose Include." in retained
         assert b"Drawing" in retained and b"folder/synthetic.pdf" in retained
         assert len(ui_app.bid_repository.list_audit(BID_ID)) == audit_after_register
 
@@ -380,7 +383,7 @@ def test_a_received_file_goes_under_document_control_without_a_second_upload(
             ui_app.app, "POST", f"{path}/register", {"confirmation_token": token.group(1).decode()}
         )
         assert status == 303
-        release_path = headers["location"]
+        release_path = urlsplit(headers["location"]).path
         release_id = release_path.rsplit("/", 1)[-1]
         detail = ui_app.bid_package_repository.release_detail(BID_ID, release_id)
         received = detail["files"][0]
@@ -475,7 +478,7 @@ def test_an_addendum_offers_directives_and_an_initial_package_does_not(
                 {"confirmation_token": token.group(1).decode()},
             )
             assert status == 303
-            return headers["location"]
+            return urlsplit(headers["location"]).path
 
         initial_path = await ingest("Initial-Package", "INITIAL_PACKAGE", "RFP-SYN-3")
         status, _, initial = await request(ui_app.app, "GET", initial_path)

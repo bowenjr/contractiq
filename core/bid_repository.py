@@ -21,6 +21,14 @@ from core.enums import (
 )
 from core.schemas import Approval, AuditEntry, Bid, GateRecord, Provenance
 
+# SQL predicate selecting gate approvals that no later decision has superseded. Every
+# reader of "the current gate fact" must use it so a historical NOT_OBTAINED row is never
+# mistaken for the live decision.
+CURRENT_APPROVAL_CLAUSE = (
+    "NOT EXISTS (SELECT 1 FROM approvals _later "
+    "WHERE _later.supersedes_approval_id = approvals.approval_id)"
+)
+
 
 class BidRepository:
     def __init__(self, db: Database) -> None:
@@ -105,7 +113,71 @@ class BidRepository:
             }
             if "bid_id" not in document_columns:
                 conn.execute("ALTER TABLE documents ADD COLUMN bid_id TEXT REFERENCES bids(bid_id)")
+            self._evolve_approval_lineage(conn)
             conn.commit()
+
+    @staticmethod
+    def _evolve_approval_lineage(conn: sqlite3.Connection) -> None:
+        """Additively give gate approvals an append-only supersession lineage.
+
+        A recorded NOT_OBTAINED decision stays as historical evidence; a later OBTAINED
+        decision supersedes it. A baseline-bound approval may likewise supersede approval
+        evidence tied to an earlier selected baseline. Existing rows keep NULL lineage
+        and baseline columns and are never rewritten.
+        """
+        columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(approvals)").fetchall()
+        }
+        if "supersedes_approval_id" not in columns:
+            conn.execute(
+                "ALTER TABLE approvals ADD COLUMN supersedes_approval_id TEXT "
+                "REFERENCES approvals(approval_id)"
+            )
+        if "recorded_at" not in columns:
+            conn.execute("ALTER TABLE approvals ADD COLUMN recorded_at TEXT")
+        if "pricing_baseline_id" not in columns:
+            conn.execute("ALTER TABLE approvals ADD COLUMN pricing_baseline_id TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_approval_superseded_once "
+            "ON approvals(supersedes_approval_id) WHERE supersedes_approval_id IS NOT NULL"
+        )
+        # Gate approvals are append-only evidence: no row is ever edited or deleted, whether
+        # or not it has been superseded. (Earlier builds only protected superseded rows,
+        # which left a current decision editable in place; drop those narrower triggers.)
+        for legacy_trigger in ("approvals_superseded_immutable", "approvals_superseded_no_delete"):
+            conn.execute(f"DROP TRIGGER IF EXISTS {legacy_trigger}")
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS approvals_append_only_update "
+            "BEFORE UPDATE ON approvals "
+            "BEGIN SELECT RAISE(ABORT,'gate approvals are append-only: a recorded decision "
+            "is historical evidence; record a superseding decision instead'); END"
+        )
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS approvals_append_only_delete "
+            "BEFORE DELETE ON approvals "
+            "BEGIN SELECT RAISE(ABORT,'gate approvals cannot be deleted'); END"
+        )
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS approvals_single_current "
+            "BEFORE INSERT ON approvals WHEN NEW.supersedes_approval_id IS NULL "
+            "AND EXISTS(SELECT 1 FROM approvals o WHERE o.bid_id=NEW.bid_id "
+            "AND o.approval_type=NEW.approval_type AND NOT EXISTS(SELECT 1 FROM approvals l "
+            "WHERE l.supersedes_approval_id=o.approval_id)) "
+            "BEGIN SELECT RAISE(ABORT,'a current decision already exists for this control; "
+            "supersede it instead of adding a second one'); END"
+        )
+        conn.execute("DROP TRIGGER IF EXISTS approvals_supersession_scope")
+        conn.execute(
+            "CREATE TRIGGER IF NOT EXISTS approvals_supersession_scope "
+            "BEFORE INSERT ON approvals WHEN NEW.supersedes_approval_id IS NOT NULL "
+            "AND NOT EXISTS(SELECT 1 FROM approvals o "
+            "WHERE o.approval_id=NEW.supersedes_approval_id "
+            "AND o.bid_id=NEW.bid_id AND o.approval_type=NEW.approval_type "
+            "AND (o.obtained=0 OR (NEW.obtained=1 "
+            "AND o.pricing_baseline_id IS NOT NEW.pricing_baseline_id))) "
+            "BEGIN SELECT RAISE(ABORT,'only a not-obtained or differently baseline-bound "
+            "approval of the same Bid and control can be superseded'); END"
+        )
 
     @staticmethod
     def _optional_str(value: object) -> str | None:
@@ -341,26 +413,34 @@ class BidRepository:
             decision=BidRepository._optional_str(row["decision"]),
             decided_at=datetime.fromisoformat(decided_at) if decided_at is not None else None,
             provenance=Provenance.model_validate_json(str(row["provenance_json"])),
+            pricing_baseline_id=BidRepository._optional_str(row["pricing_baseline_id"]),
+            supersedes_approval_id=BidRepository._optional_str(row["supersedes_approval_id"]),
+            recorded_at=(
+                datetime.fromisoformat(str(row["recorded_at"]))
+                if row["recorded_at"] is not None
+                else None
+            ),
         )
 
     def create_approval(self, approval: Approval, actor: str | None = None) -> None:
-        """Create a gate approval and, for browser authors, its audit atomically."""
+        """Create the first gate approval for a control (later decisions are appended)."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if (
-                actor is not None
-                and conn.execute(
-                    "SELECT 1 FROM approvals WHERE bid_id=? AND approval_type=?",
-                    (approval.bid_id, approval.approval_type.value),
-                ).fetchone()
-            ):
-                raise ValueError("This Bid gate approval has already been recorded")
+            if conn.execute(
+                "SELECT 1 FROM approvals WHERE bid_id=? AND approval_type=?",
+                (approval.bid_id, approval.approval_type.value),
+            ).fetchone():
+                raise ValueError(
+                    "This Bid gate approval has already been recorded; use "
+                    "record_gate_approval to supersede it"
+                )
             conn.execute(
                 """
                 INSERT INTO approvals (
                     approval_id, bid_id, approval_type, required, obtained,
-                    authority, evidence_ref, decision, decided_at, provenance_json
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    authority, evidence_ref, decision, decided_at, provenance_json,
+                    recorded_at, pricing_baseline_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     approval.approval_id,
@@ -373,6 +453,8 @@ class BidRepository:
                     approval.decision,
                     approval.decided_at.isoformat() if approval.decided_at else None,
                     approval.provenance.model_dump_json(),
+                    approval.recorded_at.isoformat() if approval.recorded_at else None,
+                    approval.pricing_baseline_id,
                 ),
             )
             if actor is not None:
@@ -408,30 +490,176 @@ class BidRepository:
             ).fetchall()
         return [self._approval_from_row(row) for row in rows]
 
-    def update_approval(self, approval: Approval) -> None:
+    def list_current_approvals(self, bid_id: str) -> list[Approval]:
+        """Return each gate approval that has not been superseded by a later decision.
+
+        This is the set the gates and downstream readiness consume. A superseded
+        NOT_OBTAINED decision remains in :meth:`list_approvals` as history only.
+        """
         with self._conn() as conn:
-            conn.execute(
-                """
-                UPDATE approvals SET
-                    bid_id = ?, approval_type = ?, required = ?, obtained = ?,
-                    authority = ?, evidence_ref = ?, decision = ?, decided_at = ?,
-                    provenance_json = ?
-                WHERE approval_id = ?
-                """,
-                (
-                    approval.bid_id,
-                    approval.approval_type.value,
-                    int(approval.required),
-                    int(approval.obtained),
-                    approval.authority,
-                    approval.evidence_ref,
-                    approval.decision,
-                    approval.decided_at.isoformat() if approval.decided_at else None,
-                    approval.provenance.model_dump_json(),
-                    approval.approval_id,
-                ),
-            )
-            conn.commit()
+            rows = conn.execute(
+                f"SELECT * FROM approvals WHERE bid_id = ? AND {CURRENT_APPROVAL_CLAUSE} "
+                "ORDER BY approval_id",
+                (bid_id,),
+            ).fetchall()
+        return [self._approval_from_row(row) for row in rows]
+
+    def record_gate_approval(
+        self,
+        approval: Approval,
+        actor: str,
+        expected_current_approval_id: str | None = None,
+    ) -> str:
+        """Record a browser-authored gate decision append-only.
+
+        Returns ``"created"`` for the first decision on a control, ``"superseded"`` when
+        an OBTAINED decision follows a recorded NOT_OBTAINED one (which is kept as
+        history), or ``"unchanged"`` when the identical decision is already current, so
+        a repeated submission is idempotent and writes nothing.
+
+        Raises:
+            ValueError: If the decision conflicts with the current one, or if
+                ``expected_current_approval_id`` no longer names the current decision
+                (another user recorded it first; reload and retry), or if an obtained
+                senior approval has no selected pricing baseline to bind.
+        """
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                pricing_baseline_id: str | None = None
+                if approval.obtained and approval.approval_type is not ApprovalType.BID_NO_BID:
+                    baseline_table = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='scenario_baselines'"
+                    ).fetchone()
+                    if baseline_table is not None:
+                        baseline = conn.execute(
+                            "SELECT selection_id FROM scenario_baselines WHERE bid_id=? "
+                            "ORDER BY selected_at DESC,selection_id DESC LIMIT 1",
+                            (approval.bid_id,),
+                        ).fetchone()
+                        pricing_baseline_id = (
+                            str(baseline["selection_id"]) if baseline is not None else None
+                        )
+                    if pricing_baseline_id is None:
+                        raise ValueError(
+                            "Select the pricing baseline before recording a senior approval"
+                        )
+                heads = conn.execute(
+                    f"SELECT * FROM approvals WHERE bid_id=? AND approval_type=? "
+                    f"AND {CURRENT_APPROVAL_CLAUSE} ORDER BY approval_id",
+                    (approval.bid_id, approval.approval_type.value),
+                ).fetchall()
+                supersedes: str | None = None
+                if len(heads) > 1:
+                    raise ValueError(
+                        "This control has more than one current legacy record; "
+                        "resolve it before recording a new decision"
+                    )
+                if heads:
+                    current = self._approval_from_row(heads[0])
+                    if (
+                        current.obtained == approval.obtained
+                        and current.authority == approval.authority
+                        and current.evidence_ref == approval.evidence_ref
+                        and current.decision == approval.decision
+                        and current.pricing_baseline_id == pricing_baseline_id
+                    ):
+                        conn.rollback()
+                        return "unchanged"
+                    if current.obtained and not approval.obtained:
+                        raise ValueError(
+                            "This Bid gate approval is already recorded as obtained; "
+                            "an obtained approval cannot be replaced here"
+                        )
+                    if current.obtained and current.pricing_baseline_id == pricing_baseline_id:
+                        raise ValueError(
+                            "This Bid gate approval is already recorded as obtained for "
+                            "the currently selected pricing baseline"
+                        )
+                    if not approval.obtained:
+                        raise ValueError(
+                            "This Bid gate approval is already recorded as not obtained; "
+                            "record the obtained decision once it has been made"
+                        )
+                    if expected_current_approval_id != current.approval_id:
+                        raise ValueError(
+                            "This Bid gate approval changed since the page was loaded; "
+                            "reload and review the current decision"
+                        )
+                    supersedes = current.approval_id
+                elif expected_current_approval_id:
+                    raise ValueError(
+                        "This Bid gate approval changed since the page was loaded; "
+                        "reload and review the current decision"
+                    )
+                at = datetime.now(UTC)
+                conn.execute(
+                    """
+                    INSERT INTO approvals (
+                        approval_id, bid_id, approval_type, required, obtained,
+                        authority, evidence_ref, decision, decided_at, provenance_json,
+                        supersedes_approval_id, recorded_at, pricing_baseline_id
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        approval.approval_id,
+                        approval.bid_id,
+                        approval.approval_type.value,
+                        int(approval.required),
+                        int(approval.obtained),
+                        approval.authority,
+                        approval.evidence_ref,
+                        approval.decision,
+                        approval.decided_at.isoformat() if approval.decided_at else None,
+                        approval.provenance.model_dump_json(),
+                        supersedes,
+                        at.isoformat(),
+                        pricing_baseline_id,
+                    ),
+                )
+                conn.execute(
+                    """INSERT INTO audit_log(
+                    entry_id,bid_id,actor,action,detail,timestamp) VALUES(?,?,?,?,?,?)""",
+                    (
+                        f"AUD-{uuid4()}",
+                        approval.bid_id,
+                        actor,
+                        "bid_gate_approval_superseded"
+                        if supersedes
+                        else "bid_gate_approval_created",
+                        json.dumps(
+                            {
+                                "approval_id": approval.approval_id,
+                                "gate": approval.approval_type.value,
+                                "decision": approval.decision,
+                                "obtained": approval.obtained,
+                                "supersedes_approval_id": supersedes,
+                            },
+                            sort_keys=True,
+                        ),
+                        at.isoformat(),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return "superseded" if supersedes else "created"
+
+    def update_approval(self, approval: Approval) -> None:
+        """Reject in-place edits of a gate approval decision.
+
+        Approvals are append-only evidence. Use :meth:`record_gate_approval` to append a
+        superseding decision; the earlier decision stays as history.
+
+        Raises:
+            ValueError: Always.
+        """
+        raise ValueError(
+            "Gate approvals cannot be edited in place; use record_gate_approval to append "
+            f"a superseding decision for {approval.approval_id}"
+        )
 
     @staticmethod
     def _gate_record_from_row(row: sqlite3.Row) -> GateRecord:

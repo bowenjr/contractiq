@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  {% if job_active %}<meta http-equiv="refresh" content="3">{% endif %}
+  <title>Discovery job · ContractIQ</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="page-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+{% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
+<p><a href="/bids/{{ bid.bid_id }}/deliverable-discovery">← Back to deliverables discovery</a></p>
+
+<div class="page-heading"><div>
+  <p class="eyebrow">Pre-award Bid submissions</p>
+  <h1>Discovery progress</h1>
+</div></div>
+
+{% if already_active_notice %}<div class="notice" role="status">A discovery job is already active for this Bid. You have been returned to that job.</div>{% endif %}
+
+<section class="card">
+  <h2>{{ job.label }}</h2>
+  <p><strong>Status:</strong> {{ discovery_view.state_label if discovery_view is defined else job.state }}</p>
+  <p><progress value="{{ job.passages_done }}" max="{{ job.passages_total if job.passages_total else 1 }}">{{ job.passages_done }}/{{ job.passages_total }}</progress> {{ job.passages_done }}/{{ job.passages_total }} passages sent to the model</p>
+  <dl>
+    <dt>Files</dt><dd>{{ job.files_total }} in this analysis · {{ files_complete }} finished · {{ files_failed }} with problems · {{ job.files_skipped_prior }} analysed earlier and not repeated</dd>
+    <dt>Passages</dt><dd>{{ job.passages_total }} with text · {{ job.passages_analysed }} analysed by the model · {{ job.passages_failed }} without a usable answer{% if job_terminal %} · {{ coverage.passages_not_attempted if run_facts else job.passages_not_attempted }} not reached{% endif %}</dd>
+    <dt>Current file</dt><dd>{{ job.current_file_name or '—' }}</dd>
+    <dt>Elapsed</dt><dd>{{ elapsed }}</dd>
+  </dl>
+
+  {% if job_active %}
+  <p class="muted" role="status">Discovery is active. This page refreshes every 3 seconds.</p>
+  {% if job.state == 'RUNNING' and job.heartbeat_age_seconds is not none and job.heartbeat_age_seconds > 90 %}
+  <p class="muted" role="status">No progress has been recorded for {{ job.heartbeat_age_seconds }} s. If the application was restarted, the job resumes automatically when the worker starts.</p>
+  {% endif %}
+  <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/jobs/{{ job.job_id }}/cancel">
+    <button type="submit">Cancel</button>
+  </form>
+  {% elif job.state == 'ENDPOINT_ERROR' %}
+  <div class="error" role="alert"><strong>The discovery model endpoint was unreachable ({{ endpoint_authority }}). Nothing completed was lost.</strong>{% if job.error_message %} {{ job.error_message }}{% endif %}</div>
+  <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/jobs/{{ job.job_id }}/resume" style="display:inline">
+    <button type="submit">Resume</button>
+  </form>
+  <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/jobs/{{ job.job_id }}/cancel" style="display:inline">
+    <button type="submit">Cancel</button>
+  </form>
+  {% endif %}
+</section>
+
+{% if job_terminal %}
+<section class="card">
+  <div class="notice{% if job.state in ('PARTIAL', 'FAILED', 'CANCELLED') %} warning{% endif %}" role="status"><strong>{{ discovery_view.state_label if discovery_view is defined else job.state }}</strong> — {{ job.label }}</div>
+
+  {% if job.error_code == 'NOTHING_NEW' %}
+  <p><strong>All {{ job.files_skipped_prior }} Included files were already analysed; nothing new to do.</strong></p>
+  <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/run">
+    <input type="hidden" name="operation_id" value="{{ force_operation_id }}">
+    <input type="hidden" name="force_all" value="1">
+    <button type="submit">Re-analyse all Included files</button>
+  </form>
+  {% elif run_facts %}
+  {% if discovery_view is defined %}
+  <p><strong>{{ discovery_view.files_sentence }}</strong></p>
+  <p>{{ discovery_view.passages_sentence }}</p>
+  <p class="muted">“Text extracted” means ContractIQ could read words from the file. “Analysed by the model” means the model returned a usable answer for that text.</p>
+  {% if discovery_view.files %}
+  <div class="table-wrap"><table><thead><tr><th>File</th><th>Result</th><th>What to do</th></tr></thead><tbody>
+    {% for f in discovery_view.files %}<tr><td>{{ f.filename }}</td><td>{{ f.status }}{% if f.reason %}<br><span class="muted">{{ f.reason }}</span>{% endif %}{% if f.group != 'analysed' %}<details><summary>Details</summary><p class="muted">{{ f.detail }}</p></details>{% endif %}</td><td>{{ f.remedy or '—' }}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% endif %}
+  {% else %}
+  <p><strong>{{ coverage.included_count }} Included file(s): {{ coverage.extracted_count }} extracted, {{ coverage.analysed_count }} analysed by the model, {{ coverage.not_analysed_count }} not analysed.</strong></p>
+  <p><strong>{{ coverage.passages_not_attempted }} passage(s) not attempted.</strong></p>
+  {% if file_outcomes %}<ul>{% for item in file_outcomes %}<li><strong>{{ item.original_filename }}</strong> — {{ item.outcome }}: {{ item.detail }}</li>{% endfor %}</ul>{% endif %}
+  {% endif %}
+  {% if discovery_view is defined %}
+  {% if coverage.honesty_warning %}<div class="notice warning" role="alert">This analysis found no possible returnables. That does not show the files contain none: some files were not analysed (see the table above).<details><summary>Details</summary><p class="muted">{{ coverage.honesty_reasons|join('; ') }}</p></details></div>{% elif coverage.outcome == 'SUCCEEDED' and coverage.proposal_count == 0 %}<p>The model found no possible returnables in the fully analysed Included files.</p>{% endif %}
+  <p>This analysis found {{ coverage.proposal_count }} possible returnable(s){% if coverage.rejected_source_count %}; {{ coverage.rejected_source_count }} unusable model answer(s) or item(s) were discarded{% endif %}.</p>
+  {% else %}
+  {% if coverage.honesty_warning %}<div class="notice warning" role="alert">0 candidates is not a finding that this package has no deliverables: {{ coverage.honesty_reasons|join('; ') }}.</div>{% elif coverage.outcome == 'SUCCEEDED' and coverage.proposal_count == 0 %}<p>The model found 0 candidate deliverables across the fully analysed Included files.</p>{% endif %}
+  <p>{{ coverage.proposal_count }} candidate(s) proposed{% if coverage.rejected_source_count %}; {{ coverage.rejected_source_count }} invalid model output or candidate item(s) discarded{% endif %}.</p>
+  {% endif %}
+  {% elif job.state != 'CANCELLED' %}
+  <div class="notice warning" role="alert">No completed discovery run evidence is available for this job.</div>
+  {% else %}
+  <div class="notice warning" role="alert">0 candidates is not a finding that this package has no deliverables: discovery was cancelled before a complete analysis.</div>
+  {% endif %}
+
+  <h3>{% if discovery_view is defined %}Findings for this Bid so far{% else %}Findings from this analysis{% endif %} ({{ proposals|length }})</h3>
+  {% if proposals %}
+  <ul class="finding-list">
+    {% for row in proposals %}
+    <li>
+      <strong>{{ row.title }}</strong>
+      <span class="badge">{{ 'Awaiting your review' if row.current_decision == 'PENDING' else row.current_decision|title }}</span>
+      {% for source in row.sources %}
+      <p>{{ discovery_file_names.get(source.received_file_id, 'Unknown file') }} · {{ source.locator_type|title }} {{ source.locator }} <q>{{ source.excerpt[:200] }}</q></p>
+      {% endfor %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p><a class="button" href="/bids/{{ bid.bid_id }}/deliverable-discovery#proposals">Review proposed deliverables</a></p>
+  {% else %}
+  <p>No proposed deliverables were produced. This is not a finding that the package has no deliverables.</p>
+  {% endif %}
+
+  <h3>What was not analysed</h3>
+  {% if discovery_view is defined and run_facts %}
+  <p>{{ discovery_view.counts.passages_unusable }} passage(s) gave no usable model answer; {{ discovery_view.counts.passages_not_reached }} passage(s) were not reached.</p>
+  {% elif coverage is defined and run_facts %}
+  <p>{{ job.passages_failed }} passage(s) gave no usable model output; {{ coverage.passages_not_attempted }} passage(s) not attempted.</p>
+  {% endif %}
+  {% if discovery_summary is defined %}<p><strong>Across all analyses of this Bid so far:</strong> {{ discovery_summary }}</p>{% endif %}
+  <p>Findings above come only from the passages that were analysed; missing findings do not mean the files contain no deliverables.</p>
+  {% if discovery_undecided_files is defined and discovery_undecided_files > 0 %}
+  <p><strong>{{ discovery_undecided_files }} received file(s) are still undecided and have not been analysed.</strong> <a href="{{ discovery_files_path }}">Include or exclude them</a>.</p>
+  {% endif %}
+
+  <h3>Choose how to continue</h3>
+  <div class="actions">
+    {% set offer_retry = discovery_view.offer_retry if discovery_view is defined else (job.state in ('PARTIAL', 'FAILED')) %}
+    {% if offer_retry %}
+    <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/run">
+      <input type="hidden" name="operation_id" value="{{ force_operation_id }}">
+      <button type="submit">Retry incomplete analysis</button>
+    </form>
+    <p class="muted">Re-runs only the files that were not fully analysed (plus any newly Included files). Results already obtained are kept.</p>
+    {% elif discovery_view is defined and discovery_view.no_retry_reason %}
+    <p>{{ discovery_view.no_retry_reason }} Review those files yourself, or add a readable copy.</p>
+    {% endif %}
+    <a class="button" href="{{ discovery_files_path }}">Include more files</a>
+    <a class="button" href="/bids/{{ bid.bid_id }}/owner-decision">Continue to owner decision</a>
+    <p class="muted">You can continue now and finish reviewing findings or analysing more files later; the owner decision records what was left open.</p>
+  </div>
+
+  <details><summary>Details</summary><p class="muted">Job {{ job.job_id }} · Run {{ job.run_id or 'no run was created' }}</p></details>
+</section>
+{% endif %}
+</main>
+</body>
+</html>

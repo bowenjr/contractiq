@@ -166,6 +166,7 @@ class DeliverableRepository:
             "SUPPLIER_REQUEST_ITEM": ("supplier_request_items", "request_item_id"),
             "SUPPLIER_RESPONSE_VERSION": ("supplier_response_versions", "response_version_id"),
             "DOCUMENT_VERSION": ("document_versions", "document_version_id"),
+            "RECEIVED_FILE": ("bid_received_files", "file_id"),
         }
         table, column = targets[link.target_type.value]
         with self._conn() as conn:
@@ -181,9 +182,26 @@ class DeliverableRepository:
                     or item["workflow_state"] != "DRAFT"
                 ):
                     raise ValueError("link requires same-bid draft deliverable")
-                target = conn.execute(
-                    f"SELECT bid_id FROM {table} WHERE {column}=?", (link.target_id,)
-                ).fetchone()
+                if link.target_type.value == "DOCUMENT_VERSION":
+                    # document_versions has no bid_id column of its own — it hangs off the
+                    # parent controlled document, same join `bid_package_repository.py`
+                    # already uses when it needs a version's owning Bid.
+                    target = conn.execute(
+                        f"SELECT d.bid_id AS bid_id FROM {table} v "
+                        f"JOIN documents d ON d.id=v.document_id WHERE v.{column}=?",
+                        (link.target_id,),
+                    ).fetchone()
+                elif link.target_type.value == "RECEIVED_FILE":
+                    target = conn.execute(
+                        f"SELECT r.bid_id AS bid_id FROM {table} f "
+                        f"JOIN bid_received_releases r ON r.release_id=f.release_id "
+                        f"WHERE f.{column}=?",
+                        (link.target_id,),
+                    ).fetchone()
+                else:
+                    target = conn.execute(
+                        f"SELECT bid_id FROM {table} WHERE {column}=?", (link.target_id,)
+                    ).fetchone()
                 if target is None or target["bid_id"] != link.bid_id:
                     raise ValueError("link target is missing or cross-bid")
                 conn.execute(

@@ -7,6 +7,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from core.document_control import DocumentCategory
+
 
 class ReleaseType(StrEnum):
     INITIAL_PACKAGE = "INITIAL_PACKAGE"
@@ -54,6 +56,14 @@ class AnalysisEligibility(StrEnum):
     EXCLUDED = "EXCLUDED"
 
 
+class GoverningDisposition(StrEnum):
+    """Explicit decision about whether a received file governs the Bid Basis."""
+
+    UNSET = "UNSET"
+    GOVERNING = "GOVERNING"
+    NOT_GOVERNING = "NOT_GOVERNING"
+
+
 class DirectiveMateriality(StrEnum):
     MATERIAL = "MATERIAL"
     NON_MATERIAL = "NON_MATERIAL"
@@ -71,6 +81,18 @@ class AcknowledgementEventType(StrEnum):
     NOT_REQUIRED = "NOT_REQUIRED"
     ACKNOWLEDGED = "ACKNOWLEDGED"
     EXCEPTION_APPROVED = "EXCEPTION_APPROVED"
+
+
+class ReleaseReferenceState(StrEnum):
+    """What is known about the customer's own reference for a received release.
+
+    ``UNCONFIRMED`` is the absence of any confirmation event; it is never recorded and
+    never inferred from an empty field.
+    """
+
+    UNCONFIRMED = "UNCONFIRMED"
+    REFERENCE_PROVIDED = "REFERENCE_PROVIDED"
+    NONE_PROVIDED_BY_CUSTOMER = "NONE_PROVIDED_BY_CUSTOMER"
 
 
 class FileDocumentRelationship(StrEnum):
@@ -304,6 +326,88 @@ class BulkFileDispositionCreate(BaseModel):
         return self
 
 
+class GoverningSelectionItem(BaseModel):
+    """One selected received file and its current governing-event concurrency token."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file_id: str = Field(min_length=1, max_length=200)
+    supersedes_event_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class GoverningSelectionCreate(BaseModel):
+    """One governing-source decision applied atomically to files in one release."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    release_id: str = Field(min_length=1, max_length=200)
+    items: tuple[GoverningSelectionItem, ...] = Field(min_length=1)
+    governing_disposition: GoverningDisposition
+    operation_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator("release_id", "operation_id")
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must be non-empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_governing_selection(self) -> GoverningSelectionCreate:
+        file_ids = [item.file_id for item in self.items]
+        if len(file_ids) != len(set(file_ids)):
+            raise ValueError("a received file can only be selected once")
+        if self.governing_disposition is GoverningDisposition.UNSET:
+            raise ValueError("UNSET means no governing decision has been recorded")
+        return self
+
+
+class BulkControlledDocumentItem(BaseModel):
+    """One selected received file to put under document control in one bulk action.
+
+    Each file becomes its own controlled document — the bulk action shares only a category
+    and version label across the selection; a title is proposed per file from its own
+    filename, exactly as the single-file control form already does.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file_id: str = Field(min_length=1, max_length=200)
+    operation_id: str = Field(min_length=1, max_length=200)
+
+
+class BulkControlledDocumentCreate(BaseModel):
+    """One shared document category and version label applied to several selected received
+    files from one released package — using the managed originals ContractIQ already holds,
+    never a second upload, and never one document identity shared by more than one file."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    release_id: str = Field(min_length=1, max_length=200)
+    items: tuple[BulkControlledDocumentItem, ...] = Field(min_length=1)
+    category: DocumentCategory
+    version_label: str = Field(default="Original", min_length=1, max_length=200)
+
+    @field_validator("release_id", "version_label")
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must be non-empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_bulk_selection(self) -> BulkControlledDocumentCreate:
+        file_ids = [item.file_id for item in self.items]
+        if len(file_ids) != len(set(file_ids)):
+            raise ValueError("a received file can only be selected once")
+        operation_ids = [item.operation_id for item in self.items]
+        if len(operation_ids) != len(set(operation_ids)):
+            raise ValueError("each selected file requires its own operation identity")
+        return self
+
+
 class FileDocumentLinkCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -351,6 +455,43 @@ class DirectiveDispositionCreate(BaseModel):
                 raise ValueError("internal waiver requires exactly one approval or route")
             if self.resulting_document_version_id is not None:
                 raise ValueError("internal waiver cannot claim document incorporation")
+        return self
+
+
+class ReferenceConfirmationCreate(BaseModel):
+    """One append-only confirmation (or correction) of a release's customer reference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: ReleaseReferenceState
+    exact_customer_reference: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(default=None, max_length=10_000)
+    supersedes_event_id: str | None = None
+    operation_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator("exact_customer_reference", "note")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def validate_confirmation(self) -> ReferenceConfirmationCreate:
+        if self.state is ReleaseReferenceState.UNCONFIRMED:
+            raise ValueError(
+                "UNCONFIRMED is the absence of a confirmation and cannot be recorded; "
+                "choose a reference or 'customer provided none'"
+            )
+        if self.state is ReleaseReferenceState.REFERENCE_PROVIDED:
+            if self.exact_customer_reference is None:
+                raise ValueError(
+                    "Enter the customer's exact reference, or choose 'customer provided none'. "
+                    "An empty field is never treated as 'none provided'."
+                )
+        elif self.exact_customer_reference is not None:
+            raise ValueError("'Customer provided none' cannot carry a reference value")
         return self
 
 
@@ -407,6 +548,7 @@ class IntakeAttention(BaseModel):
     record_id: str | None = None
     due_at: datetime | None = None
     blocking: bool
+    release_type: str | None = None
 
 
 class PackageIntakeSummary(BaseModel):
@@ -439,6 +581,9 @@ __all__ = [
     "FileDispositionCreate",
     "FileDocumentLinkCreate",
     "FileDocumentRelationship",
+    "GoverningDisposition",
+    "GoverningSelectionCreate",
+    "GoverningSelectionItem",
     "IntakeAttention",
     "IntakeInbox",
     "IntakeInboxFolder",

@@ -1,9 +1,10 @@
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
-from core.enums import ApprovalType, BidLevel, Gate
+from core.enums import ApprovalType, BidLevel, BidStatus, Gate
 from core.gates import (
     ConditionResult,
     ConditionState,
@@ -12,6 +13,8 @@ from core.gates import (
     evaluate_all_gates,
     evaluate_gate,
 )
+from core.owner_decision_evidence import build_owner_decision_evidence_snapshot
+from core.owner_decisions import OwnerDecision, OwnerDecisionValue
 from core.schemas import Approval, Bid, Provenance
 
 
@@ -64,21 +67,38 @@ def test_g0_is_met_for_complete_bid_and_unmet_for_zero_value(valid_bid: Bid) -> 
     assert _condition(unmet, "g0.bid_complete").state == ConditionState.UNMET
 
 
-def test_g1_requires_obtained_bid_no_bid_approval(
+def test_g1_requires_current_owner_pursue_decision(
     valid_bid: Bid,
     valid_provenance: Provenance,
 ) -> None:
     unmet = evaluate_gate(Gate.G1, _context(valid_bid))
-    approval = _approval(
-        valid_bid,
-        ApprovalType.BID_NO_BID,
-        valid_provenance,
-        obtained=True,
+    decision = OwnerDecision(
+        decision_id="OD-1",
+        bid_id=valid_bid.bid_id,
+        decision=OwnerDecisionValue.PURSUE,
+        reason="Proceed",
+        decided_by="Owner",
+        decided_at=datetime.now(UTC),
+        evidence_snapshot=build_owner_decision_evidence_snapshot(
+            received_files_total=0,
+            received_files_reviewed=0,
+            latest_discovery_job=None,
+            discovery_partial_or_failed_files=0,
+            requirement_count=0,
+            accepted_deliverable_count=0,
+        ),
+        provenance=valid_provenance,
     )
-    met = evaluate_gate(Gate.G1, _context(valid_bid, approvals=[approval]))
+    met = evaluate_gate(Gate.G1, _context(valid_bid, owner_decision=decision))
+    level_zero = evaluate_gate(
+        Gate.G1, _context(valid_bid.model_copy(update={"classification": BidLevel.LEVEL_0}))
+    )
+    held = evaluate_gate(Gate.G1, _context(valid_bid.model_copy(update={"status": BidStatus.HELD})))
 
-    assert _condition(unmet, "g1.bid_no_bid_approved").state == ConditionState.UNMET
-    assert _condition(met, "g1.bid_no_bid_approved").state == ConditionState.MET
+    assert _condition(unmet, "g1.owner_pursuit_decided").state == ConditionState.UNMET
+    assert _condition(met, "g1.owner_pursuit_decided").state == ConditionState.MET
+    assert _condition(level_zero, "g1.owner_pursuit_decided").state == ConditionState.MET
+    assert _condition(held, "g1.owner_pursuit_decided").state == ConditionState.UNMET
 
 
 def test_g2_blocks_confirmed_included_unpriced_scope_item(valid_bid: Bid) -> None:
@@ -222,7 +242,7 @@ def test_g5_unconfirmed_material_rule(
     assert _condition(result, "g5.no_unconfirmed_material").state == expected_state
 
 
-def test_g5_blocks_when_g4_prior_result_is_unmet(valid_bid: Bid) -> None:
+def test_g5_ignores_issue_phase_g4_failure(valid_bid: Bid) -> None:
     blocked_g4 = GateResult(
         gate=Gate.G4,
         passed=False,
@@ -253,7 +273,7 @@ def test_g5_blocks_when_g4_prior_result_is_unmet(valid_bid: Bid) -> None:
         ),
     )
 
-    assert _condition(result, "g5.prior_gates_passed").state == ConditionState.UNMET
+    assert _condition(result, "g5.prior_gates_passed").state == ConditionState.MET
 
 
 def test_g5_compliance_matrix_is_not_assessable_when_absent(valid_bid: Bid) -> None:
@@ -283,7 +303,7 @@ def test_evaluate_all_threads_prior_gate_results_into_g5(
 
     assert [result.gate for result in results] == list(Gate)
     assert by_gate[Gate.G4].passed is False
-    assert _condition(by_gate[Gate.G5], "g5.prior_gates_passed").state == ConditionState.UNMET
+    assert _condition(by_gate[Gate.G5], "g5.prior_gates_passed").state == ConditionState.MET
 
 
 def test_gate_evaluation_is_deterministic(valid_bid: Bid) -> None:

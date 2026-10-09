@@ -300,7 +300,7 @@ def test_task06_hold_is_read_only_and_my_day_does_not_contact_alice(
         response = asyncio.run(ui_app.my_day(cast(Request, object())))
 
     assert response.status_code == 200
-    assert "Bid is on HOLD" in _html(response)
+    assert "Development gate check: Hold" in _html(response)
     assert valid_bid.bid_id in _html(response)
     assert f'href="/bids/{valid_bid.bid_id}"' in _html(response)
     assert ui_app.bid_repository.get_bid(valid_bid.bid_id) == before_bid

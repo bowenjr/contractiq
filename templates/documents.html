@@ -49,7 +49,7 @@
   <div class="offline"><strong>Local evidence ready</strong>Managed documents remain on this computer. No Alice or cloud service is required.</div>
 </aside>
 <main>
-  <header class="topbar"><div><h1>Controlled Documents</h1><div class="sub">Immutable local versions with SHA-256 evidence and audit history</div></div></header>
+  <header class="topbar"><div><h1>Controlled Documents</h1><div class="sub">Immutable local versions with SHA-256 evidence and audit history</div></div></header>{% include '_guided_banner.html' %}
   <div class="content">
     {% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
     <form class="panel filters" method="get" action="/documents" aria-label="Document filters">

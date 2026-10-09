@@ -5,11 +5,18 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import BinaryIO, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from core.analysis_capability import (
+    CapabilityResult,
+    assess_capability,
+    is_supported_type,
+    not_checked,
+)
 from core.bid_package_intake import (
     AcknowledgementCreate,
     BulkFileDispositionCreate,
@@ -18,8 +25,10 @@ from core.bid_package_intake import (
     DirectiveDispositionCreate,
     FileDispositionCreate,
     FileDocumentLinkCreate,
+    GoverningSelectionCreate,
     IntakeInbox,
     PackageIntakeSummary,
+    ReferenceConfirmationCreate,
     ReleaseNoticeCreate,
     ReleasePreview,
     ReleaseRegistration,
@@ -27,8 +36,10 @@ from core.bid_package_intake import (
 )
 from core.bid_package_repository import BidPackageRepository, IntakeConflictError
 from core.bid_package_storage import (
+    BROWSER_UPLOAD_ALIAS,
     BidPackageStorage,
     IntakePublicationError,
+    IntakeStorageError,
     SourceChangedError,
 )
 from core.bid_repository import BidRepository
@@ -64,6 +75,7 @@ class BidPackageService:
         self.work_item_service = work_item_service
         self._now_factory = now_factory or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or uuid4
+        self.repository.bind_received_file_opener(self.open_received_file)
 
     def _now(self) -> datetime:
         value = self._now_factory()
@@ -105,7 +117,58 @@ class BidPackageService:
     ) -> ReleasePreview:
         """Produce a mutation-free file inventory for an allowlisted source root."""
         self._require_bid(bid_id)
-        return self.storage.preview(source_root_alias, source_folder)
+        return self.storage.preview(source_root_alias, source_folder, expected_bid_id=bid_id)
+
+    def preview_capabilities(
+        self,
+        bid_id: str,
+        preview: ReleasePreview,
+        *,
+        time_budget_seconds: float = 8.0,
+        max_file_bytes: int = 25 * 1024 * 1024,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> dict[str, CapabilityResult]:
+        """Classify each previewed file's analysis capability without mutation or a model call."""
+        self._require_bid(bid_id)
+        started_at = clock()
+        capabilities: dict[str, CapabilityResult] = {}
+        for item in preview.files:
+            path = item.original_relative_path
+            name = item.original_filename
+            if not is_supported_type(name):
+                capabilities[path] = not_checked(name)
+                continue
+            if clock() - started_at >= time_budget_seconds:
+                capabilities[path] = not_checked(name)
+                continue
+            try:
+                data = self.storage.read_preview_file(
+                    preview.source_root_alias,
+                    preview.source_folder,
+                    path,
+                    expected_bid_id=bid_id,
+                    max_bytes=max_file_bytes,
+                )
+            except (OSError, IntakeStorageError):
+                capabilities[path] = not_checked(name)
+                continue
+            capabilities[path] = (
+                not_checked(name) if data is None else assess_capability(name, data)
+            )
+        return capabilities
+
+    def stage_browser_upload(
+        self, bid_id: str, uploads: list[tuple[str, BinaryIO]]
+    ) -> ReleasePreview:
+        """Receive a browser-selected folder into private, bid-scoped staging and return the
+        same preview shape a configured-inbox selection would — reuses the existing
+        preview/confirm pipeline unchanged from this point on."""
+        self._require_bid(bid_id)
+        return self.storage.stage_browser_upload(bid_id, uploads)
+
+    def browser_upload_display_name(self, bid_id: str, token: str) -> str:
+        self._require_bid(bid_id)
+        return self.storage.browser_upload_display_name(token, bid_id)
 
     def intake_inboxes(self, bid_id: str) -> tuple[IntakeInbox, ...]:
         """Project safe configured inbox folders and their prior-import status."""
@@ -139,8 +202,11 @@ class BidPackageService:
         self._require_bid(command.bid_id)
         existing = self.repository.get_release_by_operation(command.bid_id, command.operation_id)
         if existing is not None:
+            self._discard_browser_upload_if_used(command)
             return existing
-        preview = self.storage.preview(command.source_root_alias, command.source_folder)
+        preview = self.storage.preview(
+            command.source_root_alias, command.source_folder, expected_bid_id=command.bid_id
+        )
         if preview.source_fingerprint != command.expected_source_fingerprint:
             raise SourceChangedError("source changed after preview; preview the release again")
         release_id = self._stable_id("REL", command.operation_id, "release")
@@ -155,6 +221,7 @@ class BidPackageService:
             release_id,
             command.operation_id,
             file_ids,
+            expected_bid_id=command.bid_id,
         )
         at = self._now()
         provenance = self._provenance(normalized_actor, at)
@@ -183,11 +250,23 @@ class BidPackageService:
             )
             if not created:
                 self.storage.discard_staged(staged)
+            self._discard_browser_upload_if_used(command)
             return release
         except Exception:
             if staged.stage_directory.exists():
                 self.storage.quarantine(staged.stage_directory, command.operation_id)
             raise
+
+    def _discard_browser_upload_if_used(self, command: ReleaseRegistration) -> None:
+        """Best-effort cleanup once a browser-uploaded folder's bytes are durably staged or
+        published — never let a cleanup failure mask a successful import. Uploads that never
+        reach confirmation are instead swept by `BidPackageStorage.prune_browser_uploads()`."""
+        if command.source_root_alias != BROWSER_UPLOAD_ALIAS or not command.source_folder:
+            return
+        try:
+            self.storage.discard_browser_upload(command.source_folder)
+        except OSError:
+            pass
 
     def record_notice(
         self, data: ReleaseNoticeCreate | Mapping[str, object], actor: str
@@ -292,6 +371,27 @@ class BidPackageService:
             provenance=self._provenance(normalized_actor, at),
         )
 
+    def select_governing_sources(
+        self,
+        bid_id: str,
+        data: GoverningSelectionCreate | Mapping[str, object],
+        actor: str,
+    ) -> tuple[dict[str, object], ...]:
+        """Apply one governing-source decision to selected files in one transaction."""
+        command = GoverningSelectionCreate.model_validate(data)
+        normalized_actor = self._actor(actor)
+        self._require_bid(bid_id)
+        at = self._now()
+        return self.repository.add_governing_selection_bulk(
+            bid_id=bid_id,
+            command=command,
+            event_ids=tuple(self._new_id("GSE") for _ in command.items),
+            audit_ids=tuple(self._new_id("AUD") for _ in command.items),
+            actor=normalized_actor,
+            at=at,
+            provenance=self._provenance(normalized_actor, at),
+        )
+
     def link_file_document(
         self,
         bid_id: str,
@@ -376,6 +476,28 @@ class BidPackageService:
             audit_id=self._new_id("AUD"),
         )
 
+    def record_reference_confirmation(
+        self,
+        bid_id: str,
+        release_id: str,
+        data: ReferenceConfirmationCreate | Mapping[str, object],
+        actor: str,
+    ) -> dict[str, object]:
+        """Confirm or correct the customer's own reference for a received release."""
+        command = ReferenceConfirmationCreate.model_validate(data)
+        normalized_actor = self._actor(actor)
+        at = self._now()
+        return self.repository.add_reference_confirmation(
+            event_id=self._new_id("RRC"),
+            bid_id=bid_id,
+            release_id=release_id,
+            command=command,
+            actor=normalized_actor,
+            at=at,
+            provenance=self._provenance(normalized_actor, at),
+            audit_id=self._new_id("AUD"),
+        )
+
     def publish_basis(
         self,
         bid_id: str,
@@ -420,16 +542,34 @@ class BidPackageService:
         writer.writerow(csv_safe_row(["Bid Basis Register", bid["bid_id"], bid["project_name"]]))
         writer.writerow(csv_safe_row(["Snapshot", snapshot["snapshot_id"], snapshot["created_at"]]))
         writer.writerow([])
-        writer.writerow(["Release reference", "Type", "Customer issue date", "Received", "Channel"])
+        writer.writerow(
+            [
+                "Release reference",
+                "Reference status",
+                "Type",
+                "Customer issue date",
+                "Received",
+                "Channel",
+                "Reference confirmed after this Bid Basis was published",
+            ]
+        )
+        reference_status_labels = {
+            "REFERENCE_PROVIDED": "Customer reference",
+            "NONE_PROVIDED_BY_CUSTOMER": "Customer provided no reference",
+            "UNCONFIRMED": "Reference not yet confirmed",
+        }
         for release in cast(list[dict[str, object]], register["releases"]):
+            state = str(release.get("reference_state") or "UNCONFIRMED")
             writer.writerow(
                 csv_safe_row(
                     [
-                        release["exact_customer_reference"] or "Not supplied",
+                        release["exact_customer_reference"] or "",
+                        reference_status_labels.get(state, state),
                         release["release_type"],
                         release["customer_issue_date"] or "",
                         release["received_at"],
                         release["received_channel"],
+                        "Yes" if release.get("reference_confirmed_after_publication") else "No",
                     ]
                 )
             )

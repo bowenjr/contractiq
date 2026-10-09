@@ -23,6 +23,9 @@ from core.bid_package_intake import (
     FileDispositionCreate,
     FileDocumentLinkCreate,
     FileDocumentRelationship,
+    GoverningDisposition,
+    GoverningSelectionCreate,
+    GoverningSelectionItem,
     NoticeExpectation,
     ReleaseChannel,
     ReleaseNoticeCreate,
@@ -136,6 +139,16 @@ def _review_and_link(
             document_version_id=version_id,
             relationship=relationship,
             operation_id=f"link-{release_id}",
+        ),
+        "Jason",
+    )
+    service.select_governing_sources(  # type: ignore[attr-defined]
+        bid_id,
+        GoverningSelectionCreate(
+            release_id=release_id,
+            items=(GoverningSelectionItem(file_id=file_id),),
+            governing_disposition=GoverningDisposition.GOVERNING,
+            operation_id=f"govern-{release_id}",
         ),
         "Jason",
     )
@@ -345,7 +358,7 @@ def test_bulk_review_rejects_an_empty_selection_before_mutation(tmp_path: Path) 
 
 def test_migration_is_exact_additive_idempotent_and_immutable(tmp_path: Path) -> None:
     _service_instance, repository, database, _source, _managed = _service(tmp_path)
-    assert len(repository.migration_tables()) == 18
+    assert len(repository.migration_tables()) == 20
     assert repository.migration_tables()[-1] == "bid_package_intake_schema_migrations"
     repository.__class__(database)
     with database._conn() as conn:
@@ -357,7 +370,7 @@ def test_migration_is_exact_additive_idempotent_and_immutable(tmp_path: Path) ->
             """SELECT count(*) FROM sqlite_master WHERE type='trigger'
             AND (name LIKE 'bid_%_immutable' OR name LIKE 'bid_%_no_delete')"""
         ).fetchone()[0]
-        assert trigger_count == 36
+        assert trigger_count == 40
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             conn.execute("UPDATE bid_package_intake_schema_migrations SET applied_at='changed'")
         with pytest.raises(sqlite3.IntegrityError, match="cannot be deleted"):

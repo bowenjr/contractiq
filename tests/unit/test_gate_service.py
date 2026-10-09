@@ -51,7 +51,37 @@ def test_margin_approval_re_evaluation_flips_g4_record(
     assert blocked.status == GateStatus.IN_REVIEW
     assert blocked.blockers
 
-    bid_repo.update_approval(approval.model_copy(update={"obtained": True}))
+    with bid_repo._conn() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS scenario_baselines(
+            selection_id TEXT PRIMARY KEY,bid_id TEXT NOT NULL,scenario_version_id TEXT NOT NULL,
+            selected_by TEXT NOT NULL,selected_at TEXT NOT NULL,rationale TEXT NOT NULL)"""
+        )
+        conn.execute(
+            "INSERT INTO scenario_baselines VALUES(?,?,?,?,?,?)",
+            (
+                "SBL-GATE-SERVICE",
+                valid_bid.bid_id,
+                "SV-GATE-SERVICE",
+                "jason",
+                "2026-10-01T12:00:00+00:00",
+                "Selected for gate service test",
+            ),
+        )
+        conn.commit()
+    bid_repo.record_gate_approval(
+        approval.model_copy(
+            update={
+                "approval_id": "APR-margin-obtained",
+                "obtained": True,
+                "authority": "Finance Director",
+                "evidence_ref": "Minutes",
+                "decision": "Approved",
+            }
+        ),
+        "jason",
+        approval.approval_id,
+    )
     evaluate_and_store_gates(bid_repo, tmp_db, valid_bid.bid_id)
 
     passed = bid_repo.get_gate_record(valid_bid.bid_id, Gate.G4)

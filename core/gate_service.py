@@ -11,7 +11,9 @@ from core.database import Database
 from core.enums import GateStatus
 from core.export_controls import manufacturer_confirmation_clear
 from core.gates import ConditionState, GateContext, GateResult, evaluate_all_gates
+from core.owner_decision_repository import OwnerDecisionRepository
 from core.schemas import AuditEntry, GateRecord
+from core.senior_approvals import SeniorApprovalAssessment, assess_senior_approvals
 
 
 def _conn(db: Database) -> sqlite3.Connection:
@@ -124,6 +126,74 @@ def _commercial_review_state(db: Database, bid_id: str) -> tuple[bool | None, st
     return not unresolved, f"{len(unresolved)} commercial position(s) remain unresolved."
 
 
+def assess_bid_senior_approvals(
+    repo: BidRepository,
+    db: Database,
+    bid_id: str,
+    *,
+    as_of: datetime,
+) -> SeniorApprovalAssessment:
+    """Load current authority facts and run the pure senior-approval assessment."""
+    bid = repo.get_bid(bid_id)
+    if bid is None:
+        raise ValueError(f"Bid not found: {bid_id}")
+    commercial: list[dict[str, object]] = []
+    routes: list[dict[str, object]] = []
+    policies: list[dict[str, object]] = []
+    pricing_baseline_id: str | None = None
+    with _conn(db) as conn:
+        if _table_exists(db, "commercial_positions"):
+            commercial = [
+                dict(row)
+                for row in conn.execute(
+                    """SELECT p.position_id,v.disposition,v.required_approver
+                    FROM commercial_positions p JOIN commercial_position_versions v
+                    ON v.position_id=p.position_id AND v.version_number=p.current_version
+                    WHERE p.bid_id=?""",
+                    (bid_id,),
+                ).fetchall()
+            ]
+        if _table_exists(db, "approval_routes"):
+            route_rows = conn.execute(
+                """SELECT r.*,c.decision_type FROM approval_routes r
+                LEFT JOIN decision_cases c ON c.case_id=r.case_id WHERE r.bid_id=?""",
+                (bid_id,),
+            ).fetchall()
+            for route_row in route_rows:
+                route = dict(route_row)
+                if _table_exists(db, "decision_subject_links"):
+                    route["subject_ids"] = tuple(
+                        str(row["subject_id"])
+                        for row in conn.execute(
+                            "SELECT subject_id FROM decision_subject_links WHERE case_id=?",
+                            (route["case_id"],),
+                        ).fetchall()
+                    )
+                routes.append(route)
+        if _table_exists(db, "authority_policies"):
+            policies = [dict(row) for row in conn.execute("SELECT * FROM authority_policies")]
+        if _table_exists(db, "scenario_baselines"):
+            baseline = conn.execute(
+                "SELECT selection_id FROM scenario_baselines WHERE bid_id=? "
+                "ORDER BY selected_at DESC,selection_id DESC LIMIT 1",
+                (bid_id,),
+            ).fetchone()
+            if baseline is not None:
+                pricing_baseline_id = str(baseline["selection_id"])
+    approvals = [
+        approval.model_dump(mode="json") for approval in repo.list_current_approvals(bid_id)
+    ]
+    return assess_senior_approvals(
+        bid_level=bid.classification,
+        commercial_positions=commercial,
+        approval_rows=approvals,
+        approval_routes=routes,
+        policies=policies,
+        pricing_baseline_id=pricing_baseline_id,
+        as_of=as_of,
+    )
+
+
 def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateContext:
     """Load all currently available register data needed by the pure gate rules."""
     bid = repo.get_bid(bid_id)
@@ -191,10 +261,12 @@ def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateCo
 
     manufacturer_clear = _manufacturer_coverage_clear(db, bid_id)
     commercial_clear, commercial_detail = _commercial_review_state(db, bid_id)
+    senior_approvals = assess_bid_senior_approvals(repo, db, bid_id, as_of=datetime.now(UTC))
 
     return GateContext(
         bid=bid,
-        approvals=repo.list_approvals(bid_id),
+        approvals=repo.list_current_approvals(bid_id),
+        owner_decision=OwnerDecisionRepository(db).get_current(bid_id),
         scope_items=scope_items,
         high_severity_findings=high_severity_findings,
         unconfirmed_counts=unconfirmed_counts,
@@ -207,6 +279,9 @@ def build_gate_context(repo: BidRepository, db: Database, bid_id: str) -> GateCo
         has_strategy_record=_table_has_bid_row(db, "bid_strategy", bid_id),
         commercial_review_clear=commercial_clear,
         commercial_review_detail=commercial_detail,
+        senior_approvals_required=bool(senior_approvals.requirements),
+        senior_approvals_clear=senior_approvals.clear,
+        senior_approvals_detail=senior_approvals.detail,
     )
 
 

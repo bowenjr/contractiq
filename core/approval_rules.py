@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict
 
 from core.approval_authority import AuthorityPolicy, RouteRequirement, StageMode
 
+APPROVAL_POLICY_NOT_CONFIGURED = "APPROVAL_POLICY_NOT_CONFIGURED"
+
 
 class RouteEvaluation(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -44,7 +46,7 @@ def match_policy(policy: AuthorityPolicy, facts: dict[str, Any]) -> RouteEvaluat
 
 
 GAP_CODES = (
-    "APPROVAL_POLICY_NOT_CONFIGURED",
+    APPROVAL_POLICY_NOT_CONFIGURED,
     "APPROVAL_POLICY_NOT_EFFECTIVE",
     "APPROVAL_POLICY_INVALID",
     "APPROVAL_ROUTE_NOT_DETERMINED",
@@ -78,6 +80,18 @@ GAP_CODES = (
 )
 
 
+def effective_policies(policies: list[dict[str, Any]], *, as_of: datetime) -> list[dict[str, Any]]:
+    """Return published policies effective at the supplied deterministic time."""
+    instant = as_of.isoformat()
+    return [
+        policy
+        for policy in policies
+        if policy.get("lifecycle_state") == "PUBLISHED"
+        and str(policy.get("effective_from", "")) <= instant
+        and (not policy.get("effective_until") or str(policy["effective_until"]) > instant)
+    ]
+
+
 def approval_gaps(
     cases: list[dict[str, Any]],
     routes: list[dict[str, Any]],
@@ -102,19 +116,12 @@ def approval_gaps(
     published = [p for p in policies if p.get("lifecycle_state") == "PUBLISHED"]
     if not published:
         add(
-            "APPROVAL_POLICY_NOT_CONFIGURED",
+            APPROVAL_POLICY_NOT_CONFIGURED,
             "",
             "",
             "No published authority policy is configured; approval is blocked safely.",
         )
-    effective = [
-        policy
-        for policy in published
-        if str(policy.get("effective_from", "")) <= as_of.isoformat()
-        and (
-            not policy.get("effective_until") or str(policy["effective_until"]) > as_of.isoformat()
-        )
-    ]
+    effective = effective_policies(policies, as_of=as_of)
     for case in cases:
         if case.get("lifecycle_state") != "ACTIVE":
             continue

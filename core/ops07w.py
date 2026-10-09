@@ -770,7 +770,7 @@ class Ops07WorkflowRepository:
                 (SELECT count(*) FROM commercial_items WHERE bid_id=:bid AND lifecycle_state <> 'WITHDRAWN') commercial,
                 (SELECT count(*) FROM contract_issues WHERE bid_id=:bid AND lifecycle_state <> 'WITHDRAWN') risks,
                 (SELECT count(*) FROM decision_cases WHERE bid_id=:bid) decisions,
-                (SELECT count(*) FROM approvals WHERE bid_id=:bid) approvals,
+                (SELECT count(*) FROM approvals WHERE bid_id=:bid AND NOT EXISTS (SELECT 1 FROM approvals _later WHERE _later.supersedes_approval_id = approvals.approval_id)) approvals,
                 (SELECT count(*) FROM proposal_families WHERE bid_id=:bid) proposals,
                 (SELECT count(*) FROM deliverable_items WHERE bid_id=:bid) deliverables,
                 (SELECT count(*) FROM bid_classification_assessments WHERE bid_id=:bid) assessments""",

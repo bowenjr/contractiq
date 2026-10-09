@@ -318,9 +318,22 @@ def test_browser_gate_approval_is_audited_once_and_duplicate_is_atomic(
 ) -> None:
     module = ops07_route_app
     module.bid_repository.create_bid(valid_bid)
+    with module.db._conn() as conn:
+        conn.execute(
+            "INSERT INTO scenario_baselines VALUES(?,?,?,?,?,?)",
+            (
+                "SBL-OPS07-ROUTE",
+                valid_bid.bid_id,
+                "SV-OPS07-ROUTE",
+                "Jason",
+                "2026-10-01T12:00:00+00:00",
+                "Selected for route test",
+            ),
+        )
+        conn.commit()
     form = {
         "bid_id": valid_bid.bid_id,
-        "approval_type": "bid_no_bid",
+        "approval_type": "margin",
         "obtained": "on",
         "authority": "Director",
         "evidence_ref": "Minute",
@@ -335,11 +348,16 @@ def test_browser_gate_approval_is_audited_once_and_duplicate_is_atomic(
         if entry.action == "bid_gate_approval_created"
     ]
     assert len(approvals) == len(audits) == 1
+    # An identical resubmission is idempotent (no second row, no second audit entry).
+    status, _, _ = asyncio.run(_request(module.app, "POST", "/decisions/gate-approvals", form))
+    assert status == 303
+    # A conflicting decision on an already-obtained control is refused atomically.
+    conflicting = {**form, "decision": "Proceed with conditions"}
     status, headers, body = asyncio.run(
-        _request(module.app, "POST", "/decisions/gate-approvals", form)
+        _request(module.app, "POST", "/decisions/gate-approvals", conflicting)
     )
     assert status == 422 and headers["content-type"].startswith("text/html")
-    assert b"already been recorded" in body
+    assert b"already recorded as obtained" in body
     assert len(module.bid_repository.list_approvals(valid_bid.bid_id)) == 1
     assert (
         len(

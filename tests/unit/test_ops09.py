@@ -6,13 +6,14 @@ import hashlib
 import json
 import sqlite3
 import sys
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.approval_authority import AuthorityPolicy, PolicyLifecycle, StageMode
 from core.approval_repository import ApprovalRepository
 from core.bid_repository import BidRepository
 from core.commercial_repository import CommercialRepository
@@ -73,6 +74,31 @@ def service_with_ready_bid(tmp_path: Path) -> tuple[ProposalExchangeService, Bid
     )
     seed_ready_bid(db, bid_repository)
     return service, bid_repository
+
+
+def add_effective_policy(service: ProposalExchangeService) -> AuthorityPolicy:
+    policy = AuthorityPolicy(
+        policy_id="POL-OPS09",
+        name="Bid issue authority",
+        description="Senior approval authority for customer issue.",
+        scope="BID",
+        effective_from=NOW - timedelta(days=1),
+        lifecycle_state=PolicyLifecycle.PUBLISHED,
+        roles=("LEGAL", "CREDIT", "MARGIN"),
+        rules=({"rule_id": "R-ALL", "dimensions": {}},),
+        stages=(
+            {
+                "order": 1,
+                "mode": StageMode.ALL_REQUIRED.value,
+                "roles": ["LEGAL", "CREDIT", "MARGIN"],
+            },
+        ),
+        created_by="Jason",
+        created_at=NOW,
+        provenance=Provenance.from_human("Jason"),
+    )
+    ApprovalRepository(service.db).create_policy(policy, "Jason")
+    return policy
 
 
 def seed_ready_bid(db: Database, bid_repository: BidRepository, bid_id: str = BID_ID) -> None:
@@ -613,41 +639,78 @@ def test_required_approval_enforcement_and_audit_failure_rollback(
 ) -> None:
     service, _ = service_with_ready_bid(tmp_path)
     provenance = Provenance.from_human("Jason")
-    approved_record = Approval(
-        approval_id="APR-OPS09",
-        bid_id=BID_ID,
-        approval_type="legal",
-        required=True,
-        obtained=True,
-        authority="Legal Director",
-        evidence_ref="Decision record 9",
-        decision="APPROVED",
-        decided_at=NOW,
-        provenance=provenance,
-    )
-    service.bid_repository.create_approval(approved_record)
-    export, _ = service.export_package(BID_ID, "Jason")
-    _, _, candidate_id = import_candidate(
-        service, export.export_id, export.package_id, export.canonical_sha256
-    )
-    service.bid_repository.update_approval(
+    with service.db._conn() as conn:
+        baseline_id = str(
+            conn.execute(
+                "SELECT selection_id FROM scenario_baselines WHERE bid_id=? "
+                "ORDER BY selected_at DESC,selection_id DESC LIMIT 1",
+                (BID_ID,),
+            ).fetchone()["selection_id"]
+        )
+    service.bid_repository.create_approval(
         Approval(
             approval_id="APR-OPS09",
             bid_id=BID_ID,
             approval_type="legal",
             required=True,
-            obtained=False,
+            obtained=True,
             authority="Legal Director",
             evidence_ref="Decision record 9",
             decision="APPROVED",
             decided_at=NOW,
+            provenance=provenance,
+            pricing_baseline_id=baseline_id,
+        )
+    )
+    export, _ = service.export_package(BID_ID, "Jason")
+    _, _, candidate_id = import_candidate(
+        service, export.export_id, export.package_id, export.canonical_sha256
+    )
+    # A further required control appears after export and blocks approval until an
+    # obtained decision is appended; an obtained approval is never edited or withdrawn.
+    service.bid_repository.create_approval(
+        Approval(
+            approval_id="APR-OPS09-CREDIT",
+            bid_id=BID_ID,
+            approval_type="credit",
+            required=True,
+            obtained=False,
+            decision="Awaiting credit review",
             provenance=provenance,
         )
     )
     candidate = service.history(BID_ID).candidates[0]
     with pytest.raises(ValueError, match="blocked"):
         service.approve_candidate(BID_ID, candidate_id, candidate.version, "Jason")
-    service.bid_repository.update_approval(approved_record)
+    # The obtained decision is appended; the earlier not-obtained record stays as history.
+    service.bid_repository.record_gate_approval(
+        Approval(
+            approval_id="APR-OPS09-CREDIT-OBTAINED",
+            bid_id=BID_ID,
+            approval_type="credit",
+            required=True,
+            obtained=True,
+            authority="Credit Director",
+            evidence_ref="Decision record 10",
+            decision="APPROVED",
+            decided_at=NOW,
+            provenance=provenance,
+        ),
+        "Jason",
+        "APR-OPS09-CREDIT",
+    )
+    add_effective_policy(service)
+    # The appended decision changes the proposal facts, so the earlier candidate is stale;
+    # the successor export reflects the current (superseding) approval.
+    successor_export, _ = service.export_package(BID_ID, "Jason")
+    _, _, candidate_id = import_candidate(
+        service,
+        successor_export.export_id,
+        successor_export.package_id,
+        successor_export.canonical_sha256,
+        "B",
+    )
+    candidate = service.history(BID_ID).candidates[0]
     approved = service.approve_candidate(BID_ID, candidate_id, candidate.version, "Jason")
 
     def fail_audit(*_args: object, **_kwargs: object) -> None:

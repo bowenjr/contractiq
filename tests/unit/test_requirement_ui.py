@@ -144,7 +144,7 @@ def test_ui_creates_explicit_and_internal_and_hides_storage_identity(
     )
     page = _html(register)
     assert "Mandatory submission" in page and "Internal review" in page
-    assert "Bid readiness" in page and "does not clear" in page
+    assert "Development gate check" in page and "does not clear" in page
     assert str(requirement_ui_app.MANAGED_DOCUMENT_ROOT) not in page
     assert "versions/" not in page
     detail = asyncio.run(

@@ -1,4 +1,4 @@
-"""OPS-11BX: the nine-stage Bid workflow spine is a truthful pure projection."""
+"""OPS-11BX/OPS-13A-F: the Bid workflow spine is a truthful pure projection."""
 
 from __future__ import annotations
 
@@ -81,11 +81,34 @@ def _stage(projection, key: str):
     return next(stage for stage in projection.stages if stage.key == key)
 
 
-def test_spine_is_exactly_the_nine_required_stages_in_order() -> None:
+def _outstanding_item(
+    code: str,
+    *,
+    scope: str = "whole_bid",
+    blocking: bool = True,
+) -> OutstandingItem:
+    return OutstandingItem(
+        heading=PROPOSAL_HEADINGS.get(code, f"Outstanding {code}"),
+        detail="A required control is open.",
+        consequence="Preparation or issue cannot complete until this is resolved.",
+        owner="Jason",
+        owing_party="Bid team",
+        due_date=date(2026, 10, 20),
+        evidence_source="Test register",
+        resolve_label="Resolve",
+        resolve_path=f"/bids/{BID}/commercial-contract",
+        blocking=blocking,
+        code=code,
+        scope=scope,
+    )
+
+
+def test_spine_is_exactly_the_ten_required_stages_in_order() -> None:
     projection = _project()
     assert [stage.label for stage in projection.stages] == [
         "Bid setup",
         "Package intake and addenda",
+        "Owner decision",
         "Controlled customer documents",
         "Requirements and responses",
         "Scope and interfaces",
@@ -94,7 +117,7 @@ def test_spine_is_exactly_the_nine_required_stages_in_order() -> None:
         "Proposal and negotiation",
         "Bid Basis and handover",
     ]
-    assert [stage.number for stage in projection.stages] == list(range(1, 10))
+    assert [stage.number for stage in projection.stages] == list(range(1, 11))
 
 
 def test_new_bid_leads_with_package_ingestion_not_a_register() -> None:
@@ -103,7 +126,7 @@ def test_new_bid_leads_with_package_ingestion_not_a_register() -> None:
     assert projection.next_action_path == (
         f"/bids/{BID}/package-intake-addenda/import?mode=initial"
     )
-    assert projection.next_action_stage_label == "Package intake and addenda"
+    assert projection.next_action_stage_label == "Receive customer package"
     # The old navigator recommended these before any package had been received.
     assert projection.next_action_label != "Register customer source"
     assert _stage(projection, "documents").actionable is False
@@ -135,14 +158,19 @@ def test_package_intake_advances_from_not_started_through_review_to_complete() -
     in_progress = _project(received)
     stage = _stage(in_progress, "package-intake")
     assert stage.status is StageStatus.IN_PROGRESS
-    assert in_progress.next_action_label == "Review received package files"
+    assert in_progress.next_action_label == "Choose files for analysis"
     assert in_progress.next_action_path.endswith("/releases/REL-1#files")
 
-    reviewed = received.model_copy(update={"files_requiring_review": 0})
+    reviewed = received.model_copy(
+        update={
+            "files_requiring_review": 0,
+            "included_files": 2,
+            "discovery_latest_state": "SUCCEEDED",
+        }
+    )
     done = _project(reviewed)
     assert _stage(done, "package-intake").status is StageStatus.COMPLETE
-    # Controlled document review is the next action once the files are reviewed.
-    assert done.next_action_stage_label == "Controlled customer documents"
+    assert done.next_action_stage_label == "Review findings and set initial requirements"
 
 
 def test_controlled_document_registration_starts_from_the_imported_file_context() -> None:
@@ -155,8 +183,10 @@ def test_controlled_document_registration_starts_from_the_imported_file_context(
     )
     projection = _project(reviewed)
     stage = _stage(projection, "documents")
-    assert stage.action_label == "Register a controlled customer document"
-    assert stage.action_path == f"/bids/{BID}/package-intake-addenda/releases/REL-1"
+    assert stage.action_label == "Choose governing sources"
+    assert stage.action_path == (
+        f"/bids/{BID}/package-intake-addenda/releases/REL-1#governing-sources"
+    )
 
 
 def test_expected_but_missing_release_blocks_package_intake() -> None:
@@ -169,11 +199,132 @@ def test_expected_but_missing_release_blocks_package_intake() -> None:
     stage = _stage(_project(facts), "package-intake")
     assert stage.status is StageStatus.BLOCKED
     assert stage.blocked_reason is not None
+    assert stage.action_label == "Import the expected customer release"
 
 
-def test_partially_populated_stage_is_never_labelled_not_started() -> None:
-    projection = _project(requirements=2, responses=1)
+def test_missing_addendum_does_not_block_review_of_received_files() -> None:
+    facts = PackageIntakeFacts(
+        releases_received=1,
+        releases_incorporated=0,
+        files_requiring_review=3,
+        expected_missing=1,
+        latest_release_id="REL-1",
+    )
+    projection = _project(facts)
+    stage = _stage(projection, "package-intake")
+    assert stage.status is StageStatus.IN_PROGRESS
+    assert stage.action_label == "Choose files for analysis"
+    assert stage.action_path.endswith("/releases/REL-1#files")
+    assert stage.summary.endswith("; 1 expected release(s) not received")
+    assert projection.next_action_label == "Choose files for analysis"
+    assert projection.secondary_action_label == "Import the expected customer release"
+    assert projection.secondary_action_path == (
+        f"/bids/{BID}/package-intake-addenda/import?mode=addendum"
+    )
+
+
+def test_partially_populated_stage_with_preparation_remaining_is_in_progress() -> None:
+    projection = _project(
+        requirements=2,
+        responses=1,
+        outstanding=(_outstanding_item("UNRESOLVED_REQUIREMENT"),),
+    )
     assert _stage(projection, "requirements").status is StageStatus.IN_PROGRESS
+
+
+def test_scope_preparation_is_complete_without_an_unrequired_interface() -> None:
+    projection = _project(scopes=1, interfaces=0)
+    stage = _stage(projection, "scope")
+
+    assert stage.status is StageStatus.COMPLETE
+    assert stage.summary == "Preparation complete"
+
+
+def test_issue_approvals_do_not_make_commercial_preparation_incomplete() -> None:
+    issue_items = (
+        _outstanding_item(
+            "g4.margin_approved",
+            scope="pending_before_issue",
+            blocking=False,
+        ),
+        _outstanding_item(
+            "g6.senior_approvals_current",
+            scope="pending_before_issue",
+            blocking=False,
+        ),
+    )
+    projection = _project(
+        commercial=14,
+        risks=0,
+        decisions=0,
+        approvals=0,
+        verdict="clear",
+        outstanding=issue_items,
+    )
+    stage = _stage(projection, "commercial")
+    prepare = projection.task("prepare")
+
+    assert stage.status is StageStatus.COMPLETE
+    assert "Approvals required before issue: 2 pending" in stage.summary
+    assert stage.action_label == "Review commercial positions and approvals"
+    assert prepare is not None
+    commercial_step = next(step for step in prepare.steps if step.key == "commercial")
+    assert commercial_step.status is StageStatus.COMPLETE
+    assert commercial_step.summary == stage.summary
+
+
+def test_development_commercial_blocker_keeps_preparation_in_progress() -> None:
+    legacy_item = _outstanding_item("UNRESOLVED_COMMERCIAL_POSITION").model_copy(
+        update={"code": None}
+    )
+    projection = _project(
+        commercial=14,
+        outstanding=(legacy_item,),
+    )
+    stage = _stage(projection, "commercial")
+
+    assert stage.status is StageStatus.IN_PROGRESS
+    assert "Preparation remaining: 1 item(s)" in stage.summary
+    assert stage.action_label == "Resolve a commercial or contract position"
+
+
+def test_blocked_manufacturer_preparation_stays_blocked() -> None:
+    projection = _project(
+        packages=1,
+        manufacturer_requirements=1,
+        manufacturer_blocked=1,
+    )
+    assert _stage(projection, "manufacturers").status is StageStatus.BLOCKED
+
+
+@pytest.mark.parametrize("terminal_status", ["submitted", "won", "lost"])
+def test_terminal_bid_keeps_navigator_stage_statuses(terminal_status: str) -> None:
+    navigator = _navigator(
+        requirements=2,
+        responses=1,
+        scopes=1,
+        commercial=14,
+        proposals=1,
+    )
+    expected = {stage.key: stage.status for stage in navigator}
+    projection = project_bid_workflow(
+        BID,
+        bid_status=terminal_status,
+        navigator=navigator,
+        intake=NO_PACKAGE,
+        readiness_verdict="hold",
+        outstanding=(_outstanding_item("UNRESOLVED_COMMERCIAL_POSITION"),),
+    )
+
+    for workflow_key, navigator_key in {
+        "setup": "setup",
+        "requirements": "requirements",
+        "scope": "scope",
+        "manufacturers": "manufacturer",
+        "commercial": "commercial",
+        "proposal": "proposal",
+    }.items():
+        assert _stage(projection, workflow_key).status.value == expected[navigator_key]
 
 
 def test_handover_never_advertises_a_download_on_an_unready_bid() -> None:
@@ -208,16 +359,20 @@ def test_unincorporated_release_routes_to_the_bid_basis_not_to_package_intake() 
         files_requiring_review=0,
         expected_missing=0,
         latest_release_id="REL-1",
+        governing_sources_selected=1,
+        governing_sources_pending_control=0,
     )
     stage = _stage(_project(reviewed), "handover")
-    assert stage.action_label == "Publish or update the Bid Basis"
+    assert stage.action_label == "Confirm Bid Basis"
     assert stage.action_path.endswith("#publish-basis")
 
 
 def test_stopped_pursuit_marks_downstream_stages_not_applicable() -> None:
     projection = _project(bid_status="no_bid")
     assert _stage(projection, "setup").status is StageStatus.COMPLETE
-    for key in ("package-intake", "requirements", "handover"):
+    assert _stage(projection, "owner-decision").status is StageStatus.BLOCKED
+    assert projection.next_action_label == "Record a new decision"
+    for key in ("documents", "requirements", "handover"):
         stage = _stage(projection, key)
         assert stage.status is StageStatus.NOT_APPLICABLE
         assert stage.actionable is False
@@ -230,6 +385,7 @@ def test_every_stage_uses_only_the_agreed_status_vocabulary() -> None:
         "Blocked",
         "Ready for review",
         "Complete",
+        "Done — items open",
         "Not applicable",
     }
     for status in StageStatus:
@@ -256,11 +412,15 @@ def test_status_and_readiness_lines_are_compact_and_name_their_source() -> None:
     )
     projection = _project(outstanding=outstanding)
     assert projection.status_line == "Package intake and addenda — not started"
-    assert projection.readiness_line == "Readiness: Hold — 3 prerequisites outstanding"
+    assert projection.readiness_line == (
+        "Development gate check: Hold — 3 prerequisites outstanding"
+    )
     assert projection.blocking_count == 3
 
     clear = _project(verdict="clear")
-    assert clear.readiness_line == "Readiness: Clear — no prerequisite outstanding"
+    assert clear.readiness_line == (
+        "Development gate check: Clear (G0–G5 conditions assessed so far)"
+    )
 
 
 def test_every_stage_link_stays_inside_this_bid() -> None:
@@ -292,7 +452,7 @@ def test_blocker_headings_state_what_is_missing_never_a_positive_requirement() -
         assert not heading.endswith(".")
         assert " has been " not in heading
         assert " have been " not in heading
-    assert blocker_heading("g1.bid_no_bid_approved", "x") == "Bid/no-bid approval missing"
+    assert blocker_heading("g1.owner_pursuit_decided", "x") == "Owner pursuit decision missing"
     assert blocker_heading("g4.margin_approved", "x") == "Margin approval required"
     assert blocker_heading("g5.prior_gates_passed", "x") == "Earlier gate incomplete"
     assert intake_heading("RECEIVED_RELEASE_NOT_IN_BASIS", "x") == "Addendum not incorporated"
@@ -337,7 +497,7 @@ def test_a_later_blocked_stage_does_not_advertise_an_action_out_of_sequence() ->
     assert handover.status is StageStatus.BLOCKED
     assert handover.actionable is False
     assert projection.current_stage_key == "package-intake"
-    assert projection.next_action_label == "Review received package files"
+    assert projection.next_action_label == "Choose files for analysis"
 
 
 def test_the_current_stage_still_advertises_its_action_when_blocked() -> None:

@@ -1,0 +1,50 @@
+{% set viewed = workflow.task(guided_requested_task()) if guided_requested_task() else none %}{% set viewed = viewed or workflow.current_task %}{% set cur = workflow.current_task %}
+<section class="card guided" id="next-action" aria-label="Guided Bid workflow">
+  <ol class="task-strip" aria-label="Bid tasks">
+    {% for task in workflow.tasks %}
+    <li class="task-chip {{ task.state.slug }}{{ ' is-viewed' if task.key == viewed.key }}{{ ' is-current' if task.key == cur.key }}"><a href="/bids/{{ bid.bid_id }}?task={{ task.key }}#next-action"{% if task.key == viewed.key %} aria-current="step"{% endif %}><span class="task-letter">{{ task.letter }}</span> <span class="task-label">{{ task.label }}</span> <span class="task-state {{ task.state.slug }}">{{ task.state.value }}</span></a></li>
+    {% endfor %}
+  </ol>
+  <div class="task-now">
+    {% if workflow.stopped_reason %}<p class="notice warning" role="status"><strong>Stopped by owner decision — {{ workflow.stopped_reason }}</strong></p>{% endif %}
+    <p class="eyebrow">{% if viewed.key == cur.key %}Next required action · {% endif %}Task {{ viewed.number }} of 6</p>
+    <h2>{{ viewed.label }}</h2>
+    <p class="task-objective">{{ viewed.objective }}</p>
+    {% if viewed.summary %}<p class="muted">{{ viewed.summary }}</p>{% endif %}
+    <h3>Needed to continue</h3>
+    <ul class="task-needs">
+      {% for need in viewed.needs %}
+      <li class="{{ 'met' if need.met else 'unmet' }}"><span class="visually-hidden">{{ 'Done: ' if need.met else 'Still needed: ' }}</span><span class="mark" aria-hidden="true">{{ '✓' if need.met else '○' }}</span> {{ need.text }}{% if not need.met and need.action_path %} — <a href="{{ need.action_path }}">{{ need.action_label }}</a>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% if viewed.steps %}
+    <details class="task-steps-detail"><summary>Registers used in this task — status for orientation; only the items above are required</summary>
+    <ol class="task-steps">
+      {% for step in viewed.steps %}
+      <li><strong>{{ step.label }}</strong> — {{ step.summary }} <a href="{{ step.action_path }}">{{ step.action_label }}</a></li>
+      {% endfor %}
+    </ol></details>
+    {% endif %}
+    <div class="task-actions">
+      {% if viewed.state.value == 'Upcoming' %}
+      <p class="muted">This task opens after the current task is finished.</p><a class="button-lg" href="/bids/{{ bid.bid_id }}?task={{ cur.key }}#next-action">Go to current task: {{ cur.label }}</a>
+      {% elif viewed.state.value in ('Current', 'Done — items open', 'Done') %}
+      {% if viewed.state.value == 'Current' and viewed.primary_path %}{% if viewed.key == 'analyse' and viewed.primary_label == 'Run deliverables discovery' %}<form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/run"><button type="submit" class="button-lg">Run deliverables discovery</button></form>{% else %}<a class="button-lg" href="{{ viewed.primary_path }}">{{ viewed.primary_label }}</a>{% endif %}{% endif %}
+      {% if viewed.alternative_label %}<a href="{{ viewed.alternative_path }}">{{ viewed.alternative_label }}</a>{% endif %}
+      {% if viewed.continue_label %}<a class="{{ 'button' if viewed.state.value == 'Current' else 'button-lg' }}" href="{{ viewed.continue_path }}">{{ viewed.continue_label }}</a>{% endif %}
+      {% else %}
+      <p class="muted">This task no longer applies.</p>
+      {% endif %}
+    </div>
+    {% if viewed.later %}
+    <details class="task-later"{% if viewed.state.value == 'Done — items open' %} open{% endif %}><summary>Can be completed later ({{ viewed.later|length }})</summary><ul>
+      {% for item in viewed.later %}<li>{{ item.text }} — <a href="{{ item.action_path }}">{{ item.action_label }}</a></li>{% endfor %}
+    </ul></details>
+    {% endif %}
+    {% set carried = workflow.tasks|selectattr('key','ne',viewed.key)|selectattr('state.value','equalto','Done — items open')|list %}
+    {% if carried and not (viewed.key == 'issue' and carried|length == 1 and carried[0].key == 'prepare') %}<details class="task-later" open><summary>Left open from earlier tasks — does not block this task</summary><ul>
+      {% for task in carried if not (viewed.key == 'issue' and task.key == 'prepare') %}{% for item in task.later %}<li><strong>{{ task.letter }} · {{ task.label }}:</strong> {{ item.text }} — <a href="{{ item.action_path }}">{{ item.action_label }}</a></li>{% endfor %}{% endfor %}
+    </ul></details>{% endif %}
+    {% if viewed.key != cur.key and cur.state.value != 'Upcoming' %}<p class="muted">Current task: <a href="/bids/{{ bid.bid_id }}?task={{ cur.key }}#next-action">{{ cur.letter }} · {{ cur.label }}</a></p>{% endif %}
+  </div>
+</section>

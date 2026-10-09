@@ -8,7 +8,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import cast
+from typing import BinaryIO, cast
 
 from core.bid_package_intake import (
     AcknowledgementCreate,
@@ -19,8 +19,11 @@ from core.bid_package_intake import (
     DirectiveDispositionCreate,
     FileDispositionCreate,
     FileDocumentLinkCreate,
+    GoverningDisposition,
+    GoverningSelectionCreate,
     IntakeAttention,
     PackageIntakeSummary,
+    ReferenceConfirmationCreate,
     ReleaseNoticeCreate,
     ReleasePreview,
     ReleaseRegistration,
@@ -49,6 +52,20 @@ class ReleaseNotIncorporableError(ValueError):
     """Raised when a release does not meet deterministic incorporation rules."""
 
 
+_RELEASE_KIND_LABELS = {
+    "INITIAL_PACKAGE": "Initial package",
+    "ADDENDUM": "Addendum",
+    "CLARIFICATION": "Clarification",
+    "REVISED_PACKAGE": "Revised package",
+    "OTHER": "Customer release",
+}
+
+
+def _release_kind_label(release_type: str) -> str:
+    """Return the stage-specific noun for a received release type."""
+    return _RELEASE_KIND_LABELS.get(release_type, "Customer release")
+
+
 def _dict(row: sqlite3.Row) -> dict[str, object]:
     return {str(key): row[key] for key in row.keys()}
 
@@ -68,18 +85,42 @@ class BidPackageRepository:
         "bid_addendum_directives",
         "bid_addendum_dispositions",
         "bid_release_acknowledgement_events",
+        "bid_release_reference_confirmations",
         "bid_basis_snapshots",
         "bid_basis_snapshot_releases",
         "bid_basis_snapshot_documents",
         "bid_intake_processing_runs",
         "bid_intake_processing_file_results",
         "bid_intake_work_item_links",
+        "bid_received_file_governing_events",
         "bid_package_intake_schema_migrations",
     )
 
     def __init__(self, db: Database) -> None:
         self.db = db
+        self._received_file_opener: (
+            Callable[[str, str, str], tuple[BinaryIO, dict[str, object]]] | None
+        ) = None
         self._apply_migration()
+
+    def bind_received_file_opener(
+        self,
+        opener: Callable[[str, str, str], tuple[BinaryIO, dict[str, object]]],
+    ) -> None:
+        """Bind the package service's integrity-checking managed-file reader.
+
+        Discovery receives this repository through the existing application wiring, so the
+        binding keeps all reads on `BidPackageService.open_received_file` without exposing a
+        storage path or changing that wiring.
+        """
+        self._received_file_opener = opener
+
+    def open_received_file(
+        self, bid_id: str, release_id: str, file_id: str
+    ) -> tuple[BinaryIO, dict[str, object]]:
+        if self._received_file_opener is None:
+            raise ValueError("received-file reader is unavailable")
+        return self._received_file_opener(bid_id, release_id, file_id)
 
     def _conn(self) -> sqlite3.Connection:
         return cast(sqlite3.Connection, self.db._conn())
@@ -190,6 +231,14 @@ class BidPackageRepository:
             OR (analysis_eligibility<>'EXCLUDED' AND exclusion_reason IS NULL)),
             CHECK(duplicate_of_file_id IS NULL OR duplicate_of_file_id<>file_id),
             UNIQUE(file_id,operation_id))""",
+            """CREATE TABLE IF NOT EXISTS bid_received_file_governing_events(
+            governing_event_id TEXT PRIMARY KEY,file_id TEXT NOT NULL,
+            governing_disposition TEXT NOT NULL,supersedes_event_id TEXT,
+            operation_id TEXT NOT NULL,actor TEXT NOT NULL,recorded_at TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,FOREIGN KEY(file_id) REFERENCES bid_received_files(file_id),
+            FOREIGN KEY(supersedes_event_id) REFERENCES bid_received_file_governing_events(governing_event_id),
+            CHECK(governing_disposition IN ('GOVERNING','NOT_GOVERNING')),
+            UNIQUE(file_id,operation_id))""",
             """CREATE TABLE IF NOT EXISTS bid_addendum_directives(
             directive_id TEXT PRIMARY KEY,release_id TEXT NOT NULL,directive_type TEXT NOT NULL,
             description TEXT NOT NULL,materiality TEXT NOT NULL,source_file_id TEXT,
@@ -231,6 +280,19 @@ class BidPackageRepository:
             AND approval_id IS NULL AND route_id IS NULL) OR
             (event_type='EXCEPTION_APPROVED' AND ((approval_id IS NOT NULL)+(route_id IS NOT NULL)=1)) OR
             (event_type IN ('REQUIRED','NOT_REQUIRED') AND approval_id IS NULL AND route_id IS NULL)),
+            UNIQUE(release_id,operation_id))""",
+            """CREATE TABLE IF NOT EXISTS bid_release_reference_confirmations(
+            confirmation_event_id TEXT PRIMARY KEY,bid_id TEXT NOT NULL,release_id TEXT NOT NULL,
+            state TEXT NOT NULL,exact_customer_reference TEXT,note TEXT,
+            supersedes_event_id TEXT,operation_id TEXT NOT NULL,actor TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,provenance_json TEXT NOT NULL,
+            FOREIGN KEY(bid_id) REFERENCES bids(bid_id),
+            FOREIGN KEY(release_id) REFERENCES bid_received_releases(release_id),
+            FOREIGN KEY(supersedes_event_id) REFERENCES bid_release_reference_confirmations(confirmation_event_id),
+            CHECK(state IN ('REFERENCE_PROVIDED','NONE_PROVIDED_BY_CUSTOMER')),
+            CHECK((state='REFERENCE_PROVIDED' AND length(trim(exact_customer_reference))>0
+            AND length(exact_customer_reference)<=500) OR
+            (state='NONE_PROVIDED_BY_CUSTOMER' AND exact_customer_reference IS NULL)),
             UNIQUE(release_id,operation_id))""",
             """CREATE TABLE IF NOT EXISTS bid_basis_snapshots(
             snapshot_id TEXT PRIMARY KEY,bid_id TEXT NOT NULL,snapshot_sequence INTEGER NOT NULL,
@@ -298,10 +360,28 @@ class BidPackageRepository:
             "CREATE INDEX IF NOT EXISTS idx_bid_received_files_digest ON bid_received_files(sha256,byte_size)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_file_link_superseded_once ON bid_received_file_document_links(supersedes_link_id) WHERE supersedes_link_id IS NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_file_disposition_superseded_once ON bid_received_file_disposition_events(supersedes_event_id) WHERE supersedes_event_id IS NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_file_governing_superseded_once ON bid_received_file_governing_events(supersedes_event_id) WHERE supersedes_event_id IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_bid_directives_release ON bid_addendum_directives(release_id,materiality)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_directive_superseded_once ON bid_addendum_directives(supersedes_directive_id) WHERE supersedes_directive_id IS NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_disposition_superseded_once ON bid_addendum_dispositions(supersedes_disposition_id) WHERE supersedes_disposition_id IS NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_ack_superseded_once ON bid_release_acknowledgement_events(supersedes_event_id) WHERE supersedes_event_id IS NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_reference_superseded_once ON bid_release_reference_confirmations(supersedes_event_id) WHERE supersedes_event_id IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS idx_bid_reference_release ON bid_release_reference_confirmations(release_id,recorded_at)",
+            """CREATE VIEW IF NOT EXISTS bid_release_effective_reference AS
+            SELECT r.release_id,
+            CASE WHEN c.state IS NOT NULL THEN c.state
+            WHEN r.exact_customer_reference IS NOT NULL THEN 'REFERENCE_PROVIDED'
+            ELSE 'UNCONFIRMED' END AS reference_state,
+            CASE WHEN c.state IS NOT NULL THEN c.exact_customer_reference
+            ELSE r.exact_customer_reference END AS effective_reference,
+            CASE WHEN c.state IS NOT NULL THEN 'CONFIRMATION'
+            WHEN r.exact_customer_reference IS NOT NULL THEN 'IMPORT' END AS reference_source,
+            c.confirmation_event_id,c.note AS confirmation_note,
+            c.actor AS confirmed_by,c.recorded_at AS confirmed_at
+            FROM bid_received_releases r LEFT JOIN bid_release_reference_confirmations c
+            ON c.release_id=r.release_id AND NOT EXISTS(SELECT 1
+            FROM bid_release_reference_confirmations newer
+            WHERE newer.supersedes_event_id=c.confirmation_event_id)""",
             "CREATE INDEX IF NOT EXISTS idx_bid_basis_snapshots_bid_sequence ON bid_basis_snapshots(bid_id,snapshot_sequence DESC)",
             "CREATE INDEX IF NOT EXISTS idx_bid_intake_work_item ON bid_intake_work_item_links(work_item_id)",
         )
@@ -678,9 +758,11 @@ class BidPackageRepository:
                 "SELECT * FROM bid_received_releases WHERE release_id=? AND bid_id=?",
                 (release_id, bid_id),
             ).fetchone()
-        if row is None:
-            raise IntakeNotFoundError("received release not found in this Bid")
-        return _dict(row)
+            if row is None:
+                raise IntakeNotFoundError("received release not found in this Bid")
+            item = _dict(row)
+            self._overlay_reference(conn, item)
+        return item
 
     def file(self, file_id: str, bid_id: str) -> dict[str, object]:
         with self._conn() as conn:
@@ -692,6 +774,61 @@ class BidPackageRepository:
         if row is None:
             raise IntakeNotFoundError("received file not found in this Bid")
         return _dict(row)
+
+    def eligible_received_files(self, bid_id: str) -> list[dict[str, object]]:
+        """Current received files explicitly marked Include for analysis, across releases."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT f.*,r.bid_id FROM bid_received_files f
+                JOIN bid_received_releases r ON r.release_id=f.release_id
+                JOIN bid_received_file_disposition_events disp ON disp.file_id=f.file_id
+                AND NOT EXISTS(SELECT 1 FROM bid_received_file_disposition_events newer
+                WHERE newer.supersedes_event_id=disp.disposition_event_id)
+                WHERE r.bid_id=? AND disp.analysis_eligibility='ELIGIBLE'
+                ORDER BY r.receipt_sequence,lower(f.original_relative_path),f.file_id""",
+                (bid_id,),
+            ).fetchall()
+        return [_dict(row) for row in rows]
+
+    def latest_discovery_run_coverage(
+        self, bid_id: str
+    ) -> tuple[dict[str, object] | None, set[str]]:
+        """Return the latest run, its outcome facts, and legacy extraction coverage."""
+        with self._conn() as conn:
+            run = conn.execute(
+                """SELECT r.*,o.outcome,o.files_included,o.files_unsupported,
+                o.files_unreadable,o.files_extracted,o.files_analysed,o.files_failed,
+                o.passages_total,o.model_calls,o.passages_analysed,o.passages_model_failed,
+                o.passages_invalid_output,o.created_at AS outcome_created_at
+                FROM deliverable_discovery_runs r
+                LEFT JOIN deliverable_discovery_run_outcomes o ON o.run_id=r.run_id
+                WHERE r.bid_id=? ORDER BY r.completed_at DESC,r.rowid DESC LIMIT 1""",
+                (bid_id,),
+            ).fetchone()
+            if run is None:
+                return None, set()
+            processed = {
+                str(row["received_file_id"])
+                for row in conn.execute(
+                    """SELECT DISTINCT received_file_id
+                    FROM deliverable_discovery_extractions_v2
+                    WHERE bid_id=? AND run_id=? AND received_file_id IS NOT NULL""",
+                    (bid_id, run["run_id"]),
+                ).fetchall()
+            }
+            result = _dict(run)
+            result["file_outcomes"] = [
+                _dict(row)
+                for row in conn.execute(
+                    """SELECT outcome.*,file.original_filename
+                    FROM deliverable_discovery_file_outcomes outcome
+                    JOIN bid_received_files file ON file.file_id=outcome.received_file_id
+                    WHERE outcome.run_id=?
+                    ORDER BY lower(file.original_filename),outcome.received_file_id""",
+                    (run["run_id"],),
+                ).fetchall()
+            ]
+        return result, processed
 
     def link_notice(
         self,
@@ -991,6 +1128,160 @@ class BidPackageRepository:
             raise IntakeNotFoundError("current file disposition not found")
         return _dict(row)
 
+    def add_governing_selection_bulk(
+        self,
+        *,
+        bid_id: str,
+        command: GoverningSelectionCreate,
+        event_ids: Sequence[str],
+        audit_ids: Sequence[str],
+        actor: str,
+        at: datetime,
+        provenance: Provenance,
+    ) -> tuple[dict[str, object], ...]:
+        """Append governing-source decisions and audits in one SQLite transaction.
+
+        Every selected file is validated before the first event is inserted. Replayed and
+        no-op selections deliberately create no replacement event or audit record.
+        """
+        if len(event_ids) != len(command.items) or len(audit_ids) != len(command.items):
+            raise ValueError("governing selection identifiers do not match the selected files")
+        if len({item.file_id for item in command.items}) != len(command.items):
+            raise IntakeConflictError("a received file can only be selected once")
+        conn = self._conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            self._bid_exists(conn, bid_id)
+            release = conn.execute(
+                "SELECT 1 FROM bid_received_releases WHERE release_id=? AND bid_id=?",
+                (command.release_id, bid_id),
+            ).fetchone()
+            if release is None:
+                raise IntakeNotFoundError("received release not found in this Bid")
+
+            pending: list[tuple[str, str | None, str, str]] = []
+            for position, item in enumerate(command.items):
+                file_row = conn.execute(
+                    """SELECT f.* FROM bid_received_files f JOIN bid_received_releases r
+                    ON r.release_id=f.release_id WHERE f.file_id=? AND r.bid_id=?""",
+                    (item.file_id, bid_id),
+                ).fetchone()
+                if file_row is None:
+                    raise IntakeNotFoundError("selected received file not found in this Bid")
+                if str(file_row["release_id"]) != command.release_id:
+                    raise IntakeConflictError(
+                        "every selected file must belong to the displayed received package"
+                    )
+                replay = conn.execute(
+                    """SELECT 1 FROM bid_received_file_governing_events
+                    WHERE file_id=? AND operation_id=?""",
+                    (item.file_id, command.operation_id),
+                ).fetchone()
+                if replay is not None:
+                    continue
+                current = conn.execute(
+                    """SELECT base.* FROM bid_received_file_governing_events base
+                    WHERE base.file_id=? AND NOT EXISTS(SELECT 1 FROM
+                    bid_received_file_governing_events newer
+                    WHERE newer.supersedes_event_id=base.governing_event_id)""",
+                    (item.file_id,),
+                ).fetchone()
+                current_event_id = (
+                    str(current["governing_event_id"]) if current is not None else None
+                )
+                if current_event_id != item.supersedes_event_id:
+                    raise StaleIntakeError(
+                        "one or more governing selections changed; refresh the package before selecting"
+                    )
+                current_value = (
+                    str(current["governing_disposition"])
+                    if current is not None
+                    else GoverningDisposition.UNSET.value
+                )
+                requested_value = command.governing_disposition.value
+                if requested_value == current_value or (
+                    current is None
+                    and command.governing_disposition is GoverningDisposition.NOT_GOVERNING
+                ):
+                    continue
+                if command.governing_disposition is GoverningDisposition.GOVERNING:
+                    disposition = conn.execute(
+                        """SELECT base.analysis_eligibility
+                        FROM bid_received_file_disposition_events base
+                        WHERE base.file_id=? AND NOT EXISTS(SELECT 1 FROM
+                        bid_received_file_disposition_events newer
+                        WHERE newer.supersedes_event_id=base.disposition_event_id)""",
+                        (item.file_id,),
+                    ).fetchone()
+                    if disposition is None or disposition["analysis_eligibility"] != "ELIGIBLE":
+                        raise IntakeConflictError(
+                            f"Received file {file_row['original_filename']} ({item.file_id}) "
+                            'must be marked "Include for analysis" first'
+                        )
+                pending.append(
+                    (item.file_id, current_event_id, event_ids[position], audit_ids[position])
+                )
+
+            created: list[dict[str, object]] = []
+            for file_id, current_event_id, event_id, audit_id in pending:
+                conn.execute(
+                    """INSERT INTO bid_received_file_governing_events(
+                    governing_event_id,file_id,governing_disposition,supersedes_event_id,
+                    operation_id,actor,recorded_at,provenance_json) VALUES(?,?,?,?,?,?,?,?)""",
+                    (
+                        event_id,
+                        file_id,
+                        command.governing_disposition.value,
+                        current_event_id,
+                        command.operation_id,
+                        actor,
+                        at.isoformat(),
+                        provenance.model_dump_json(),
+                    ),
+                )
+                self._audit(
+                    conn,
+                    entry_id=audit_id,
+                    bid_id=bid_id,
+                    actor=actor,
+                    action="bid_received_file_governing_recorded",
+                    detail={"file_id": file_id, "governing_event_id": event_id},
+                    at=at,
+                )
+                created.append(
+                    {
+                        "file_id": file_id,
+                        "governing_event_id": event_id,
+                        "governing_disposition": command.governing_disposition.value,
+                    }
+                )
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return tuple(created)
+
+    def current_governing_disposition(self, file_id: str) -> dict[str, object]:
+        """Return the current governing decision, or UNSET when none has been recorded."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT base.* FROM bid_received_file_governing_events base
+                WHERE base.file_id=? AND NOT EXISTS(SELECT 1 FROM
+                bid_received_file_governing_events newer
+                WHERE newer.supersedes_event_id=base.governing_event_id)""",
+                (file_id,),
+            ).fetchone()
+        if row is None:
+            return {
+                "file_id": file_id,
+                "governing_event_id": None,
+                "governing_disposition": GoverningDisposition.UNSET.value,
+            }
+        return _dict(row)
+
     def link_file_document(
         self,
         *,
@@ -1140,6 +1431,25 @@ class BidPackageRepository:
                 at=at,
             )
         return self.directive(directive_id, bid_id)
+
+    def list_current_directives(self, bid_id: str) -> list[dict[str, object]]:
+        """Current (non-superseded) addendum directives for a Bid, with their document target.
+
+        Read-only, additive helper for OPS-13A addendum-impact detection — mirrors the same
+        non-superseded filter `basis_register()` already uses for directives.
+        """
+        with self._conn() as conn:
+            return [
+                _dict(row)
+                for row in conn.execute(
+                    """SELECT d.*,r.bid_id FROM bid_addendum_directives d
+                    JOIN bid_received_releases r ON r.release_id=d.release_id
+                    WHERE r.bid_id=? AND NOT EXISTS(SELECT 1 FROM bid_addendum_directives newer
+                    WHERE newer.supersedes_directive_id=d.directive_id)
+                    ORDER BY d.created_at""",
+                    (bid_id,),
+                ).fetchall()
+            ]
 
     def directive(self, directive_id: str, bid_id: str) -> dict[str, object]:
         with self._conn() as conn:
@@ -1351,6 +1661,125 @@ class BidPackageRepository:
             raise IntakeNotFoundError("current acknowledgement state not found")
         return _dict(row)
 
+    def add_reference_confirmation(
+        self,
+        *,
+        event_id: str,
+        bid_id: str,
+        release_id: str,
+        command: ReferenceConfirmationCreate,
+        actor: str,
+        at: datetime,
+        provenance: Provenance,
+        audit_id: str,
+    ) -> dict[str, object]:
+        """Append one confirmation or correction of a release's customer reference.
+
+        Mirrors :meth:`add_acknowledgement`: an event is never edited; a correction
+        names the current event it supersedes, and a repeated ``operation_id`` returns
+        the original event without writing again.
+        """
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.release(release_id, bid_id)
+                existing = conn.execute(
+                    """SELECT 1 FROM bid_release_reference_confirmations
+                    WHERE release_id=? AND operation_id=?""",
+                    (release_id, command.operation_id),
+                ).fetchone()
+                if existing is not None:
+                    conn.rollback()
+                    return self.reference_status(release_id)
+                self._verify_current_lineage(
+                    conn,
+                    table="bid_release_reference_confirmations",
+                    id_column="confirmation_event_id",
+                    parent_column="release_id",
+                    parent_id=release_id,
+                    supersedes_column="supersedes_event_id",
+                    supersedes_id=command.supersedes_event_id,
+                )
+                conn.execute(
+                    """INSERT INTO bid_release_reference_confirmations VALUES(
+                    ?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        event_id,
+                        bid_id,
+                        release_id,
+                        command.state.value,
+                        command.exact_customer_reference,
+                        command.note,
+                        command.supersedes_event_id,
+                        command.operation_id,
+                        actor,
+                        at.isoformat(),
+                        provenance.model_dump_json(),
+                    ),
+                )
+                self._audit(
+                    conn,
+                    entry_id=audit_id,
+                    bid_id=bid_id,
+                    actor=actor,
+                    action="bid_release_reference_confirmed",
+                    detail={
+                        "confirmation_event_id": event_id,
+                        "release_id": release_id,
+                        "state": command.state.value,
+                        "exact_customer_reference": command.exact_customer_reference,
+                        "supersedes_event_id": command.supersedes_event_id,
+                    },
+                    at=at,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self.reference_status(release_id)
+
+    def reference_status(self, release_id: str) -> dict[str, object]:
+        """Return the effective reference state for one release (never raises on UNCONFIRMED)."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM bid_release_effective_reference WHERE release_id=?",
+                (release_id,),
+            ).fetchone()
+        if row is None:
+            raise IntakeNotFoundError("received release not found")
+        return _dict(row)
+
+    def reference_history(self, release_id: str) -> list[dict[str, object]]:
+        """Return every confirmation event for a release, oldest first (audit evidence)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM bid_release_reference_confirmations WHERE release_id=?
+                ORDER BY recorded_at,confirmation_event_id""",
+                (release_id,),
+            ).fetchall()
+        return [_dict(row) for row in rows]
+
+    @staticmethod
+    def _overlay_reference(conn: sqlite3.Connection, item: dict[str, object]) -> None:
+        """Replace a release row's reference with the effective, confirmed one.
+
+        The imported value is kept as ``imported_customer_reference`` for evidence.
+        """
+        status = conn.execute(
+            "SELECT * FROM bid_release_effective_reference WHERE release_id=?",
+            (item["release_id"],),
+        ).fetchone()
+        item["imported_customer_reference"] = item.get("exact_customer_reference")
+        if status is None:
+            return
+        item["exact_customer_reference"] = status["effective_reference"]
+        item["reference_state"] = status["reference_state"]
+        item["reference_source"] = status["reference_source"]
+        item["reference_confirmation_event_id"] = status["confirmation_event_id"]
+        item["reference_confirmed_by"] = status["confirmed_by"]
+        item["reference_confirmed_at"] = status["confirmed_at"]
+        item["reference_confirmation_note"] = status["confirmation_note"]
+
     def _release_incorporation_issues(
         self, conn: sqlite3.Connection, bid_id: str, release_id: str
     ) -> list[str]:
@@ -1369,11 +1798,16 @@ class BidPackageRepository:
         if succeeded is None:
             issues.append("managed storage and inventory verification has not succeeded")
         file_rows = conn.execute(
-            """SELECT f.file_id,disp.analysis_eligibility,link.document_version_id
+            """SELECT f.file_id,disp.analysis_eligibility,link.document_version_id,
+            governing.governing_disposition
             FROM bid_received_files f
             LEFT JOIN bid_received_file_disposition_events disp ON disp.file_id=f.file_id
             AND NOT EXISTS(SELECT 1 FROM bid_received_file_disposition_events newer
             WHERE newer.supersedes_event_id=disp.disposition_event_id)
+            LEFT JOIN bid_received_file_governing_events governing
+            ON governing.file_id=f.file_id AND NOT EXISTS(SELECT 1
+            FROM bid_received_file_governing_events newer
+            WHERE newer.supersedes_event_id=governing.governing_event_id)
             LEFT JOIN bid_received_file_document_links link ON link.file_id=f.file_id
             AND NOT EXISTS(SELECT 1 FROM bid_received_file_document_links newer
             WHERE newer.supersedes_link_id=link.file_document_link_id)
@@ -1386,12 +1820,13 @@ class BidPackageRepository:
                 issues.append(f"file {row['file_id']} has not been reviewed")
             elif (
                 eligibility == AnalysisEligibility.ELIGIBLE.value
+                and row["governing_disposition"] == GoverningDisposition.GOVERNING.value
                 and row["document_version_id"] is None
             ):
                 issues.append(
-                    f"eligible file {row['file_id']} lacks an exact controlled-version link"
+                    f"governing file {row['file_id']} lacks an exact controlled-version link"
                 )
-            elif row["document_version_id"] is not None:
+            if row["document_version_id"] is not None:
                 try:
                     self._validate_document_version(conn, bid_id, str(row["document_version_id"]))
                 except IntakeConflictError:
@@ -1468,10 +1903,22 @@ class BidPackageRepository:
             documents: dict[str, tuple[str, str, str | None]] = {}
             if current_id is not None:
                 for row in conn.execute(
-                    """SELECT document_id,document_version_id,source_release_id,
-                    source_received_file_id FROM bid_basis_snapshot_documents WHERE snapshot_id=?""",
+                    """SELECT snapshot_document.document_id,
+                    snapshot_document.document_version_id,
+                    snapshot_document.source_release_id,
+                    snapshot_document.source_received_file_id,
+                    governing.governing_disposition
+                    FROM bid_basis_snapshot_documents snapshot_document
+                    LEFT JOIN bid_received_file_governing_events governing
+                    ON governing.file_id=snapshot_document.source_received_file_id
+                    AND NOT EXISTS(SELECT 1
+                    FROM bid_received_file_governing_events newer
+                    WHERE newer.supersedes_event_id=governing.governing_event_id)
+                    WHERE snapshot_document.snapshot_id=?""",
                     (current_id,),
                 ).fetchall():
+                    if row["governing_disposition"] == GoverningDisposition.NOT_GOVERNING.value:
+                        continue
                     documents[str(row["document_id"])] = (
                         str(row["document_version_id"]),
                         str(row["source_release_id"]),
@@ -1490,7 +1937,12 @@ class BidPackageRepository:
                     JOIN bid_received_file_disposition_events disp ON disp.file_id=f.file_id
                     AND NOT EXISTS(SELECT 1 FROM bid_received_file_disposition_events newer
                     WHERE newer.supersedes_event_id=disp.disposition_event_id)
-                    WHERE f.release_id=? AND disp.analysis_eligibility='ELIGIBLE'""",
+                    JOIN bid_received_file_governing_events governing
+                    ON governing.file_id=f.file_id AND NOT EXISTS(SELECT 1
+                    FROM bid_received_file_governing_events newer
+                    WHERE newer.supersedes_event_id=governing.governing_event_id)
+                    WHERE f.release_id=? AND disp.analysis_eligibility='ELIGIBLE'
+                    AND governing.governing_disposition='GOVERNING'""",
                     (release_id,),
                 ).fetchall():
                     documents[str(row["document_id"])] = (
@@ -1621,7 +2073,16 @@ class BidPackageRepository:
                 document_ids.update(
                     str(row["document_id"])
                     for row in conn.execute(
-                        "SELECT document_id FROM bid_basis_snapshot_documents WHERE snapshot_id=?",
+                        """SELECT snapshot_document.document_id
+                        FROM bid_basis_snapshot_documents snapshot_document
+                        LEFT JOIN bid_received_file_governing_events governing
+                        ON governing.file_id=snapshot_document.source_received_file_id
+                        AND NOT EXISTS(SELECT 1
+                        FROM bid_received_file_governing_events newer
+                        WHERE newer.supersedes_event_id=governing.governing_event_id)
+                        WHERE snapshot_document.snapshot_id=?
+                        AND (governing.governing_disposition IS NULL
+                        OR governing.governing_disposition<>'NOT_GOVERNING')""",
                         (current["snapshot_id"],),
                     ).fetchall()
                 )
@@ -1637,7 +2098,12 @@ class BidPackageRepository:
                         JOIN bid_received_file_disposition_events disp ON disp.file_id=f.file_id
                         AND NOT EXISTS(SELECT 1 FROM bid_received_file_disposition_events newer
                         WHERE newer.supersedes_event_id=disp.disposition_event_id)
-                        WHERE f.release_id=? AND disp.analysis_eligibility='ELIGIBLE'""",
+                        JOIN bid_received_file_governing_events governing
+                        ON governing.file_id=f.file_id AND NOT EXISTS(SELECT 1
+                        FROM bid_received_file_governing_events newer
+                        WHERE newer.supersedes_event_id=governing.governing_event_id)
+                        WHERE f.release_id=? AND disp.analysis_eligibility='ELIGIBLE'
+                        AND governing.governing_disposition='GOVERNING'""",
                         (release_id,),
                     ).fetchall()
                 )
@@ -1652,12 +2118,19 @@ class BidPackageRepository:
                     """SELECT f.*,disp.disposition_event_id,disp.content_form,
                     disp.classification_method,disp.confidence,disp.analysis_eligibility,
                     disp.exclusion_reason,disp.duplicate_of_file_id,
+                    governing.governing_event_id,
+                    COALESCE(governing.governing_disposition,'UNSET')
+                    AS governing_disposition,
                     link.file_document_link_id,link.document_version_id,
                     d.id AS document_id,d.control_title,d.document_number,v.version_label
                     FROM bid_received_files f
                     LEFT JOIN bid_received_file_disposition_events disp ON disp.file_id=f.file_id
                     AND NOT EXISTS(SELECT 1 FROM bid_received_file_disposition_events newer
                     WHERE newer.supersedes_event_id=disp.disposition_event_id)
+                    LEFT JOIN bid_received_file_governing_events governing
+                    ON governing.file_id=f.file_id AND NOT EXISTS(SELECT 1
+                    FROM bid_received_file_governing_events newer
+                    WHERE newer.supersedes_event_id=governing.governing_event_id)
                     LEFT JOIN bid_received_file_document_links link ON link.file_id=f.file_id
                     AND NOT EXISTS(SELECT 1 FROM bid_received_file_document_links newer
                     WHERE newer.supersedes_link_id=link.file_document_link_id)
@@ -1703,6 +2176,7 @@ class BidPackageRepository:
         release["acknowledgement"] = _dict(ack) if ack is not None else None
         release["linked_notices"] = linked_notices
         release["incorporation_issues"] = list(self.incorporation_issues(bid_id, release_id))
+        release["reference_history"] = self.reference_history(release_id)
         return release
 
     def _attention(self, bid_id: str) -> list[IntakeAttention]:
@@ -1749,32 +2223,51 @@ class BidPackageRepository:
                     ).fetchall()
                 }
             prior_issue_date: str | None = None
+            effective = {
+                str(ref["release_id"]): ref
+                for ref in conn.execute(
+                    """SELECT v.* FROM bid_release_effective_reference v
+                    JOIN bid_received_releases r ON r.release_id=v.release_id
+                    WHERE r.bid_id=?""",
+                    (bid_id,),
+                ).fetchall()
+            }
             for row in releases:
                 release_id = str(row["release_id"])
+                status = effective[release_id]
                 reference = str(
-                    row["exact_customer_reference"] or f"receipt {row['receipt_sequence']}"
+                    status["effective_reference"] or f"receipt {row['receipt_sequence']}"
                 )
-                if row["exact_customer_reference"] is None:
+                kind = _release_kind_label(str(row["release_type"]))
+                if status["reference_state"] == "UNCONFIRMED":
                     attention.append(
                         IntakeAttention(
                             code="RELEASE_REFERENCE_MISSING",
                             message=(
-                                f"Receipt {row['receipt_sequence']} has no exact customer release "
-                                "reference; human confirmation is required."
+                                f"{kind} (receipt {row['receipt_sequence']}) has no confirmed "
+                                "customer reference. Open the release and enter the customer's "
+                                "own reference, or record that the customer provided none. "
+                                "This reminder is advisory and does not block review."
                             ),
-                            destination=f"{destination}/releases/{release_id}",
+                            destination=f"{destination}/releases/{release_id}#reference",
                             record_id=release_id,
                             blocking=False,
+                            release_type=str(row["release_type"]),
                         )
                     )
                 if release_id not in incorporated:
                     attention.append(
                         IntakeAttention(
                             code="RECEIVED_RELEASE_NOT_IN_BASIS",
-                            message=f"Received release {reference} is not in the current Bid Basis.",
-                            destination=f"{destination}/releases/{release_id}",
+                            message=(
+                                f"{kind} {reference} is received but not yet confirmed in the "
+                                "Bid Basis. Review every file, put governing files under "
+                                "document control, then confirm it in the Bid Basis."
+                            ),
+                            destination=f"{destination}/releases/{release_id}#files",
                             record_id=release_id,
                             blocking=True,
+                            release_type=str(row["release_type"]),
                         )
                     )
                 issue_date = str(row["customer_issue_date"]) if row["customer_issue_date"] else None
@@ -1821,9 +2314,11 @@ class BidPackageRepository:
                         )
                     )
             duplicate_refs = conn.execute(
-                """SELECT exact_customer_reference FROM bid_received_releases
-                WHERE bid_id=? AND exact_customer_reference IS NOT NULL
-                GROUP BY exact_customer_reference HAVING count(*)>1""",
+                """SELECT v.effective_reference AS exact_customer_reference
+                FROM bid_release_effective_reference v
+                JOIN bid_received_releases r ON r.release_id=v.release_id
+                WHERE r.bid_id=? AND v.effective_reference IS NOT NULL
+                GROUP BY v.effective_reference HAVING count(*)>1""",
                 (bid_id,),
             ).fetchall()
             for row in duplicate_refs:
@@ -1924,6 +2419,7 @@ class BidPackageRepository:
                 (bid_id,),
             ).fetchall():
                 item = _dict(row)
+                self._overlay_reference(conn, item)
                 item["incorporated"] = str(row["release_id"]) in current_release_ids
                 progress = conn.execute(
                     """SELECT
@@ -2007,22 +2503,37 @@ class BidPackageRepository:
             releases = [
                 _dict(row)
                 for row in conn.execute(
-                    """SELECT r.release_id,r.release_type,r.exact_customer_reference,
+                    """SELECT r.release_id,r.release_type,
+                    ref.effective_reference AS exact_customer_reference,
+                    ref.reference_state,ref.reference_source,
+                    ref.confirmed_at AS reference_confirmed_at,
+                    ref.confirmed_by AS reference_confirmed_by,
                     r.customer_issue_date,r.received_at,r.received_channel,sr.incorporation_sequence
                     FROM bid_basis_snapshot_releases sr JOIN bid_received_releases r
-                    ON r.release_id=sr.release_id WHERE sr.snapshot_id=?
+                    ON r.release_id=sr.release_id JOIN bid_release_effective_reference ref
+                    ON ref.release_id=r.release_id WHERE sr.snapshot_id=?
                     ORDER BY sr.incorporation_sequence""",
                     (snapshot["snapshot_id"],),
                 ).fetchall()
             ]
+            # A reference confirmed after publication is a label correction, not a basis
+            # change (the snapshot hash covers releases and exact documents only), so it
+            # never forces a new snapshot; it is flagged so readers can see the label moved.
+            for release in releases:
+                confirmed_at = release.get("reference_confirmed_at")
+                release["reference_confirmed_after_publication"] = bool(
+                    confirmed_at and str(confirmed_at) > str(snapshot["created_at"])
+                )
             documents = [
                 _dict(row)
                 for row in conn.execute(
                     """SELECT d.document_number,d.control_title,v.version_label,
-                    v.document_version_id,sd.basis_role,r.exact_customer_reference
+                    v.document_version_id,sd.basis_role,
+                    ref.effective_reference AS exact_customer_reference
                     FROM bid_basis_snapshot_documents sd JOIN documents d ON d.id=sd.document_id
                     JOIN document_versions v ON v.document_version_id=sd.document_version_id
                     JOIN bid_received_releases r ON r.release_id=sd.source_release_id
+                    JOIN bid_release_effective_reference ref ON ref.release_id=r.release_id
                     WHERE sd.snapshot_id=? ORDER BY lower(d.control_title),d.id""",
                     (snapshot["snapshot_id"],),
                 ).fetchall()
@@ -2031,9 +2542,10 @@ class BidPackageRepository:
                 _dict(row)
                 for row in conn.execute(
                     """SELECT d.directive_type,d.description,d.materiality,disp.status,
-                    disp.rationale,r.exact_customer_reference
+                    disp.rationale,ref.effective_reference AS exact_customer_reference
                     FROM bid_basis_snapshot_releases sr JOIN bid_received_releases r
-                    ON r.release_id=sr.release_id JOIN bid_addendum_directives d
+                    ON r.release_id=sr.release_id JOIN bid_release_effective_reference ref
+                    ON ref.release_id=r.release_id JOIN bid_addendum_directives d
                     ON d.release_id=r.release_id AND NOT EXISTS(SELECT 1
                     FROM bid_addendum_directives newer
                     WHERE newer.supersedes_directive_id=d.directive_id)
@@ -2047,10 +2559,11 @@ class BidPackageRepository:
             acknowledgements = [
                 _dict(row)
                 for row in conn.execute(
-                    """SELECT r.exact_customer_reference,a.event_type,
+                    """SELECT ref.effective_reference AS exact_customer_reference,a.event_type,
                     a.acknowledgement_reference,a.recorded_at
                     FROM bid_basis_snapshot_releases sr JOIN bid_received_releases r
-                    ON r.release_id=sr.release_id JOIN bid_release_acknowledgement_events a
+                    ON r.release_id=sr.release_id JOIN bid_release_effective_reference ref
+                    ON ref.release_id=r.release_id JOIN bid_release_acknowledgement_events a
                     ON a.release_id=r.release_id AND NOT EXISTS(SELECT 1 FROM
                     bid_release_acknowledgement_events newer
                     WHERE newer.supersedes_event_id=a.acknowledgement_event_id)

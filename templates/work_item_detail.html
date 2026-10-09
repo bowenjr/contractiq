@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Edit {{ item.title }} — ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
-<body><main class="page-shell editor-shell">{% set current_nav = 'my-work' %}{% include '_primary_navigation.html' %}<p class="breadcrumbs"><a href="{{ back_href }}">← Back to My Work</a></p><header class="page-heading"><div><p class="eyebrow">Authoritative work record</p><h1>Edit work item</h1><p class="muted">{{ item.work_item_id }} · Version {{ item.version }}</p></div></header>
+<body><main class="page-shell editor-shell">{% set current_nav = 'my-work' %}{% include '_primary_navigation.html' %}<p class="breadcrumbs"><a href="{{ back_href }}">← Back to My Work</a></p><header class="page-heading"><div><p class="eyebrow">Work record</p><h1>Edit work item</h1><p class="muted">{{ item.work_item_id }} · Version {{ item.version }}</p></div></header>
 <section class="card">{% if error %}<div class="alert" role="alert">{{ error }}</div>{% endif %}
 <form method="post" action="/my-work/{{ item.work_item_id }}{% if editor_query %}?{{ editor_query }}{% endif %}"><input type="hidden" name="expected_version" value="{{ item.version }}"><div class="grid">
 <div class="field full"><label for="title">Title</label><input id="title" name="title" required maxlength="300" value="{{ values.title or '' }}"></div>

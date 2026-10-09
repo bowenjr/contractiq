@@ -8,12 +8,14 @@ stored evidence and never claims a document's contents were analyzed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from core.bid_package_intake import (
     AnalysisEligibility,
     ClassificationMethod,
     ContentForm,
+    GoverningDisposition,
     ReleaseType,
 )
 
@@ -57,9 +59,88 @@ _CONTENT_FORM_LABELS = {
 
 _ELIGIBILITY_LABELS = {
     AnalysisEligibility.NOT_ASSESSED.value: "Not yet decided",
-    AnalysisEligibility.ELIGIBLE.value: "Include",
+    AnalysisEligibility.ELIGIBLE.value: "Include for analysis",
     AnalysisEligibility.EXCLUDED.value: "Exclude",
 }
+
+_GOVERNING_LABELS = {
+    GoverningDisposition.GOVERNING.value: "Governing Bid Basis source",
+    GoverningDisposition.NOT_GOVERNING.value: "Not a governing source",
+    GoverningDisposition.UNSET.value: "Not selected as governing",
+}
+
+RELEASE_REVIEW_NOTICE_CODES = frozenset(
+    {
+        "received",
+        "analysis_included",
+        "analysis_excluded",
+        "analysis_undecided",
+        "governing_selected",
+        "governing_removed",
+        "none_selected",
+    }
+)
+
+
+def release_review_notice(
+    code: str, count: int, review_remaining: int, changed: int | None = None
+) -> str | None:
+    """Render a whitelisted release-review result without reflecting query-string text."""
+    if changed is not None:
+        # (verb, tail, already-state) per code; governing codes omit the review-remaining sentence.
+        changed_parts = {
+            "analysis_included": ("Included", " for analysis", "Included for analysis"),
+            "analysis_excluded": ("Excluded", " from analysis", "Excluded from analysis"),
+            "analysis_undecided": ("Marked", " as Not yet decided", "Not yet decided"),
+            "governing_selected": (
+                "Selected",
+                " as governing Bid Basis sources",
+                "selected as governing Bid Basis sources",
+            ),
+            "governing_removed": (
+                "Removed",
+                " from the governing Bid Basis sources",
+                "not governing Bid Basis sources",
+            ),
+        }
+        parts = changed_parts.get(code)
+        if parts is not None:
+            verb, tail, state = parts
+            if changed == 0:
+                message = f"No change: all {count} selected file(s) were already {state}."
+            else:
+                message = (
+                    f"{verb} {count} file(s){tail}: {changed} changed, "
+                    f"{count - changed} already set."
+                )
+            if code in {"analysis_included", "analysis_excluded", "analysis_undecided"}:
+                message = f"{message} {review_remaining} file(s) still need a review decision."
+            return message
+    messages = {
+        "received": (
+            f"Received {count} file(s) into managed storage. "
+            "Now choose which files ContractIQ may analyse."
+        ),
+        "analysis_included": (
+            f"Included {count} file(s) for analysis. "
+            f"{review_remaining} file(s) still need a review decision."
+        ),
+        "analysis_excluded": (
+            f"Excluded {count} file(s) from analysis. "
+            f"{review_remaining} file(s) still need a review decision."
+        ),
+        "analysis_undecided": (
+            f"Marked {count} file(s) as Not yet decided. "
+            f"{review_remaining} file(s) still need a review decision."
+        ),
+        "governing_selected": (f"Selected {count} file(s) as governing Bid Basis sources."),
+        "governing_removed": (f"Removed {count} file(s) from the governing Bid Basis sources."),
+        "none_selected": (
+            "No files were selected. Tick one or more files, or use "
+            "'Select all files in this folder', then try again."
+        ),
+    }
+    return messages.get(code)
 
 
 def human_bytes(value: int | float | str | None) -> str:
@@ -92,7 +173,7 @@ def content_form_label(value: str | None) -> str:
 
 
 def eligibility_label(value: str | None) -> str:
-    """Return the business wording for a recorded Bid basis review decision."""
+    """Return the business wording for a recorded analysis-inclusion decision."""
     return _ELIGIBILITY_LABELS.get(str(value or ""), "Not yet reviewed")
 
 
@@ -134,15 +215,23 @@ def proposed_document_title(original_filename: str) -> str:
 
 
 def decorate_release(release: dict[str, Any]) -> dict[str, Any]:
-    """Return the release with presentation fields added; stored evidence is never changed."""
+    """Add presentation fields for the two independent received-file decisions.
+
+    Include/Exclude decides which files analysis and deliverable discovery may use. Separately,
+    an Included file can be selected as a governing Bid Basis source; only such a source needs an
+    exact controlled-version link before the Bid Basis is ready. Stored evidence is never changed.
+    """
     decorated = dict(release)
     files = [dict(item) for item in release.get("files") or []]
     digests: dict[tuple[str, int], int] = {}
     for item in files:
         key = (str(item.get("sha256")), int(item.get("byte_size") or 0))
         digests[key] = digests.get(key, 0) + 1
-    unreviewed: list[str] = []
-    eligible_unlinked: list[str] = []
+    unreviewed: list[dict[str, str]] = []
+    governing_candidates: list[dict[str, object]] = []
+    governing_unlinked: list[dict[str, str]] = []
+    included_count = 0
+    governing_selected_count = 0
     for item in files:
         key = (str(item.get("sha256")), int(item.get("byte_size") or 0))
         item["size_label"] = human_bytes(item.get("byte_size"))
@@ -153,22 +242,50 @@ def decorate_release(release: dict[str, Any]) -> dict[str, Any]:
         )
         item["has_duplicate"] = digests[key] > 1
         item["proposed_title"] = proposed_document_title(str(item.get("original_filename") or ""))
+        governing_disposition = str(
+            item.get("governing_disposition") or GoverningDisposition.UNSET.value
+        )
+        if governing_disposition not in _GOVERNING_LABELS:
+            governing_disposition = GoverningDisposition.UNSET.value
+        item["governing_disposition"] = governing_disposition
+        item["governing_label"] = _GOVERNING_LABELS[governing_disposition]
+        item["is_governing"] = governing_disposition == GoverningDisposition.GOVERNING.value
         path = str(item.get("original_relative_path") or item.get("original_filename") or "")
+        file_id = str(item.get("file_id") or "")
         eligibility = str(item.get("analysis_eligibility") or "")
         if eligibility == AnalysisEligibility.NOT_ASSESSED.value:
-            unreviewed.append(path)
-        elif eligibility == AnalysisEligibility.ELIGIBLE.value and not item.get(
-            "document_version_id"
-        ):
-            eligible_unlinked.append(path)
+            unreviewed.append({"file_id": file_id, "path": path})
+        elif eligibility == AnalysisEligibility.ELIGIBLE.value:
+            included_count += 1
+            if item["is_governing"]:
+                governing_selected_count += 1
+                if not item.get("document_version_id"):
+                    governing_unlinked.append(
+                        {"file_id": file_id, "path": path, "proposed_title": item["proposed_title"]}
+                    )
+            else:
+                governing_candidates.append(
+                    {
+                        "file_id": file_id,
+                        "path": path,
+                        "governing_event_id": item.get("governing_event_id"),
+                    }
+                )
     decorated["files"] = files
     decorated["file_groups"] = group_received_files(files)
     decorated["is_addendum"] = is_addendum_release(release.get("release_type"))
     decorated["file_count"] = len(files)
     decorated["unreviewed_files"] = unreviewed
-    decorated["eligible_unlinked_files"] = eligible_unlinked
+    decorated["governing_candidates"] = governing_candidates
+    decorated["governing_unlinked_files"] = governing_unlinked
+    # Compatibility for the existing intake template until its governing controls are migrated.
+    decorated["eligible_unlinked_files"] = governing_unlinked
     decorated["outstanding_summary"] = outstanding_summary(
-        len(files), unreviewed, eligible_unlinked
+        len(files),
+        unreviewed,
+        governing_unlinked,
+        included_count=included_count,
+        governing_selected_count=governing_selected_count,
     )
     return decorated
 
@@ -241,27 +358,38 @@ def group_received_files(files: list[dict[str, Any]]) -> tuple[dict[str, Any], .
 
 def outstanding_summary(
     file_count: int,
-    unreviewed: list[str],
-    eligible_unlinked: list[str],
-) -> tuple[str, ...]:
-    """State what stands between this release and the Bid basis, without record identifiers."""
-    lines: list[str] = []
-    if unreviewed:
-        lines.append(
-            f"{len(unreviewed)} of {file_count} received file(s) have not been reviewed yet. "
-            "Each one is marked below."
-        )
-    if eligible_unlinked:
-        lines.append(
-            f"{len(eligible_unlinked)} reviewed file(s) are not yet under document control. "
-            "Use 'Put under document control' on each one."
-        )
-    return tuple(lines)
+    unreviewed: Sequence[object],
+    governing_unlinked: Sequence[object],
+    *,
+    included_count: int = 0,
+    governing_selected_count: int = 0,
+) -> dict[str, object]:
+    """Report the independent analysis-discovery and governing-Bid-Basis readiness facts.
+
+    Discovery is ready as soon as at least one file is Included; undecided files remain outside
+    analysis until separately Included. Bid Basis confirmation still needs every file reviewed,
+    at least one Included file explicitly selected as governing, and every selected governing
+    source linked to an exact controlled version
+    (`BidPackageRepository._release_incorporation_issues` is the actual control gate).
+    """
+    all_reviewed = not unreviewed
+    return {
+        "review_total": file_count,
+        "review_remaining": len(unreviewed),
+        "all_reviewed": all_reviewed,
+        "governing_sources_pending": len(governing_unlinked),
+        "all_governing_sources_controlled": not governing_unlinked,
+        "included_count": included_count,
+        "governing_selected_count": governing_selected_count,
+        "discovery_ready": included_count > 0,
+        "basis_ready": (all_reviewed and governing_selected_count > 0 and not governing_unlinked),
+    }
 
 
 __all__ = [
     "ADDENDUM_RELEASE_TYPES",
     "DIRECTIVE_TYPE_CHOICES",
+    "RELEASE_REVIEW_NOTICE_CODES",
     "content_form_label",
     "decorate_release",
     "directive_type_label",
@@ -270,6 +398,7 @@ __all__ = [
     "group_received_files",
     "is_addendum_release",
     "outstanding_summary",
+    "release_review_notice",
     "proposed_document_title",
     "review_status_label",
     "shows_confidence",

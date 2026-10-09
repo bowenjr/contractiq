@@ -5,10 +5,19 @@ Base URL and timeout are read from config.json at the project root.
 """
 
 import json
+from dataclasses import dataclass
 import requests
 from requests.adapters import HTTPAdapter
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+
+@dataclass(frozen=True)
+class StructuredReply:
+    """Assistant text plus the server's finish reason for one completion."""
+    content: str
+    finish_reason: str | None
+
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 
@@ -116,6 +125,63 @@ class LMStudioClient:
         messages = [{"role": "user", "content": prompt}]
         return self.chat(messages, temperature, max_tokens, system_prompt or None,
                          context_label=context_label, timeout=timeout)
+
+    def complete_structured(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        *,
+        temperature: float = 0.05,
+        max_tokens: int = 4096,
+        extra_body: Optional[Dict[str, Any]] = None,  # noqa: UP006, UP045
+        context_label: Optional[str] = None,  # noqa: UP045
+        timeout: Optional[int] = None,  # noqa: UP045
+    ) -> StructuredReply:
+        """Send one prompt and return assistant text with its finish reason."""
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        payload.update(extra_body or {})
+
+        chars = sum(len(m.get("content", "")) for m in messages)
+        read_timeout = timeout if timeout is not None else self.read_timeout
+
+        try:
+            resp = self._session.post(
+                self.api_url,
+                json=payload,
+                timeout=(self.connect_timeout, read_timeout),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            choice = data["choices"][0]
+            return StructuredReply(
+                content=choice["message"].get("content") or "",
+                finish_reason=choice.get("finish_reason"),
+            )
+        except requests.exceptions.ConnectionError:
+            raise ConnectionError(  # noqa: B904
+                f"Lost connection to the model endpoint at {self.base_url}. "
+                "This may be caused by the computer sleeping or a network interruption. "
+                "Please ensure the model endpoint is running and re-analyse the document."
+            )
+        except requests.exceptions.Timeout:
+            label = context_label or "request"
+            raise TimeoutError(  # noqa: B904
+                f"Lost connection to the model endpoint on {label} — no data received for "
+                f"{read_timeout}s. The prompt was {chars:,} chars. "
+                "This is usually caused by the computer sleeping or a network interruption. "
+                "Please ensure the model endpoint is running and re-analyse the document."
+            )
+        except Exception as e:
+            raise RuntimeError(f"The model endpoint API error: {str(e)}")  # noqa: B904
 
     def complete_json(
         self,

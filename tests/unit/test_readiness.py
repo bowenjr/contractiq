@@ -51,6 +51,10 @@ def test_all_met_gates_are_clear() -> None:
     assert report.blockers == []
     assert report.gates_passed == list(Gate)
     assert report.gates_blocked == []
+    assert report.development_gate_label == (
+        "Development gate check: Clear (G0–G5 conditions assessed so far)"
+    )
+    assert "Bid is CLEAR" not in report.summary
 
 
 def test_material_scope_gap_holds_bid() -> None:
@@ -103,6 +107,14 @@ def test_not_assessable_conditions_are_advisory_not_blockers() -> None:
         "g5.mandatory_requirements_complete",
         "g7.award_matches_offer",
     ]
+    assert report.not_yet_assessed == (
+        "supplier coverage",
+        "requirements",
+        "award reconciliation",
+    )
+    assert "Not yet assessed: supplier coverage, requirements, award reconciliation" in (
+        report.presentation_summary
+    )
     assert "supplier" in report.advisory
     assert "compliance_matrix" in report.advisory
     assert "reconciliation" in report.advisory
@@ -123,7 +135,7 @@ def test_override_clears_only_blocker_but_keeps_risk_visible() -> None:
     assert blocker.override_note == "Accept open interface risk"
 
 
-def test_overriding_one_of_multiple_blockers_leaves_hold() -> None:
+def test_issue_blocker_does_not_drive_development_verdict() -> None:
     results = [
         _result(Gate.G2, _condition("g2.no_scope_gaps", ConditionState.UNMET)),
         _result(Gate.G4, _condition("g4.margin_approved", ConditionState.UNMET)),
@@ -135,9 +147,12 @@ def test_overriding_one_of_multiple_blockers_leaves_hold() -> None:
         now=NOW,
     )
 
-    assert report.verdict == ReadinessVerdict.HOLD
-    assert [blocker.overridden for blocker in report.blockers] == [True, False]
-    assert report.gates_blocked == [Gate.G4]
+    assert report.verdict == ReadinessVerdict.CLEAR
+    assert [blocker.overridden for blocker in report.blockers] == [True]
+    assert [blocker.condition_id for blocker in report.issue_blockers] == ["g4.margin_approved"]
+    assert report.gates_blocked == []
+    assert report.pending_before_issue_count == 1
+    assert "Before issue: 1 approval(s) pending." in report.presentation_summary
 
 
 def test_same_inputs_and_time_produce_identical_report() -> None:

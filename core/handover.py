@@ -17,6 +17,7 @@ from typing import cast
 
 from core.database import Database
 from core.export_controls import csv_safe_cell
+from core.proposal_exchange import ProposalReadinessAssessment
 
 
 def _present(value: object | None) -> bool:
@@ -146,10 +147,12 @@ class BidHandoverService:
         *,
         now_factory: Callable[[], datetime] | None = None,
         proposal_issue_loader: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
+        proposal_readiness_loader: Callable[[str], ProposalReadinessAssessment] | None = None,
     ) -> None:
         self.db = db
         self._now = now_factory or (lambda: datetime.now(UTC))
         self._proposal_issue_loader = proposal_issue_loader
+        self._proposal_readiness_loader = proposal_readiness_loader
 
     def _conn(self) -> sqlite3.Connection:
         return cast(sqlite3.Connection, self.db._conn())
@@ -221,6 +224,8 @@ class BidHandoverService:
                     conn,
                     """SELECT approval_id,approval_type,required,obtained,authority,evidence_ref,
                     decision,decided_at,provenance_json FROM approvals WHERE bid_id=?
+                    AND NOT EXISTS (SELECT 1 FROM approvals _later
+                    WHERE _later.supersedes_approval_id = approvals.approval_id)
                     ORDER BY approval_type,approval_id""",
                     (bid_id,),
                 ),
@@ -290,6 +295,14 @@ class BidHandoverService:
             sections["issued_proposals"] = tuple(self._proposal_issue_loader(bid_id))
 
         blockers = list(gate_blockers)
+        if self._proposal_readiness_loader is not None:
+            proposal_readiness = self._proposal_readiness_loader(bid_id)
+            blockers.extend(blocker.message for blocker in proposal_readiness.blockers)
+            if not proposal_readiness.approvals_clear:
+                blockers.append(
+                    "Required senior approvals are not clear; publish policy, select pricing "
+                    "basis, and obtain every derived approval before handover"
+                )
         for row in sections["manufacturer"]:
             if row["handover_readiness"] == "Not ready":
                 blockers.extend(cast(str, row["handover_blocking_reasons"]).split(" | "))

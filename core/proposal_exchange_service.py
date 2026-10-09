@@ -14,12 +14,15 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 from uuid import uuid4
 
 from core.bid_package_intake import IntakeAttention
 from core.bid_repository import BidRepository
 from core.bid_workflow import blocker_heading, intake_heading, proposal_heading
 from core.database import Database
+from core.enums import BidStatus
+from core.gate_service import assess_bid_senior_approvals
 from core.proposal_exchange import (
     CustomerIssueCommand,
     ImportedArtifact,
@@ -46,6 +49,7 @@ from core.proposal_exchange_contract import (
     validate_manifest,
     validate_package,
 )
+from core.readiness_phases import BlockerPhase
 from core.readiness_service import evaluate_readiness
 
 MIGRATION_ID = "ops_09_proposal_exchange_issue_control_v1"
@@ -131,7 +135,9 @@ class ProposalExchangeService:
             contract_version TEXT NOT NULL,source_projection_sha256 TEXT NOT NULL,
             canonical_sha256 TEXT NOT NULL,canonical_package_json TEXT NOT NULL,
             area_hashes_json TEXT NOT NULL,supersedes_export_id TEXT,created_by TEXT NOT NULL,
-            created_at TEXT NOT NULL,FOREIGN KEY(bid_id) REFERENCES bids(bid_id),
+            created_at TEXT NOT NULL,is_draft INTEGER NOT NULL DEFAULT 0,
+            pending_before_issue_json TEXT NOT NULL DEFAULT '[]',
+            FOREIGN KEY(bid_id) REFERENCES bids(bid_id),
             FOREIGN KEY(supersedes_export_id) REFERENCES proposal_exchange_exports(export_id))""",
             """CREATE TABLE IF NOT EXISTS proposal_generation_manifest_receipts(
             receipt_id TEXT PRIMARY KEY,export_id TEXT NOT NULL,bid_id TEXT NOT NULL,
@@ -157,7 +163,7 @@ class ProposalExchangeService:
             UNIQUE(receipt_id))""",
             """CREATE TABLE IF NOT EXISTS proposal_candidate_approvals(
             link_id TEXT PRIMARY KEY,candidate_id TEXT NOT NULL,approval_id TEXT,route_id TEXT,
-            linked_at TEXT NOT NULL,linked_by TEXT NOT NULL,
+            linked_at TEXT NOT NULL,linked_by TEXT NOT NULL,pricing_baseline_id TEXT,
             FOREIGN KEY(candidate_id) REFERENCES proposal_issue_candidates(candidate_id),
             FOREIGN KEY(approval_id) REFERENCES approvals(approval_id),
             FOREIGN KEY(route_id) REFERENCES approval_routes(route_id),
@@ -221,6 +227,33 @@ class ProposalExchangeService:
             try:
                 for statement in statements:
                     conn.execute(statement)
+                export_columns = {
+                    str(row["name"])
+                    for row in conn.execute(
+                        "PRAGMA table_info(proposal_exchange_exports)"
+                    ).fetchall()
+                }
+                if "is_draft" not in export_columns:
+                    conn.execute(
+                        "ALTER TABLE proposal_exchange_exports "
+                        "ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "pending_before_issue_json" not in export_columns:
+                    conn.execute(
+                        "ALTER TABLE proposal_exchange_exports ADD COLUMN "
+                        "pending_before_issue_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+                candidate_approval_columns = {
+                    str(row["name"])
+                    for row in conn.execute(
+                        "PRAGMA table_info(proposal_candidate_approvals)"
+                    ).fetchall()
+                }
+                if "pricing_baseline_id" not in candidate_approval_columns:
+                    conn.execute(
+                        "ALTER TABLE proposal_candidate_approvals "
+                        "ADD COLUMN pricing_baseline_id TEXT"
+                    )
                 conn.execute(
                     "INSERT OR IGNORE INTO proposal_exchange_schema_migrations VALUES(?,?)",
                     (MIGRATION_ID, self._now().isoformat()),
@@ -322,7 +355,10 @@ class ProposalExchangeService:
                 (bid_id,),
             )
             approval_rows = self._rows(
-                conn, "SELECT * FROM approvals WHERE bid_id=? ORDER BY approval_id", (bid_id,)
+                conn,
+                "SELECT * FROM approvals WHERE bid_id=? AND NOT EXISTS (SELECT 1 FROM approvals _later "
+                "WHERE _later.supersedes_approval_id = approvals.approval_id) ORDER BY approval_id",
+                (bid_id,),
             )
             decision_rows = self._rows(
                 conn, "SELECT * FROM decision_cases WHERE bid_id=? ORDER BY case_id", (bid_id,)
@@ -885,6 +921,12 @@ class ProposalExchangeService:
     def _base_blockers(self, bid_id: str, package: JsonObject) -> list[ProposalBlocker]:
         blockers: list[ProposalBlocker] = []
 
+        quoted_bid_id = quote(bid_id, safe="")
+        proposal_return = f"/bids/{quoted_bid_id}/proposal-issue-control"
+        owner_decision_path = (
+            f"/bids/{quoted_bid_id}/owner-decision?return={quote(proposal_return, safe='')}"
+        )
+
         def add(
             code: str,
             area: str,
@@ -892,6 +934,7 @@ class ProposalExchangeService:
             destination: str,
             record_id: str | None = None,
             heading: str | None = None,
+            phase: BlockerPhase = BlockerPhase.DEVELOPMENT,
         ) -> None:
             blockers.append(
                 ProposalBlocker(
@@ -901,11 +944,12 @@ class ProposalExchangeService:
                     destination=destination,
                     record_id=record_id,
                     heading=heading or proposal_heading(code, area),
+                    phase=phase,
                 )
             )
 
         gate_report = evaluate_readiness(self.bid_repository, self.db, bid_id)
-        for gate_blocker in gate_report.blockers:
+        for gate_blocker in gate_report.blockers + gate_report.issue_blockers:
             if not gate_blocker.overridden:
                 section = {
                     "g0": "",
@@ -922,9 +966,42 @@ class ProposalExchangeService:
                     # The gate states each condition positively; the blocker line
                     # must say what is missing and then give the evaluated evidence.
                     gate_blocker.detail.strip() or gate_blocker.description,
-                    f"/bids/{bid_id}{section}",
+                    (
+                        owner_decision_path
+                        if gate_blocker.condition_id == "g1.owner_pursuit_decided"
+                        else f"/decisions?bid_id={bid_id}#authority-policies"
+                        if gate_blocker.condition_id == "g6.senior_approvals_current"
+                        and "APPROVAL_POLICY_NOT_CONFIGURED" in gate_blocker.detail
+                        else f"/bids/{bid_id}{section}"
+                    ),
                     heading=blocker_heading(gate_blocker.condition_id, gate_blocker.description),
+                    phase=gate_blocker.phase,
                 )
+        bid = self.bid_repository.get_bid(bid_id)
+        if bid is not None and bid.status is BidStatus.NO_BID:
+            reason = "No owner-decision reason is available."
+            with self._conn() as conn:
+                owner_decision_table = conn.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='bid_owner_decisions'"
+                ).fetchone()
+                if owner_decision_table is not None:
+                    decision = conn.execute(
+                        """SELECT current.reason FROM bid_owner_decisions current
+                        WHERE current.bid_id=? AND current.decision='DO_NOT_PURSUE'
+                        AND NOT EXISTS(SELECT 1 FROM bid_owner_decisions newer
+                            WHERE newer.supersedes_decision_id=current.decision_id)
+                        ORDER BY current.decided_at DESC,current.decision_id DESC LIMIT 1""",
+                        (bid_id,),
+                    ).fetchone()
+                    if decision is not None:
+                        reason = str(decision["reason"])
+            add(
+                "BID_STOPPED",
+                "Owner decision",
+                f"Bid is stopped by owner decision: {reason} "
+                "Record a new PURSUE decision to continue.",
+                owner_decision_path,
+            )
         if self._intake_blocker_loader is not None:
             for intake_blocker in self._intake_blocker_loader(bid_id):
                 add(
@@ -936,6 +1013,7 @@ class ProposalExchangeService:
                     heading=intake_heading(
                         intake_blocker.code,
                         intake_blocker.code.replace("_", " ").capitalize(),
+                        getattr(intake_blocker, "release_type", None),
                     ),
                 )
         requirements = cast(list[JsonObject], package["requirements"])
@@ -1129,13 +1207,6 @@ class ProposalExchangeService:
                 "No accountable proposal-family owner is recorded.",
                 f"/proposals?bid_id={bid_id}#author",
             )
-        if package["selected_pricing_scenario"] is None:
-            add(
-                "MISSING_SELECTED_PRICING_SCENARIO",
-                "Pricing",
-                "No accepted pricing-scenario baseline is selected.",
-                f"/commercial-scenarios?bid_id={bid_id}",
-            )
         if not deliveries:
             add(
                 "MISSING_DELIVERY_COMMITMENT",
@@ -1161,7 +1232,10 @@ class ProposalExchangeService:
         with self._conn() as conn:
             legacy = self._rows(
                 conn,
-                "SELECT approval_id,authority,decision,decided_at,required,obtained FROM approvals WHERE bid_id=? ORDER BY approval_id",
+                "SELECT approval_id,authority,decision,decided_at,required,obtained,"
+                "pricing_baseline_id FROM approvals WHERE bid_id=? AND NOT EXISTS "
+                "(SELECT 1 FROM approvals _later WHERE _later.supersedes_approval_id "
+                "= approvals.approval_id) ORDER BY approval_id",
                 (bid_id,),
             )
             routes = self._rows(
@@ -1177,6 +1251,7 @@ class ProposalExchangeService:
                 "decided_at": row["decided_at"],
                 "clear": not bool(row["required"]) or bool(row["obtained"]),
                 "kind": "approval",
+                "pricing_baseline_id": row["pricing_baseline_id"],
             }
             for row in legacy
         ]
@@ -1188,6 +1263,7 @@ class ProposalExchangeService:
                 "decided_at": row["submitted_at"],
                 "clear": row["state"] == "APPROVED",
                 "kind": "route",
+                "pricing_baseline_id": None,
             }
             for row in routes
         )
@@ -1212,6 +1288,10 @@ class ProposalExchangeService:
             canonical_sha256=str(row["canonical_sha256"]),
             canonical_package_json=str(row["canonical_package_json"]),
             area_hashes=cast(dict[str, str], json.loads(str(row["area_hashes_json"]))),
+            is_draft=bool(row["is_draft"]),
+            pending_before_issue=tuple(
+                cast(list[str], json.loads(str(row["pending_before_issue_json"])))
+            ),
             supersedes_export_id=_text(row["supersedes_export_id"]),
             created_by=str(row["created_by"]),
             created_at=datetime.fromisoformat(str(row["created_at"])),
@@ -1330,6 +1410,7 @@ class ProposalExchangeService:
 
     def assess(self, bid_id: str) -> ProposalReadinessAssessment:
         """Compose existing gate readiness with OPS-09 exchange and issue evidence."""
+        quoted_bid_id = quote(bid_id, safe="")
         package = self.current_package_projection(bid_id)
         blockers = self._base_blockers(bid_id, package)
         try:
@@ -1352,26 +1433,72 @@ class ProposalExchangeService:
             for area, digest in current_hashes.items()
             if latest_export is not None and latest_export.area_hashes.get(area) != digest
         )
-        approvals = self._approvals(bid_id)
-        approvals_clear = all(bool(item["clear"]) for item in approvals)
+        senior_approvals = assess_bid_senior_approvals(
+            self.bid_repository, self.db, bid_id, as_of=self._now()
+        )
+        approvals_clear = senior_approvals.clear
+        pending_before_issue = tuple(
+            blocker.message
+            for blocker in blockers
+            if blocker.phase is BlockerPhase.ISSUE and not blocker.message.isspace()
+        )
+        development_blockers = [
+            blocker for blocker in blockers if blocker.phase is BlockerPhase.DEVELOPMENT
+        ]
+        stopped = next((blocker for blocker in blockers if blocker.code == "BID_STOPPED"), None)
+        if stopped is not None:
+            return ProposalReadinessAssessment(
+                bid_id=bid_id,
+                status=ProposalControlStatus.BLOCKED,
+                blockers=tuple(blockers),
+                pending_before_issue=pending_before_issue,
+                changed_areas=changed,
+                current_export_id=latest_export.export_id if latest_export else None,
+                candidate_id=latest_candidate.candidate_id if latest_candidate else None,
+                candidate_version=latest_candidate.version if latest_candidate else None,
+                approvals_clear=approvals_clear,
+                next_action=stopped.message,
+                next_action_path=stopped.destination,
+            )
         if latest_export is None:
             status = (
                 ProposalControlStatus.BLOCKED
-                if blockers
+                if development_blockers
                 else ProposalControlStatus.READY_FOR_EXPORT
             )
-            action = (
-                "Resolve proposal readiness blockers"
-                if blockers
-                else "Prepare Proposal Studio package"
-            )
+            if development_blockers:
+                owner_decision = next(
+                    (
+                        blocker
+                        for blocker in development_blockers
+                        if blocker.destination.startswith(f"/bids/{quoted_bid_id}/owner-decision")
+                    ),
+                    None,
+                )
+                action = (
+                    "Record owner decision"
+                    if owner_decision is not None
+                    else "Resolve proposal readiness blockers"
+                )
+                path = (
+                    owner_decision.destination
+                    if owner_decision is not None
+                    else f"/bids/{bid_id}/proposal-issue-control"
+                )
+            elif pending_before_issue:
+                action = "Prepare a draft Proposal Studio package"
+                path = f"/bids/{bid_id}/proposal-issue-control"
+            else:
+                action = "Prepare Proposal Studio package"
+                path = f"/bids/{bid_id}/proposal-issue-control"
             return ProposalReadinessAssessment(
                 bid_id=bid_id,
                 status=status,
                 blockers=tuple(blockers),
+                pending_before_issue=pending_before_issue,
                 approvals_clear=approvals_clear,
                 next_action=action,
-                next_action_path=f"/bids/{bid_id}/proposal-issue-control",
+                next_action_path=path,
             )
         if changed:
             stale = ProposalBlocker(
@@ -1385,6 +1512,7 @@ class ProposalExchangeService:
                 bid_id=bid_id,
                 status=ProposalControlStatus.STALE,
                 blockers=tuple(blockers + [stale]),
+                pending_before_issue=pending_before_issue,
                 changed_areas=changed,
                 current_export_id=latest_export.export_id,
                 candidate_id=latest_candidate.candidate_id if latest_candidate else None,
@@ -1397,9 +1525,10 @@ class ProposalExchangeService:
             return ProposalReadinessAssessment(
                 bid_id=bid_id,
                 status=ProposalControlStatus.BLOCKED
-                if blockers
+                if development_blockers
                 else ProposalControlStatus.EXPORTED,
                 blockers=tuple(blockers),
+                pending_before_issue=pending_before_issue,
                 current_export_id=latest_export.export_id,
                 approvals_clear=approvals_clear,
                 next_action="Import the Proposal Studio generation manifest and artifacts",
@@ -1417,6 +1546,7 @@ class ProposalExchangeService:
                 bid_id=bid_id,
                 status=ProposalControlStatus.SUPERSEDED,
                 blockers=tuple(blockers + [superseded]),
+                pending_before_issue=pending_before_issue,
                 current_export_id=latest_export.export_id,
                 candidate_id=latest_candidate.candidate_id,
                 candidate_version=latest_candidate.version,
@@ -1446,7 +1576,12 @@ class ProposalExchangeService:
             path = f"/bids/{bid_id}/proposal-issue-control#record-issue"
         elif blockers or artifact_errors:
             status = ProposalControlStatus.BLOCKED
-            action = "Resolve proposal readiness blockers"
+            only_issue_phase = not development_blockers and not artifact_errors
+            action = (
+                "Obtain the pending senior approvals before approving for issue"
+                if only_issue_phase
+                else "Resolve proposal readiness blockers"
+            )
             path = f"/bids/{bid_id}/proposal-issue-control"
         else:
             status = ProposalControlStatus.AWAITING_APPROVAL
@@ -1456,6 +1591,7 @@ class ProposalExchangeService:
             bid_id=bid_id,
             status=status,
             blockers=tuple(blockers),
+            pending_before_issue=pending_before_issue,
             current_export_id=latest_export.export_id,
             candidate_id=latest_candidate.candidate_id,
             candidate_version=latest_candidate.version,
@@ -1469,18 +1605,29 @@ class ProposalExchangeService:
     def export_package(self, bid_id: str, actor: str) -> tuple[ProposalExportRecord, bool]:
         """Create an immutable export, or replay the latest unchanged export."""
         assessment = self.assess(bid_id)
-        if assessment.blockers and any(
-            blocker.code != "STALE_PROPOSAL_FACTS" for blocker in assessment.blockers
-        ):
+        development_blockers = [
+            blocker
+            for blocker in assessment.blockers
+            if blocker.phase is BlockerPhase.DEVELOPMENT and blocker.code != "STALE_PROPOSAL_FACTS"
+        ]
+        if development_blockers:
             raise ValueError(
-                "Proposal package is blocked; resolve the listed readiness items first"
+                "Proposal package is blocked by development readiness; resolve: "
+                + "; ".join(blocker.message for blocker in development_blockers)
             )
+        pending_before_issue = assessment.pending_before_issue
+        is_draft = bool(pending_before_issue)
         now = self._now()
         probe = self._build_package(bid_id, f"PPK-{bid_id}-PROBE", now)
         hashes = area_hashes(probe)
         projection_hash = canonical_sha256(hashes)
         latest = self._latest_export(bid_id)
-        if latest is not None and latest.source_projection_sha256 == projection_hash:
+        if (
+            latest is not None
+            and latest.source_projection_sha256 == projection_hash
+            and latest.is_draft == is_draft
+            and latest.pending_before_issue == pending_before_issue
+        ):
             return latest, True
         export_id = f"PEX-{uuid4().hex}"
         package_id = f"PPK-{bid_id}-{uuid4().hex[:16]}"
@@ -1495,6 +1642,8 @@ class ProposalExchangeService:
             canonical_sha256=raw_sha256(canonical),
             canonical_package_json=canonical.decode("utf-8"),
             area_hashes=hashes,
+            is_draft=is_draft,
+            pending_before_issue=pending_before_issue,
             supersedes_export_id=latest.export_id if latest else None,
             created_by=actor,
             created_at=now,
@@ -1503,7 +1652,11 @@ class ProposalExchangeService:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute(
-                    "INSERT INTO proposal_exchange_exports VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    """INSERT INTO proposal_exchange_exports(
+                    export_id,package_id,bid_id,contract_version,source_projection_sha256,
+                    canonical_sha256,canonical_package_json,area_hashes_json,
+                    supersedes_export_id,created_by,created_at,is_draft,
+                    pending_before_issue_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         record.export_id,
                         record.package_id,
@@ -1516,6 +1669,8 @@ class ProposalExchangeService:
                         record.supersedes_export_id,
                         record.created_by,
                         record.created_at.isoformat(),
+                        int(record.is_draft),
+                        json.dumps(record.pending_before_issue),
                     ),
                 )
                 self._audit(
@@ -1527,6 +1682,8 @@ class ProposalExchangeService:
                         "export_id": record.export_id,
                         "package_id": record.package_id,
                         "canonical_sha256": record.canonical_sha256,
+                        "is_draft": record.is_draft,
+                        "pending_before_issue": record.pending_before_issue,
                     },
                 )
                 conn.commit()
@@ -1782,7 +1939,9 @@ class ProposalExchangeService:
                     raise StaleProposalCandidateError("Candidate changed; refresh before approving")
                 for approval in approvals:
                     conn.execute(
-                        "INSERT INTO proposal_candidate_approvals VALUES(?,?,?,?,?,?)",
+                        """INSERT INTO proposal_candidate_approvals(
+                        link_id,candidate_id,approval_id,route_id,linked_at,linked_by,
+                        pricing_baseline_id) VALUES(?,?,?,?,?,?,?)""",
                         (
                             f"PCA-{uuid4().hex}",
                             candidate_id,
@@ -1790,6 +1949,7 @@ class ProposalExchangeService:
                             approval["reference"] if approval["kind"] == "route" else None,
                             now.isoformat(),
                             actor,
+                            approval["pricing_baseline_id"],
                         ),
                     )
                 self._audit(

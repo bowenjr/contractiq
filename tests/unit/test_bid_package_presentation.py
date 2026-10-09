@@ -32,6 +32,8 @@ def _file(**overrides: object) -> dict[str, object]:
         "analysis_eligibility": "NOT_ASSESSED",
         "exclusion_reason": None,
         "duplicate_of_file_id": None,
+        "governing_event_id": None,
+        "governing_disposition": "UNSET",
         "document_version_id": None,
     }
     row.update(overrides)
@@ -103,37 +105,89 @@ def test_exclusion_state_is_derived_from_the_recorded_decision() -> None:
     assert [item["is_excluded"] for item in release["files"]] == [False, True]
 
 
-def test_outstanding_work_is_counted_and_never_names_a_record_identifier() -> None:
+def test_review_remaining_and_document_control_pending_are_reported_separately() -> None:
+    """Review-decisions-remaining and governing-sources-pending are two different gates for two
+    different steps (see `outstanding_summary`'s docstring) — this asserts they are never
+    collapsed into one combined "still to do" fact, which previously made every included file
+    look like mandatory work to finish the review step."""
     release = decorate_release(
         {
             "release_type": "INITIAL_PACKAGE",
             "files": [
                 _file(file_id="RF-1"),
-                _file(file_id="RF-2", analysis_eligibility="ELIGIBLE"),
+                _file(
+                    file_id="RF-2",
+                    analysis_eligibility="ELIGIBLE",
+                    governing_disposition="GOVERNING",
+                ),
                 _file(
                     file_id="RF-3",
                     analysis_eligibility="ELIGIBLE",
+                    governing_disposition="GOVERNING",
                     document_version_id="DV-9",
                 ),
             ],
         }
     )
-    summary = " ".join(release["outstanding_summary"])
-    assert "1 of 3 received file(s) have not been reviewed" in summary
-    assert "1 reviewed file(s) are not yet under document control" in summary
-    for identifier in ("RF-1", "RF-2", "RF-3", "DV-9"):
-        assert identifier not in summary
+    summary = release["outstanding_summary"]
+    assert summary["review_total"] == 3
+    assert summary["review_remaining"] == 1
+    assert summary["all_reviewed"] is False
+    assert summary["governing_sources_pending"] == 1
+    assert summary["all_governing_sources_controlled"] is False
+    assert summary["included_count"] == 2
+    assert summary["governing_selected_count"] == 2
+    assert summary["discovery_ready"] is True
+    assert summary["basis_ready"] is False
+    # the pending-control file (RF-2) carries its own identity for the bulk-control form, but
+    # that identity is form plumbing, not prose shown to a business user
+    assert [item["file_id"] for item in release["eligible_unlinked_files"]] == ["RF-2"]
 
 
-def test_a_fully_reviewed_release_states_nothing_outstanding() -> None:
+def test_review_being_complete_is_reported_even_with_document_control_still_pending() -> None:
+    """A release with zero unreviewed files but outstanding document-control work must still
+    report `all_reviewed=True` — review completion and document-control completion are
+    independent facts, not one combined blocker."""
+    release = decorate_release(
+        {
+            "release_type": "INITIAL_PACKAGE",
+            "files": [
+                _file(
+                    analysis_eligibility="ELIGIBLE",
+                    governing_disposition="GOVERNING",
+                )
+            ],
+        }
+    )
+    summary = release["outstanding_summary"]
+    assert summary["all_reviewed"] is True
+    assert summary["governing_sources_pending"] == 1
+    assert summary["all_governing_sources_controlled"] is False
+    assert summary["discovery_ready"] is True
+    assert summary["basis_ready"] is False
+
+
+def test_a_fully_reviewed_and_controlled_release_states_nothing_outstanding() -> None:
     release = decorate_release(
         {
             "release_type": "INITIAL_PACKAGE",
             "files": [_file(analysis_eligibility="EXCLUDED", exclusion_reason="Scrap")],
         }
     )
-    assert release["outstanding_summary"] == ()
-    assert outstanding_summary(0, [], []) == ()
+    summary = release["outstanding_summary"]
+    assert summary["all_reviewed"] is True
+    assert summary["all_governing_sources_controlled"] is True
+    assert outstanding_summary(0, [], []) == {
+        "review_total": 0,
+        "review_remaining": 0,
+        "all_reviewed": True,
+        "governing_sources_pending": 0,
+        "all_governing_sources_controlled": True,
+        "included_count": 0,
+        "governing_selected_count": 0,
+        "discovery_ready": False,
+        "basis_ready": False,
+    }
 
 
 def test_only_an_addendum_class_release_can_carry_directives() -> None:
@@ -172,7 +226,7 @@ def test_review_status_never_reads_as_a_system_failure() -> None:
             "files": [_file(analysis_eligibility="ELIGIBLE", content_form="DRAWING")],
         }
     )
-    assert reviewed["files"][0]["review_status"] == "Include · Drawing"
+    assert reviewed["files"][0]["review_status"] == "Include for analysis · Drawing"
 
 
 def test_a_document_title_is_proposed_from_the_filename_only() -> None:

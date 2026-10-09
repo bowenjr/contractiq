@@ -2,7 +2,7 @@
 
 MATERIALITY_BY_CONDITION: dict[str, bool] = {
     "g0.bid_complete": True,
-    "g1.bid_no_bid_approved": True,
+    "g1.owner_pursuit_decided": True,
     "g2.no_scope_gaps": True,
     "g2.strategy_recorded": True,
     "g3.suppliers_supported": True,
@@ -13,6 +13,7 @@ MATERIALITY_BY_CONDITION: dict[str, bool] = {
     "g5.no_unconfirmed_material": True,
     "g5.prior_gates_passed": True,
     "g6.concessions_approved": True,
+    "g6.senior_approvals_current": True,
     "g7.award_matches_offer": True,
     "g7.handover_accepted": True,
 }

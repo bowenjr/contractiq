@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pricing baseline · {{ bid.project_name }} · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="page-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+{% include '_guided_banner.html' %}
+<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid.bid_id }} — {{ bid_section_label }}</a>{% if return_to %} · <a href="{{ return_to }}">Return to approval task</a>{% endif %}</p>
+<div class="page-heading"><div><p class="eyebrow">Bid pricing</p><h1>Pricing baseline</h1><p class="muted">Create a scenario, calculate an immutable version, record an independent review, then select an accepted version. Margin is calculated from the amounts entered; it is never assumed or entered separately.</p></div></div>
+
+{% if form_error %}<div class="error" role="alert"><strong>The pricing record was not saved.</strong> {{ form_error }}</div>{% endif %}
+
+<section class="card" id="current-baseline">
+  <h2>Currently selected baseline</h2>
+  {% if selected_baseline %}
+  <dl>
+    <dt>Selection</dt><dd>{{ selected_baseline.selection_id }}</dd>
+    <dt>Scenario</dt><dd>{{ selected_baseline.scenario_code }}{% if selected_baseline.version_number %} · version {{ selected_baseline.version_number }}{% endif %} <span class="muted">({{ selected_baseline.scenario_version_id }})</span></dd>
+    <dt>Revenue</dt><dd>{% if selected_baseline.revenue is not none %}{{ selected_baseline.currency }} {{ selected_baseline.revenue }}{% else %}Not available{% endif %}</dd>
+    <dt>Total cost</dt><dd>{% if selected_baseline.total_cost is not none %}{{ selected_baseline.currency }} {{ selected_baseline.total_cost }}{% else %}Not available{% endif %}</dd>
+    <dt>Gross profit</dt><dd>{% if selected_baseline.gross_profit is not none %}{{ selected_baseline.currency }} {{ selected_baseline.gross_profit }}{% else %}Not available{% endif %}</dd>
+    <dt>Gross margin</dt><dd>{{ selected_baseline.gross_margin }}</dd>
+    <dt>Selected</dt><dd>{{ selected_baseline.selected_by }} · {{ selected_baseline.selected_at }}</dd>
+    <dt>Rationale</dt><dd>{{ selected_baseline.rationale }}</dd>
+  </dl>
+  {% if return_to %}<p><a class="button" href="{{ return_to }}">Continue to the approval task</a></p>{% endif %}
+  {% else %}
+  <p class="warning"><strong>No pricing baseline has been selected for this Bid.</strong> Complete the four controlled steps below. A senior approval cannot be recorded until an accepted scenario version is selected.</p>
+  {% endif %}
+</section>
+
+<section class="card" id="create-family">
+  <h2>1. Create scenario family</h2>
+  <p class="muted">The family identifies the commercial purpose and accountable owner. No financial value is inferred here.</p>
+  <form method="post" action="/bids/{{ bid.bid_id }}/pricing-baseline/families" class="form-grid">
+    {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+    <label>Scenario code<input name="code" required value="{{ entered.code if active_form == 'family' else '' }}">{% if active_form == 'family' and field_errors.code %}<span class="error">{{ field_errors.code }}</span>{% endif %}</label>
+    <label>Purpose<select name="purpose" required><option value="">Choose purpose</option>{% for purpose in scenario_purposes %}<option value="{{ purpose.value }}"{% if active_form == 'family' and entered.purpose == purpose.value %} selected{% endif %}>{{ purpose.value|replace('_',' ')|title }}</option>{% endfor %}</select>{% if active_form == 'family' and field_errors.purpose %}<span class="error">{{ field_errors.purpose }}</span>{% endif %}</label>
+    <label>Title<input name="title" required value="{{ entered.title if active_form == 'family' else '' }}">{% if active_form == 'family' and field_errors.title %}<span class="error">{{ field_errors.title }}</span>{% endif %}</label>
+    <label>Owner<input name="owner" required value="{{ entered.owner if active_form == 'family' else '' }}">{% if active_form == 'family' and field_errors.owner %}<span class="error">{{ field_errors.owner }}</span>{% endif %}</label>
+    <label class="wide">Intent<textarea name="intent" required>{{ entered.intent if active_form == 'family' else '' }}</textarea>{% if active_form == 'family' and field_errors.intent %}<span class="error">{{ field_errors.intent }}</span>{% endif %}</label>
+    <div class="wide actions"><button type="submit">Create scenario family</button></div>
+  </form>
+</section>
+
+<section class="card" id="add-version">
+  <h2>2. Add and calculate a version</h2>
+  <p class="muted">Enter exact revenue and cost amounts and a currency for every line. All lines in this browser form must use one currency because no foreign-exchange assumption is collected.</p>
+  {% if families %}
+  <form method="post" action="/bids/{{ bid.bid_id }}/pricing-baseline/versions" class="form-grid">
+    {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+    <label class="wide">Scenario family<select name="family_id" required><option value="">Choose family</option>{% for family in families %}<option value="{{ family.family_id }}"{% if active_form == 'version' and entered.family_id == family.family_id %} selected{% endif %}>{{ family.code }} — {{ family.title }}</option>{% endfor %}</select>{% if active_form == 'version' and field_errors.family_id %}<span class="error">{{ field_errors.family_id }}</span>{% endif %}</label>
+    <fieldset class="wide"><legend>Revenue line</legend><div class="form-grid">
+      <label>Role<input name="revenue_role" required value="{{ entered.revenue_role if active_form == 'version' else '' }}">{% if active_form == 'version' and field_errors.revenue_role %}<span class="error">{{ field_errors.revenue_role }}</span>{% endif %}</label>
+      <label>Amount<input name="revenue_amount" inputmode="decimal" required value="{{ entered.revenue_amount if active_form == 'version' else '' }}">{% if active_form == 'version' and field_errors.revenue_amount %}<span class="error">{{ field_errors.revenue_amount }}</span>{% endif %}</label>
+      <label>Currency<input name="revenue_currency" required value="{{ entered.revenue_currency if active_form == 'version' else '' }}">{% if active_form == 'version' and field_errors.revenue_currency %}<span class="error">{{ field_errors.revenue_currency }}</span>{% endif %}</label>
+    </div></fieldset>
+    {% for suffix, number in [('', 1), ('_2', 2), ('_3', 3)] %}
+    <fieldset class="wide"><legend>Cost line {{ number }}{% if number > 1 %} (optional){% endif %}</legend><div class="form-grid">
+      <label>Role<input name="cost_role{{ suffix }}"{% if number == 1 %} required{% endif %} value="{{ entered['cost_role' ~ suffix] if active_form == 'version' else '' }}">{% if active_form == 'version' and field_errors['cost_role' ~ suffix] %}<span class="error">{{ field_errors['cost_role' ~ suffix] }}</span>{% endif %}</label>
+      <label>Amount<input name="cost_amount{{ suffix }}" inputmode="decimal"{% if number == 1 %} required{% endif %} value="{{ entered['cost_amount' ~ suffix] if active_form == 'version' else '' }}">{% if active_form == 'version' and field_errors['cost_amount' ~ suffix] %}<span class="error">{{ field_errors['cost_amount' ~ suffix] }}</span>{% endif %}</label>
+      <label>Currency<input name="cost_currency{{ suffix }}"{% if number == 1 %} required{% endif %} value="{{ entered['cost_currency' ~ suffix] if active_form == 'version' else '' }}">{% if active_form == 'version' and field_errors['cost_currency' ~ suffix] %}<span class="error">{{ field_errors['cost_currency' ~ suffix] }}</span>{% endif %}</label>
+    </div></fieldset>
+    {% endfor %}
+    <div class="wide actions"><button type="submit">Calculate and save version</button></div>
+  </form>
+  {% else %}<p>Create a scenario family before adding a version.</p>{% endif %}
+</section>
+
+<section class="card" id="versions">
+  <h2>3. Scenario versions and review state</h2>
+  {% if versions %}<div class="table-wrap"><table><thead><tr><th>Scenario</th><th>Version</th><th>Stored result</th><th>Review state</th><th>Independent review</th></tr></thead><tbody>
+  {% for version in versions %}
+  <tr>
+    <td>{{ version.scenario_code }}<br><span class="muted">{{ version.scenario_title }}</span></td>
+    <td>{{ version.version_number }}<br><span class="muted">{{ version.scenario_version_id }}</span></td>
+    <td>{{ version.result.presentation_currency }} {{ version.result.revenue }} revenue<br>{{ version.result.presentation_currency }} {{ version.result.total_cost }} cost<br>{{ version.result.presentation_currency }} {{ version.result.gross_profit }} gross profit · {{ version.gross_margin }} margin</td>
+    <td><strong>{{ version.review_state|replace('_',' ')|title }}</strong>{% if version.reviews %}<br><span class="muted">{{ version.reviews[-1].reviewer }} · {{ version.reviews[-1].reviewed_at }}</span>{% endif %}</td>
+    <td>
+      {% set this_review_error = active_form == 'review' and entered.scenario_version_id == version.scenario_version_id %}
+      <form method="post" action="/bids/{{ bid.bid_id }}/pricing-baseline/versions/{{ version.scenario_version_id }}/reviews">
+        {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+        <label>Decision<select name="decision" required>{% for decision in review_decisions %}<option value="{{ decision.value }}"{% if this_review_error and entered.decision == decision.value %} selected{% endif %}>{{ decision.value|replace('_',' ')|title }}</option>{% endfor %}</select>{% if this_review_error and field_errors.decision %}<span class="error">{{ field_errors.decision }}</span>{% endif %}</label>
+        <label>Reviewer<input name="reviewer" required value="{{ entered.reviewer if this_review_error else '' }}">{% if this_review_error and field_errors.reviewer %}<span class="error">{{ field_errors.reviewer }}</span>{% endif %}<span class="muted">Must differ from the browser actor.</span></label>
+        <label>Rationale<textarea name="rationale" required>{{ entered.rationale if this_review_error else '' }}</textarea>{% if this_review_error and field_errors.rationale %}<span class="error">{{ field_errors.rationale }}</span>{% endif %}</label>
+        <button type="submit">Record review</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody></table></div>{% else %}<p>No scenario versions have been calculated for this Bid.</p>{% endif %}
+</section>
+
+<section class="card" id="select-baseline">
+  <h2>4. Select an accepted version as the baseline</h2>
+  {% set accepted_versions = versions|selectattr('accepted')|list %}
+  {% if accepted_versions %}
+  <form method="post" action="/bids/{{ bid.bid_id }}/pricing-baseline/select" class="form-grid">
+    {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+    <label>Accepted scenario version<select name="scenario_version_id" required><option value="">Choose accepted version</option>{% for version in accepted_versions %}<option value="{{ version.scenario_version_id }}"{% if active_form == 'baseline' and entered.scenario_version_id == version.scenario_version_id %} selected{% endif %}>{{ version.scenario_code }} · version {{ version.version_number }} · {{ version.result.presentation_currency }} {{ version.result.revenue }} revenue · {{ version.gross_margin }} margin</option>{% endfor %}</select>{% if active_form == 'baseline' and field_errors.scenario_version_id %}<span class="error">{{ field_errors.scenario_version_id }}</span>{% endif %}</label>
+    <label>Selection rationale<textarea name="baseline_rationale" required>{{ entered.baseline_rationale if active_form == 'baseline' else '' }}</textarea>{% if active_form == 'baseline' and field_errors.baseline_rationale %}<span class="error">{{ field_errors.baseline_rationale }}</span>{% endif %}</label>
+    <div class="wide actions"><button type="submit">Select pricing baseline</button></div>
+  </form>
+  {% else %}<p>No version has an ACCEPTED independent review. Record an accepted review above before selecting a baseline.</p>{% endif %}
+</section>
+</main></body></html>

@@ -7,14 +7,17 @@ import base64
 import binascii
 import hashlib
 import hmac
+import io
 import json
 import os
 import sqlite3
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
-from typing import Annotated
-from urllib.parse import parse_qsl, quote, urlencode
+from typing import Annotated, Any
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import uvicorn
@@ -32,6 +35,14 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from core.analysis_capability import (
+    AnalysisCapability,
+    CapabilityResult,
+    not_checked,
+)
+from core.analysis_capability import (
+    type_label as analysis_type_label,
+)
 from core.analysis_engine import AnalysisEngine
 from core.approval_authority import (
     ApprovalEvent,
@@ -43,9 +54,11 @@ from core.approval_authority import (
     SubjectLink,
 )
 from core.approval_repository import ApprovalRepository
+from core.approval_rules import effective_policies
 from core.approval_service import ApprovalService
 from core.bid_control_center import (
     GATE_LABELS,
+    BidBlockerView,
     BidControlCenterService,
     BidDeadlineAttention,
     BidNotFoundError,
@@ -58,13 +71,17 @@ from core.bid_control_center import (
     MyDayBidBucket,
     build_bid_portfolio,
     governance_level_guides,
+    handover_gate_blockers,
     outstanding_items,
+    workflow_development_blockers,
     workspace_path,
 )
 from core.bid_package_intake import (
     AcknowledgementCreate,
     AcknowledgementEventType,
     AnalysisEligibility,
+    BulkControlledDocumentCreate,
+    BulkControlledDocumentItem,
     BulkFileDispositionCreate,
     BulkFileReviewItem,
     ChannelCheckCreate,
@@ -77,21 +94,30 @@ from core.bid_package_intake import (
     FileDispositionCreate,
     FileDocumentLinkCreate,
     FileDocumentRelationship,
+    GoverningDisposition,
+    GoverningSelectionCreate,
+    GoverningSelectionItem,
+    IntakeInboxFolder,
     NoticeExpectation,
+    ReferenceConfirmationCreate,
     ReleaseChannel,
     ReleaseNoticeCreate,
     ReleasePreview,
+    ReleaseReferenceState,
     ReleaseRegistration,
     ReleaseType,
     SnapshotCreate,
 )
 from core.bid_package_presentation import (
     DIRECTIVE_TYPE_CHOICES,
+    RELEASE_REVIEW_NOTICE_CODES,
     content_form_label,
     decorate_release,
     directive_type_label,
     eligibility_label,
     human_bytes,
+    proposed_document_title,
+    release_review_notice,
 )
 from core.bid_package_repository import (
     BidPackageRepository,
@@ -102,19 +128,25 @@ from core.bid_package_repository import (
 )
 from core.bid_package_service import BidPackageService
 from core.bid_package_storage import (
+    BROWSER_UPLOAD_ALIAS,
     BidPackageStorage,
     IntakeLimitError,
     IntakePublicationError,
     SourceChangedError,
     UnsafeIntakeSourceError,
+    is_supported_intake_file,
     parse_intake_roots,
 )
 from core.bid_repository import BidRepository
 from core.bid_workflow import (
+    BidWorkflowProjection,
+    OutstandingItem,
     PackageIntakeFacts,
+    intake_control_action,
     intake_heading,
     project_bid_workflow,
     proposal_heading,
+    proposal_resolve_label,
 )
 from core.commercial import (
     AssessmentVersion,
@@ -127,7 +159,10 @@ from core.commercial import (
 from core.commercial_repository import CommercialRepository
 from core.commercial_scenarios import (
     BaselineSelection,
+    ReviewDecision,
     ScenarioFamily,
+    ScenarioLine,
+    ScenarioPurpose,
     ScenarioReview,
     ScenarioVersion,
 )
@@ -143,6 +178,24 @@ from core.contract_risk import (
 from core.contract_risk_repository import ContractRiskRepository
 from core.contract_risk_service import ContractRiskService
 from core.database import Database
+from core.deliverable_discovery import ProposalReviewDecision
+from core.deliverable_discovery_coverage import discovery_coverage
+from core.deliverable_discovery_jobs import DiscoveryJobRunner, DiscoveryJobService
+from core.deliverable_discovery_presentation import (
+    discovery_job_view,
+    file_outcome_view,
+    job_state_label,
+    progress_sentence,
+    unreadable_reason_label,
+)
+from core.deliverable_discovery_progress import discovery_source_progress
+from core.deliverable_discovery_repository import DeliverableDiscoveryRepository
+from core.deliverable_discovery_service import (
+    DeliverableDiscoveryService,
+    DiscoveryUnavailableError,
+    ImportRejectedError,
+    ProposalDecisionInput,
+)
 from core.deliverable_repository import DeliverableRepository
 from core.deliverable_service import DeliverableService
 from core.deliverables import (
@@ -183,6 +236,13 @@ from core.enums import (
     RiskTrigger,
 )
 from core.excel_generator import ExcelGenerator
+from core.guided_context import (
+    RequestContextMiddleware,
+    bid_page_of,
+    current_request,
+    page_bid_hint,
+    set_page_bid_hint,
+)
 from core.handover import BidHandoverService, assess_manufacturer_handover
 from core.knowledge_bootstrap import bootstrap_knowledge
 from core.knowledge_engine import KnowledgeEngine
@@ -231,6 +291,9 @@ from core.ops_foundation import (
     RoleProfileOverlapError,
     StaleRoleProfileError,
 )
+from core.owner_decision_evidence import collect_owner_decision_evidence
+from core.owner_decision_page import build_owner_decision_page
+from core.owner_decision_service import OwnerDecisionService
 from core.proposal_exchange import CustomerIssueCommand
 from core.proposal_exchange_service import (
     ProposalExchangeNotFoundError,
@@ -247,6 +310,8 @@ from core.proposals import (
     ProposalReview,
     ProposalVersion,
 )
+from core.readiness import ReadinessReport
+from core.readiness_phases import BlockerPhase
 from core.readiness_service import evaluate_readiness
 from core.report_generator import ReportGenerator
 from core.requirement_browser import RequirementBrowserCommand
@@ -374,6 +439,7 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 REPORTS_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="ContractIQ", version="2.0.0")
+app.add_middleware(RequestContextMiddleware)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
 
@@ -386,7 +452,11 @@ jinja_env.globals["intake_heading"] = intake_heading
 jinja_env.globals["proposal_heading"] = proposal_heading
 
 
+jinja_env.globals["proposal_resolve_label"] = proposal_resolve_label
+
+
 def render(template_name: str, status_code: int = 200, **context) -> HTMLResponse:
+    set_page_bid_hint(context)
     template = jinja_env.get_template(template_name)
     return HTMLResponse(template.render(**context), status_code=status_code)
 
@@ -531,6 +601,7 @@ proposal_exchange_service = ProposalExchangeService(
 bid_handover_service = BidHandoverService(
     db,
     proposal_issue_loader=proposal_exchange_service.handover_rows,
+    proposal_readiness_loader=proposal_exchange_service.assess,
 )
 my_day_service = MyDayService(
     work_item_repository,
@@ -538,6 +609,15 @@ my_day_service = MyDayService(
     db,
     requirement_repository=requirement_repository,
 )
+owner_decision_service = OwnerDecisionService(db)
+
+
+_COMMERCIAL_ATTENTION_REASONS = {
+    "NOT_REVIEWED": "Commercial position not yet reviewed",
+    "QUALIFY": "Qualified position awaiting resolution",
+    "CLARIFICATION_REQUIRED": "Clarification required",
+    "REJECT": "Rejected position awaiting resolution",
+}
 
 
 def _load_bid_workspace_attention(bid_id: str, as_of: date) -> BidWorkspaceAttention:
@@ -547,6 +627,9 @@ def _load_bid_workspace_attention(bid_id: str, as_of: date) -> BidWorkspaceAtten
             "entity_id": str(row["case_id"]),
             "code": "APPROVAL_PENDING",
             "severity": "HIGH",
+            "title": str(row.get("title") or row.get("case_code") or "Decision case"),
+            "href": f"/decisions?bid_id={quote(bid_id)}",
+            "reason": "Decision or approval pending",
         }
         for row in approval_repository.cases(bid_id)
         if row["lifecycle_state"] in {"ACTIVE", "DRAFT"}
@@ -558,6 +641,11 @@ def _load_bid_workspace_attention(bid_id: str, as_of: date) -> BidWorkspaceAtten
                 "entity_id": str(row["position_id"]),
                 "code": "COMMERCIAL_POSITION_BLOCKED",
                 "severity": "HIGH",
+                "title": str(row["label"]),
+                "href": f"/commercial/{quote(str(row['position_id']))}",
+                "reason": _COMMERCIAL_ATTENTION_REASONS.get(
+                    str(row["disposition"]), "Commercial position needs attention"
+                ),
             }
             for row in ops08_repository.workspace(bid_id)
             if row["disposition"] in {"NOT_REVIEWED", "QUALIFY", "CLARIFICATION_REQUIRED", "REJECT"}
@@ -577,13 +665,240 @@ def _load_bid_workspace_attention(bid_id: str, as_of: date) -> BidWorkspaceAtten
     )
 
 
+def _discovery_intake_facts(
+    bid_id: str,
+    release_details: list[dict[str, Any]],
+) -> dict[str, object]:
+    """Read existing discovery job and proposal state for the intake next action.
+
+    Mirrors ``_deliverable_discovery_context``: same services, no new storage.
+    """
+    included_ids = {
+        str(row["file_id"])
+        for detail in release_details
+        for row in detail["files"]
+        if row.get("analysis_eligibility") == AnalysisEligibility.ELIGIBLE.value
+    }
+    active = discovery_job_service.get_active_job(bid_id)
+    finished = discovery_job_service.latest_finished_job(bid_id)
+    pending = sum(
+        1
+        for row in deliverable_discovery_service.list_review_queue(bid_id)
+        if row["current_decision"] == "PENDING"
+    )
+    unanalysed = len(included_ids)
+    passages_unanalysed = 0
+    files_incomplete = 0
+    if finished is not None and finished["state"] in {"SUCCEEDED", "PARTIAL"}:
+        job_files = discovery_job_service.jobs.files(str(finished["job_id"]))
+        covered = {str(row["received_file_id"]) for row in job_files}
+        unanalysed = len(included_ids - covered)
+        passages_unanalysed = max(
+            0, int(finished["passages_total"]) - int(finished["passages_analysed"])
+        )
+        files_incomplete = int(finished["files_total"]) - int(finished["files_done"])
+        if finished["state"] == "PARTIAL":
+            files_incomplete = max(files_incomplete, 1 if passages_unanalysed else 0)
+    progress = discovery_source_progress(
+        included_ids,
+        deliverable_discovery_repository.file_outcomes_for_bid(bid_id),
+    )
+    latest_state = str(finished["state"]) if finished else None
+    files_not_readable = 0
+    if progress.has_results and finished:
+        latest_state = progress.effective_state
+        unanalysed = progress.never_attempted
+        passages_unanalysed = progress.passages_unanalysed
+        files_incomplete = progress.partly_analysed + progress.recoverable
+        files_not_readable = progress.not_readable
+    return {
+        "included_files": len(included_ids),
+        "discovery_known": True,
+        "discovery_active_job_id": str(active["job_id"]) if active else None,
+        "discovery_latest_job_id": str(finished["job_id"]) if finished else None,
+        "discovery_latest_state": latest_state,
+        "discovery_proposals_pending": pending,
+        "discovery_included_unanalysed": unanalysed,
+        "discovery_passages_unanalysed": passages_unanalysed,
+        "discovery_files_incomplete": max(files_incomplete, 0),
+        "discovery_files_not_readable": files_not_readable,
+    }
+
+
+def _draft_preparation_items(
+    bid: Bid, existing: Sequence[OutstandingItem], intake: PackageIntakeFacts
+) -> list[OutstandingItem]:
+    """Express the development-phase proposal-readiness blockers as outstanding items.
+
+    These are the existing proposal-readiness rules (requirements, controlled sources, scope,
+    commercial position, accountable owner). Issue-phase approvals and Bid Basis incorporation
+    are excluded here; they belong to the issue task, not to preparing the draft.
+    """
+    if bid.status.value in {"no_bid", "submitted", "won", "lost"}:
+        return []
+    seen = {item.heading for item in existing}
+    items: list[OutstandingItem] = []
+    for blocker in proposal_exchange_service.assess(bid.bid_id).blockers:
+        if (
+            blocker.phase is not BlockerPhase.DEVELOPMENT
+            or blocker.code.startswith("GATE_")
+            or blocker.code == "RECEIVED_RELEASE_NOT_IN_BASIS"
+        ):
+            continue
+        heading = proposal_heading(blocker.code, blocker.heading or blocker.message)
+        if heading in seen:
+            continue
+        seen.add(heading)
+        resolve_label, resolve_path = "Resolve in this Bid", blocker.destination
+        if blocker.code == "MISSING_CONTROLLED_SOURCE" and intake.latest_release_id:
+            # The files were received: control them where they sit, not in the empty register.
+            resolve_label, resolve_path = intake_control_action(bid.bid_id, intake)
+        items.append(
+            OutstandingItem(
+                heading=heading,
+                detail=blocker.message,
+                consequence="The proposal cannot be prepared for issue until this is resolved.",
+                owner=bid.bc_owner,
+                owing_party="Bid owner",
+                due_date=bid.internal_due_date,
+                evidence_source="Proposal readiness",
+                resolve_label=resolve_label,
+                resolve_path=resolve_path,
+                blocking=True,
+                scope="whole_bid",
+            )
+        )
+    return items
+
+
+def _build_bid_workflow_projection(
+    bid: Bid,
+    readiness: ReadinessReport,
+    blockers: list[BidBlockerView],
+    issue_blockers: list[BidBlockerView],
+) -> BidWorkflowProjection:
+    """Assemble the shared workflow used by workspace and portfolio projections."""
+    intake_summary = bid_package_service.summary(bid.bid_id)
+    release_rows = list(intake_summary.releases)
+    release_details = [
+        bid_package_service.release_detail(bid.bid_id, str(row["release_id"]))
+        for row in release_rows
+    ]
+    latest_summary = (
+        decorate_release(release_details[0])["outstanding_summary"] if release_details else None
+    )
+    intake = PackageIntakeFacts(
+        releases_received=len(release_rows),
+        releases_incorporated=sum(1 for row in release_rows if bool(row.get("incorporated"))),
+        files_requiring_review=sum(
+            1
+            for detail in release_details
+            for row in detail["files"]
+            if row.get("analysis_eligibility") == AnalysisEligibility.NOT_ASSESSED.value
+        ),
+        expected_missing=sum(
+            1 for item in intake_summary.attention if item.code == "EXPECTED_RELEASE_MISSING"
+        ),
+        basis_published=intake_summary.current_snapshot is not None,
+        latest_release_id=str(release_rows[0]["release_id"]) if release_rows else None,
+        governing_sources_selected=(
+            int(latest_summary["governing_selected_count"]) if latest_summary else None
+        ),
+        governing_sources_pending_control=(
+            int(latest_summary["governing_sources_pending"]) if latest_summary else None
+        ),
+        **_discovery_intake_facts(bid.bid_id, release_details),
+    )
+    with db._conn() as conn:
+        evidence = collect_owner_decision_evidence(conn, bid.bid_id)
+    current_decision = owner_decision_service.repository.get_current(bid.bid_id)
+    visible_blockers = workflow_development_blockers(
+        blockers,
+        package_received=bool(release_rows),
+        evidence=evidence,
+    )
+    outstanding = outstanding_items(
+        visible_blockers,
+        issue_blockers=issue_blockers,
+        intake_attention=intake_summary.attention,
+        package_imported=bool(release_rows),
+        bid_id=bid.bid_id,
+        owner=bid.bc_owner,
+        due_date=bid.internal_due_date,
+        intake=intake,
+    )
+    outstanding = outstanding + _draft_preparation_items(bid, outstanding, intake)
+    proposal_issued = (
+        bid.status.value not in {"no_bid"}
+        and proposal_exchange_service.assess(bid.bid_id).status.value == "ISSUED"
+    )
+    return project_bid_workflow(
+        bid.bid_id,
+        bid_status=bid.status.value,
+        navigator=build_navigator(
+            bid.bid_id,
+            ops07w_repository.navigator_counts(bid.bid_id),
+            readiness.verdict.value,
+            bid.bc_owner,
+        ),
+        intake=intake,
+        readiness_verdict=readiness.verdict.value,
+        outstanding=outstanding,
+        owner_decision=current_decision.decision if current_decision is not None else None,
+        owner_decision_reason=current_decision.reason if current_decision is not None else None,
+        owner_decision_evidence=evidence,
+        proposal_issued=proposal_issued,
+    )
+
+
 bid_control_center_service = BidControlCenterService(
     bid_repository,
     work_item_repository,
     lambda as_of: my_day_service.get_my_day(as_of=as_of),
     lambda bid_id: evaluate_readiness(bid_repository, db, bid_id),
     _load_bid_workspace_attention,
+    _build_bid_workflow_projection,
 )
+
+
+def _guided_banner() -> dict[str, object] | None:
+    """Return the guided-task banner context for the page being served, or None.
+
+    Supporting pages share one header; this finds which task the page belongs to from the
+    request path (``task_for_page``), never from a query string, so context cannot be lost.
+    """
+    request = current_request()
+    if request is None:
+        return None
+    located = bid_page_of(request.url.path, request.query_params.get("bid_id"))
+    if located is None and (hint := page_bid_hint()):
+        located = (hint, request.url.path.strip("/"))
+    if located is None:
+        return None
+    bid_id, relative_path = located
+    try:
+        workflow = bid_control_center_service.workspace(bid_id, as_of=_working_date()).workflow
+    except (BidNotFoundError, ValueError, KeyError, sqlite3.Error):
+        return None
+    viewed = workflow.task_for_page(relative_path) if workflow is not None else None
+    if workflow is None or viewed is None:
+        return None
+    return {
+        "workflow": workflow,
+        "task": viewed,
+        "current": workflow.current_task,
+        "bid_id": bid_id,
+    }
+
+
+def _guided_requested_task() -> str | None:
+    """Return the task key a page was asked to display (``?task=``), if any."""
+    request = current_request()
+    return request.query_params.get("task") if request is not None else None
+
+
+jinja_env.globals["guided_banner"] = _guided_banner
+jinja_env.globals["guided_requested_task"] = _guided_requested_task
 managed_document_storage = ManagedDocumentStorage(
     MANAGED_DOCUMENT_ROOT,
     MAX_MANAGED_DOCUMENT_BYTES,
@@ -595,11 +910,31 @@ document_service = DocumentService(
 )
 doc_processor = DocumentProcessor()
 llm_client = LMStudioClient()
+# Deliverables discovery may target a different inference endpoint than the shared client
+# (analysis engine, preprocessor). CONTRACTIQ_DISCOVERY_LLM_BASE_URL overrides only discovery;
+# when unset, discovery keeps using the shared client exactly as before.
+_discovery_llm_base_url = os.environ.get("CONTRACTIQ_DISCOVERY_LLM_BASE_URL", "").strip()
+discovery_llm_client = (
+    LMStudioClient(base_url=_discovery_llm_base_url) if _discovery_llm_base_url else llm_client
+)
+deliverable_discovery_repository = DeliverableDiscoveryRepository(db)
+deliverable_discovery_service = DeliverableDiscoveryService(
+    deliverable_discovery_repository,
+    bid_package_repository,
+    document_service,
+    deliverable_repository,
+    deliverable_service,
+    discovery_llm_client,
+)
+discovery_job_service = DiscoveryJobService(
+    deliverable_discovery_repository,
+    deliverable_discovery_service.bid_package_repository,
+)
+discovery_job_runner = DiscoveryJobRunner(discovery_job_service, discovery_llm_client)
 analysis_engine = AnalysisEngine(llm_client, db)
 preprocessor = DocumentPreprocessor(llm_client)
 report_generator = ReportGenerator(REPORTS_DIR)
 excel_generator = ExcelGenerator(REPORTS_DIR)
-
 # ── Startup recovery ─────────────────────────────────────────────────────────
 
 
@@ -650,6 +985,13 @@ async def startup_event():
         f"{stats.get('product_profiles', 0)} product profiles, "
         f"{stats.get('commercial_terms', 0)} commercial terms"
     )
+    if os.environ.get("CONTRACTIQ_DISCOVERY_RUNNER", "").strip().lower() != "off":
+        discovery_job_runner.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    discovery_job_runner.stop()
 
 
 # ── Progress store ────────────────────────────────────────────────────────────
@@ -911,6 +1253,87 @@ def _bid_return_context(
     return context
 
 
+def _owner_decision_return_path(bid_id: str, value: str | None) -> str:
+    """Allow a return only to a same-site path inside the current Bid workspace."""
+    fallback = workspace_path(bid_id, BidWorkspaceSection.OVERVIEW)
+    if not value or "\\" in value or any(ord(character) < 32 for character in value):
+        return fallback
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
+        return fallback
+    bid_root = f"/bids/{quote(bid_id, safe='')}"
+    if parsed.path != bid_root and not parsed.path.startswith(f"{bid_root}/"):
+        return fallback
+    return value
+
+
+def _safe_local_return_to(value: str | None) -> str | None:
+    """Keep only an explicit same-site path for browser workflow returns."""
+    if (
+        not value
+        or not value.startswith("/")
+        or value.startswith("//")
+        or "\\" in value
+        or any(ord(character) < 32 for character in value)
+    ):
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc:
+        return None
+    return value
+
+
+def _pricing_baseline_summary(bid_id: str) -> dict[str, object] | None:
+    """Return the latest selected baseline with its immutable stored result."""
+    if not bid_id:
+        return None
+    with db._conn() as conn:
+        row = conn.execute(
+            """SELECT b.selection_id,b.scenario_version_id,b.selected_by,b.selected_at,
+            b.rationale,v.version_number,f.code AS scenario_code,r.result_json
+            FROM scenario_baselines b
+            LEFT JOIN scenario_versions v
+              ON v.scenario_version_id=b.scenario_version_id
+            LEFT JOIN scenario_families f ON f.family_id=v.family_id
+            LEFT JOIN scenario_results r
+              ON r.scenario_version_id=b.scenario_version_id
+            WHERE b.bid_id=?
+            ORDER BY b.selected_at DESC,b.selection_id DESC LIMIT 1""",
+            (bid_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    result: dict[str, object] = {}
+    if row["result_json"]:
+        try:
+            loaded = json.loads(str(row["result_json"]))
+            if isinstance(loaded, dict):
+                result = loaded
+        except json.JSONDecodeError:
+            result = {}
+    margin_bps = result.get("gross_margin_bps")
+    margin = (
+        f"{Decimal(str(margin_bps)) / Decimal(100):.2f}%"
+        if margin_bps is not None
+        else "Not available"
+    )
+    return {
+        "selection_id": str(row["selection_id"]),
+        "scenario_version_id": str(row["scenario_version_id"]),
+        "scenario_code": str(row["scenario_code"] or "Scenario details unavailable"),
+        "version_number": row["version_number"],
+        "currency": result.get("presentation_currency"),
+        "revenue": result.get("revenue"),
+        "total_cost": result.get("total_cost"),
+        "gross_profit": result.get("gross_profit"),
+        "gross_margin_bps": margin_bps,
+        "gross_margin": margin,
+        "selected_by": str(row["selected_by"]),
+        "selected_at": str(row["selected_at"]),
+        "rationale": str(row["rationale"]),
+    }
+
+
 def _position_context(position_id: str | None, bid_id: str) -> dict[str, object] | None:
     """Resolve optional commercial context and reject stale or cross-Bid links."""
     if not position_id:
@@ -1074,6 +1497,7 @@ def _my_day_bid_rows_by_bucket(
         bid_repository.list_audit(),
         BidPortfolioFilters(view=BidPortfolioView.ALL),
         as_of,
+        workflow_loader=_build_bid_workflow_projection,
     )
     grouped: dict[MyDayBidBucket, list[BidPortfolioRow]] = {bucket: [] for bucket in MyDayBidBucket}
     for row in portfolio.rows:
@@ -2943,15 +3367,8 @@ def _bid_workspace_context(
     workspace = bid_control_center_service.workspace(bid_id, as_of=as_of_date)
     requirements = requirement_service.list_requirements(bid_id=bid_id, as_of_date=as_of_date)
     scope_items = scope_repository.list_scope_items(bid_id)
-    navigator_counts = ops07w_repository.navigator_counts(bid_id)
     classification_assessment = ops07w_repository.latest_assessment(bid_id)
     governance_guides = governance_level_guides()
-    navigator = build_navigator(
-        bid_id,
-        navigator_counts,
-        workspace.readiness.verdict.value,
-        workspace.bid.bc_owner,
-    )
     intake_summary = bid_package_service.summary(bid_id)
     intake_release_rows = list(intake_summary.releases)
     intake_release_details = [
@@ -2964,36 +3381,10 @@ def _bid_workspace_context(
         for file_row in detail["files"]
         if file_row.get("analysis_eligibility") == AnalysisEligibility.NOT_ASSESSED.value
     )
-    intake_facts = PackageIntakeFacts(
-        releases_received=len(intake_release_rows),
-        releases_incorporated=sum(
-            1 for row in intake_release_rows if bool(row.get("incorporated"))
-        ),
-        files_requiring_review=files_requiring_review,
-        expected_missing=sum(
-            1 for item in intake_summary.attention if item.code == "EXPECTED_RELEASE_MISSING"
-        ),
-        basis_published=intake_summary.current_snapshot is not None,
-        latest_release_id=(
-            str(intake_release_rows[0]["release_id"]) if intake_release_rows else None
-        ),
-    )
-    outstanding = outstanding_items(
-        workspace.blockers,
-        intake_attention=intake_summary.attention,
-        package_imported=bool(intake_release_rows),
-        bid_id=bid_id,
-        owner=workspace.bid.bc_owner,
-        due_date=workspace.bid.internal_due_date,
-    )
-    workflow = project_bid_workflow(
-        bid_id,
-        bid_status=workspace.bid.status.value,
-        navigator=navigator,
-        intake=intake_facts,
-        readiness_verdict=workspace.readiness.verdict.value,
-        outstanding=outstanding,
-    )
+    if workspace.workflow is None:
+        raise RuntimeError("Bid workflow projection is not configured")
+    workflow = workspace.workflow
+    outstanding = list(workflow.outstanding)
     commercial_positions = ops08_repository.workspace(bid_id)
     link_counts = _position_link_counts(bid_id)
     for position in commercial_positions:
@@ -3024,6 +3415,7 @@ def _bid_workspace_context(
     context: dict[str, object] = {
         "workspace": workspace,
         "bid": workspace.bid,
+        "pricing_baseline": _pricing_baseline_summary(bid_id),
         "readiness": workspace.readiness,
         "section": section,
         "bid_section_label": BID_SECTION_LABELS[section],
@@ -3070,6 +3462,9 @@ def _bid_workspace_context(
         "workflow": workflow,
         "outstanding": outstanding,
         "intake_error": None,
+        "intake_field_errors": {},
+        "intake_selected_file_ids": [],
+        "intake_error_file_id": None,
         "intake_entered": {},
         "intake_preview": None,
         "intake_retained_values": [],
@@ -3099,6 +3494,11 @@ def _bid_workspace_context(
         context.update(
             {
                 "intake": intake_summary,
+                "intake_discovery_available": any(
+                    file_row.get("analysis_eligibility") == AnalysisEligibility.ELIGIBLE.value
+                    for detail in release_details
+                    for file_row in detail["files"]
+                ),
                 "intake_status": {
                     "latest_notice": latest_notice,
                     "latest_known_addendum": latest_known_addendum,
@@ -3169,9 +3569,7 @@ def _bid_workspace_context(
         context["handover_report"] = bid_handover_service.report(
             bid_id,
             gate_verdict=workspace.readiness.verdict.value,
-            gate_blockers=[
-                f"{blocker.heading} — {blocker.detail}" for blocker in workspace.blockers
-            ],
+            gate_blockers=handover_gate_blockers(workspace.blockers, workspace.readiness),
             generated_by=f"ContractIQ server · {LOCAL_ACTOR}",
         )
     return context
@@ -3204,13 +3602,20 @@ def _intake_import_context(
     source_root_alias: str | None = None,
     source_folder: str | None = None,
     mode: str = "initial",
+    browser_selected_folder: IntakeInboxFolder | None = None,
 ) -> dict[str, object]:
     """Build the safe folder-selection view without mutating intake evidence."""
     context = _bid_workspace_context(bid_id, BidWorkspaceSection.PACKAGE_INTAKE)
     normalized_mode = mode if mode in {"initial", "addendum"} else "initial"
     inboxes = bid_package_service.intake_inboxes(bid_id)
-    selected_folder = None
-    if source_root_alias and source_folder:
+    selected_folder = browser_selected_folder
+    if selected_folder is None and source_root_alias == BROWSER_UPLOAD_ALIAS and source_folder:
+        preview = bid_package_service.preview(bid_id, source_root_alias, source_folder)
+        display_name = bid_package_service.browser_upload_display_name(bid_id, source_folder)
+        selected_folder = _browser_upload_folder(bid_id, preview, display_name)
+        if selected_folder.warning is not None:
+            raise ValueError(selected_folder.warning)
+    elif selected_folder is None and source_root_alias and source_folder:
         for inbox in inboxes:
             if inbox.source_root_alias != source_root_alias:
                 continue
@@ -3226,6 +3631,35 @@ def _intake_import_context(
         "selected_folder": selected_folder,
     }
     return context
+
+
+def _browser_upload_folder(
+    bid_id: str, preview: ReleasePreview, display_name: str
+) -> IntakeInboxFolder:
+    """Project a freshly staged browser upload into the same shape a configured-inbox folder
+    selection would produce, so the existing selected-folder template block and the
+    unmodified preview/register routes work unchanged."""
+    imported_fingerprints = {
+        str(release["source_fingerprint"])
+        for release in bid_package_repository.summary(bid_id).releases
+    }
+    supported_file_count = sum(is_supported_intake_file(item) for item in preview.files)
+    return IntakeInboxFolder(
+        source_root_alias=preview.source_root_alias,
+        folder_name=str(preview.source_folder),
+        display_name=display_name,
+        file_count=preview.file_count,
+        supported_file_count=supported_file_count,
+        total_bytes=preview.total_bytes,
+        last_modified_at=datetime.now(UTC),
+        source_fingerprint=preview.source_fingerprint,
+        already_imported=preview.source_fingerprint in imported_fingerprints,
+        warning=(
+            "No supported files found in this uploaded folder."
+            if preview.file_count and supported_file_count == 0
+            else None
+        ),
+    )
 
 
 @app.get("/bids/{bid_id}/package-intake-addenda/import", response_class=HTMLResponse)
@@ -3257,6 +3691,38 @@ async def select_bid_package_intake_folder(
                 "intake_mode": mode,
             },
         )
+
+
+@app.post("/bids/{bid_id}/package-intake-addenda/browser-upload")
+async def upload_bid_package_browser_folder(bid_id: str, request: Request) -> Response:
+    """Receive a browser-selected folder (webkitdirectory) into private, bid-scoped staging.
+    Called by JavaScript (a plain form submission cannot set each part's relative-path
+    filename), so it answers JSON with either a redirect URL to the ordinary GET 'selected
+    folder' step, or a human-readable error — never a release, Bid Basis change, or audit row;
+    only 'Confirm managed ingestion' (the existing, unmodified /register route) does that."""
+    form = await request.form()
+    mode = str(form.get("mode") or "initial")
+    uploads = [
+        (upload.filename, io.BytesIO(await upload.read()))
+        for upload in form.getlist("files")
+        if isinstance(upload, StarletteUploadFile) and upload.filename
+    ]
+    try:
+        if not uploads:
+            raise ValueError("Choose a folder to upload — no files were received.")
+        preview = bid_package_service.stage_browser_upload(bid_id, uploads)
+        redirect_url = (
+            f"/bids/{quote(bid_id)}/package-intake-addenda/import"
+            f"?source_root_alias={quote(preview.source_root_alias)}"
+            f"&source_folder={quote(str(preview.source_folder))}"
+            f"&mode={quote(mode)}"
+        )
+        return JSONResponse({"redirect_url": redirect_url})
+    except ValueError as exc:
+        status_code = 404 if str(exc).startswith("Bid not found") else 422
+        return JSONResponse({"error": str(exc)}, status_code=status_code)
+    except (IntakeLimitError, UnsafeIntakeSourceError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
 
 
 def _intake_datetime(value: str, field_name: str) -> datetime:
@@ -3311,7 +3777,12 @@ def _decode_intake_confirmation(token: str, bid_id: str) -> dict[str, object]:
         raise ValueError("Release confirmation is invalid for this Bid; preview again") from exc
 
 
-def _intake_preview_display(preview: ReleasePreview, token: str) -> dict[str, object]:
+def _intake_preview_display(
+    preview: ReleasePreview,
+    token: str,
+    capabilities: Mapping[str, CapabilityResult] | None = None,
+    display_name: str | None = None,
+) -> dict[str, object]:
     """Return business-facing inventory facts without exposing managed storage details."""
     duplicate_counts: dict[tuple[int, str], int] = {}
     for item in preview.files:
@@ -3319,11 +3790,21 @@ def _intake_preview_display(preview: ReleasePreview, token: str) -> dict[str, ob
         duplicate_counts[key] = duplicate_counts.get(key, 0) + 1
     archives = {".zip", ".7z", ".rar", ".tar", ".gz", ".bz2", ".xz"}
     files = []
+    capability_counts = {capability: 0 for capability in AnalysisCapability}
     for item in preview.files:
         row = item.model_dump(mode="json")
         row["is_archive"] = item.extension.casefold() in archives
         row["is_duplicate"] = duplicate_counts[(item.byte_size, item.sha256)] > 1
         row["needs_identification"] = item.detected_media_type is None
+        result = capabilities.get(item.original_relative_path) if capabilities is not None else None
+        if result is None:
+            result = not_checked(item.original_filename)
+            row["type_label"] = analysis_type_label(item.original_filename)
+        else:
+            row["type_label"] = result.type_label
+        row["analysis_capability"] = result.capability.value
+        row["analysis_label"] = result.label
+        capability_counts[result.capability] += 1
         files.append(row)
     directories = sorted(
         {
@@ -3344,15 +3825,45 @@ def _intake_preview_display(preview: ReleasePreview, token: str) -> dict[str, ob
             "Potential exact-byte duplicates are marked for review; "
             "each occurrence remains evidence."
         )
+    if capability_counts[AnalysisCapability.NOT_CHECKED]:
+        warnings.append(
+            "Some files were not checked in this preview to keep it quick (large files or a "
+            "large package); they will be checked when analysed."
+        )
+    summary_parts = []
+    for capability, wording in (
+        (AnalysisCapability.READABLE, "can be analysed"),
+        (AnalysisCapability.UNSUPPORTED, "stored only (file type cannot be analysed)"),
+        (
+            AnalysisCapability.NO_READABLE_TEXT,
+            "with no readable text (OCR may be needed)",
+        ),
+        (AnalysisCapability.COULD_NOT_OPEN, "could not be opened"),
+        (AnalysisCapability.NOT_CHECKED, "not checked in this preview"),
+    ):
+        count = capability_counts[capability]
+        if count:
+            summary_parts.append(f"{count} {wording}")
     return {
         "token": token,
         "folder_name": preview.source_folder or "",
+        "display_name": display_name or preview.source_folder or "",
         "file_count": preview.file_count,
         "total_bytes": preview.total_bytes,
         "directories": directories,
         "files": files,
         "warnings": warnings,
+        "analysis_summary": "; ".join(summary_parts) + ".",
     }
+
+
+def _exclusion_field_errors(error: Exception, *, plural: bool) -> dict[str, str]:
+    """Map the backend "excluded files require an exclusion reason" guard to its field."""
+    text = validation_error_message(error) if isinstance(error, ValidationError) else str(error)
+    if "excluded files require an exclusion reason" not in text:
+        return {}
+    subject = "these selected files are" if plural else "this file is"
+    return {"exclusion_reason": f"Enter why {subject} excluded, or choose Include."}
 
 
 def _intake_error_response(
@@ -3363,19 +3874,38 @@ def _intake_error_response(
     entered: dict[str, str] | None = None,
     preview: dict[str, object] | None = None,
     release_id: str | None = None,
+    field_errors: dict[str, str] | None = None,
+    selected_file_ids: Sequence[str] = (),
+    error_file_id: str | None = None,
 ) -> HTMLResponse:
-    try:
-        context = _intake_import_context(
-            bid_id,
-            source_root_alias=(entered or {}).get("source_root_alias") or None,
-            source_folder=(entered or {}).get("source_folder") or None,
-            mode=(entered or {}).get("intake_mode", "initial"),
-        )
-    except (ValueError, IntakeLimitError, UnsafeIntakeSourceError):
+    """Render the Package intake page for a failed submission.
+
+    A release-scoped error (``release_id`` given) re-renders that release's file review, not
+    the import-folder picker, so the files stay visible; ``field_errors`` are shown beside
+    the field they belong to and ``selected_file_ids`` stay ticked.
+    """
+    if release_id is not None:
         context = _bid_workspace_context(bid_id, BidWorkspaceSection.PACKAGE_INTAKE)
+    else:
+        try:
+            context = _intake_import_context(
+                bid_id,
+                source_root_alias=(entered or {}).get("source_root_alias") or None,
+                source_folder=(entered or {}).get("source_folder") or None,
+                mode=(entered or {}).get("intake_mode", "initial"),
+            )
+        except (ValueError, IntakeLimitError, UnsafeIntakeSourceError):
+            context = _bid_workspace_context(bid_id, BidWorkspaceSection.PACKAGE_INTAKE)
     context["intake_error"] = (
-        validation_error_message(error) if isinstance(error, ValidationError) else str(error)
+        next(iter(field_errors.values()))
+        if field_errors
+        else validation_error_message(error)
+        if isinstance(error, ValidationError)
+        else str(error)
     )
+    context["intake_field_errors"] = field_errors or {}
+    context["intake_selected_file_ids"] = list(selected_file_ids)
+    context["intake_error_file_id"] = error_file_id
     context["intake_entered"] = entered or {}
     retained_labels = {
         "release_type": "Release kind",
@@ -3407,11 +3937,15 @@ def _intake_error_response(
         "label": "Snapshot label",
         "title": "Work-item title",
     }
-    context["intake_retained_values"] = [
-        (retained_labels[key], value)
-        for key, value in (entered or {}).items()
-        if key in retained_labels and value
-    ]
+    context["intake_retained_values"] = (
+        []
+        if field_errors
+        else [
+            (retained_labels[key], value)
+            for key, value in (entered or {}).items()
+            if key in retained_labels and value
+        ]
+    )
     context["intake_preview"] = preview
     if release_id is not None:
         try:
@@ -3437,6 +3971,15 @@ async def preview_bid_release(bid_id: str, request: Request) -> HTMLResponse:
         )
         if not preview.files:
             raise ValueError("The selected intake location contains no files")
+        capabilities = bid_package_service.preview_capabilities(bid_id, preview)
+        display_name = (
+            bid_package_service.browser_upload_display_name(
+                bid_id,
+                preview.source_folder or "",
+            )
+            if preview.source_root_alias == BROWSER_UPLOAD_ALIAS
+            else None
+        )
         token = _intake_confirmation_token(bid_id, entered, preview)
         context = _intake_import_context(
             bid_id,
@@ -3445,7 +3988,12 @@ async def preview_bid_release(bid_id: str, request: Request) -> HTMLResponse:
             mode=entered.get("intake_mode", "initial"),
         )
         context["intake_entered"] = entered
-        context["intake_preview"] = _intake_preview_display(preview, token)
+        context["intake_preview"] = _intake_preview_display(
+            preview,
+            token,
+            capabilities,
+            display_name,
+        )
         return render("bid_detail.html", **context)
     except (ValueError, ValidationError, IntakeLimitError, UnsafeIntakeSourceError) as exc:
         return _intake_error_response(bid_id, exc, entered=entered)
@@ -3490,7 +4038,9 @@ async def register_bid_release(bid_id: str, request: Request) -> Response:
     ) as exc:
         return _intake_error_response(bid_id, exc, entered=entered)
     return RedirectResponse(
-        f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(str(release['release_id']))}",
+        f"/bids/{quote(bid_id)}/package-intake-addenda/releases/"
+        f"{quote(str(release['release_id']))}?"
+        f"{urlencode({'notice': 'received', 'count': int(release['file_count'])})}#files",
         status_code=303,
     )
 
@@ -3579,15 +4129,58 @@ async def link_bid_release_notice(bid_id: str, request: Request) -> Response:
     "/bids/{bid_id}/package-intake-addenda/releases/{release_id}",
     response_class=HTMLResponse,
 )
-async def review_bid_release(bid_id: str, release_id: str) -> HTMLResponse:
+async def review_bid_release(bid_id: str, release_id: str, request: Request) -> HTMLResponse:
     try:
         context = _bid_workspace_context(bid_id, BidWorkspaceSection.PACKAGE_INTAKE)
-        context["selected_release"] = decorate_release(
-            bid_package_service.release_detail(bid_id, release_id)
-        )
+        selected_release = decorate_release(bid_package_service.release_detail(bid_id, release_id))
+        context["selected_release"] = selected_release
+        notice_code = request.query_params.get("notice", "")
+        raw_count = request.query_params.get("count", "")
+        raw_changed = request.query_params.get("changed")
+        if (
+            notice_code in RELEASE_REVIEW_NOTICE_CODES
+            and raw_count.isascii()
+            and raw_count.isdigit()
+        ):
+            count = int(raw_count)
+            if 0 <= count <= 10_000:
+                changed = (
+                    int(raw_changed)
+                    if raw_changed is not None and raw_changed.isascii() and raw_changed.isdigit()
+                    else None
+                )
+                if changed is not None:
+                    changed = max(0, min(changed, count))
+                context["release_review_notice"] = {
+                    "message": release_review_notice(
+                        notice_code,
+                        count,
+                        int(selected_release["outstanding_summary"]["review_remaining"]),
+                        changed=changed,
+                    ),
+                    "warning": notice_code == "none_selected",
+                }
         return render("bid_detail.html", **context)
     except IntakeNotFoundError as exc:
         return _intake_error_response(bid_id, exc, status_code=404)
+
+
+def _release_files_redirect(
+    bid_id: str,
+    release_id: str,
+    *,
+    notice: str | None = None,
+    count: int | None = None,
+    changed: int | None = None,
+) -> RedirectResponse:
+    """Return to the release file review, optionally with a server-rendered result notice."""
+    location = f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(release_id)}"
+    if notice is not None and count is not None:
+        params: dict[str, int | str] = {"notice": notice, "count": count}
+        if changed is not None:
+            params["changed"] = changed
+        location = f"{location}?{urlencode(params)}"
+    return RedirectResponse(f"{location}#files", status_code=303)
 
 
 @app.post("/bids/{bid_id}/package-intake-addenda/files/{file_id}/dispositions")
@@ -3618,7 +4211,14 @@ async def review_bid_received_file(bid_id: str, file_id: str, request: Request) 
         StaleIntakeError,
         sqlite3.Error,
     ) as exc:
-        return _intake_error_response(bid_id, exc, entered=entered, release_id=release_id)
+        return _intake_error_response(
+            bid_id,
+            exc,
+            entered=entered,
+            release_id=release_id,
+            field_errors=_exclusion_field_errors(exc, plural=False),
+            error_file_id=file_id,
+        )
     return RedirectResponse(
         f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(str(release_id))}#files",
         status_code=303,
@@ -3636,6 +4236,14 @@ async def review_bid_received_files_bulk(
         for key, value in raw.items()
         if isinstance(value, str) and key not in {"file_ids", "review_tokens"}
     }
+    file_ids = [str(value) for value in raw.getlist("file_ids")]
+    if not file_ids:
+        return _release_files_redirect(
+            bid_id,
+            release_id,
+            notice="none_selected",
+            count=0,
+        )
     try:
         tokens: dict[str, str] = {}
         for value in raw.getlist("review_tokens"):
@@ -3643,7 +4251,6 @@ async def review_bid_received_files_bulk(
             if not separator or not file_id or not event_id or file_id in tokens:
                 raise ValueError("the selected file review tokens are invalid; refresh the package")
             tokens[file_id] = event_id
-        file_ids = [str(value) for value in raw.getlist("file_ids")]
         items = tuple(
             BulkFileReviewItem(
                 file_id=file_id,
@@ -3651,7 +4258,7 @@ async def review_bid_received_files_bulk(
             )
             for file_id in file_ids
         )
-        bid_package_service.bulk_classify_files(
+        result = bid_package_service.bulk_classify_files(
             bid_id,
             BulkFileDispositionCreate(
                 release_id=release_id,
@@ -3675,10 +4282,106 @@ async def review_bid_received_files_bulk(
         StaleIntakeError,
         sqlite3.Error,
     ) as exc:
-        return _intake_error_response(bid_id, exc, entered=entered, release_id=release_id)
-    return RedirectResponse(
-        f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(release_id)}#files",
-        status_code=303,
+        return _intake_error_response(
+            bid_id,
+            exc,
+            entered=entered,
+            release_id=release_id,
+            field_errors=_exclusion_field_errors(exc, plural=True),
+            selected_file_ids=file_ids,
+        )
+    notice = {
+        AnalysisEligibility.ELIGIBLE.value: "analysis_included",
+        AnalysisEligibility.EXCLUDED.value: "analysis_excluded",
+        AnalysisEligibility.NOT_ASSESSED.value: "analysis_undecided",
+    }[str(raw.get("analysis_eligibility"))]
+    return _release_files_redirect(
+        bid_id,
+        release_id,
+        notice=notice,
+        count=len(file_ids),
+        changed=len(result),
+    )
+
+
+@app.post("/bids/{bid_id}/package-intake-addenda/releases/{release_id}/bulk-governing-sources")
+async def select_bid_governing_sources_bulk(
+    bid_id: str, release_id: str, request: Request
+) -> Response:
+    """Apply one governing-source decision to selected Included files atomically."""
+    raw = await request.form()
+    entered = {
+        key: str(value)
+        for key, value in raw.items()
+        if isinstance(value, str) and key not in {"file_ids", "governing_tokens"}
+    }
+    file_ids = [str(value) for value in raw.getlist("file_ids")]
+    if not file_ids:
+        return _release_files_redirect(
+            bid_id,
+            release_id,
+            notice="none_selected",
+            count=0,
+        )
+    try:
+        tokens: dict[str, str | None] = {}
+        for value in raw.getlist("governing_tokens"):
+            file_id, separator, event_id = str(value).partition("|")
+            if not separator or not file_id or file_id in tokens:
+                raise ValueError(
+                    "the selected governing-source tokens are invalid; refresh the package"
+                )
+            tokens[file_id] = event_id or None
+        if any(file_id not in tokens for file_id in file_ids):
+            raise ValueError("a selected governing-source token is missing; refresh the package")
+        result = bid_package_service.select_governing_sources(
+            bid_id,
+            GoverningSelectionCreate(
+                release_id=release_id,
+                items=tuple(
+                    GoverningSelectionItem(
+                        file_id=file_id,
+                        supersedes_event_id=tokens[file_id],
+                    )
+                    for file_id in file_ids
+                ),
+                governing_disposition=GoverningDisposition(
+                    str(raw.get("governing_disposition") or "")
+                ),
+                operation_id=str(raw.get("operation_id") or ""),
+            ),
+            LOCAL_ACTOR,
+        )
+    except (
+        ValueError,
+        ValidationError,
+        IntakeConflictError,
+        IntakeNotFoundError,
+        StaleIntakeError,
+    ) as exc:
+        detail = validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc)
+        message = (
+            f"Could not update the governing Bid Basis sources: {detail}. "
+            "Refresh this package and try again. To select a governing source, mark it Include "
+            "for analysis first."
+        )
+        return _intake_error_response(
+            bid_id,
+            message,
+            entered=entered,
+            release_id=release_id,
+        )
+    notice = (
+        "governing_selected"
+        if str(raw.get("governing_disposition")) == GoverningDisposition.GOVERNING.value
+        else "governing_removed"
+    )
+    return _release_files_redirect(
+        bid_id,
+        release_id,
+        notice=notice,
+        count=len(file_ids),
+        changed=len(result),
     )
 
 
@@ -3715,49 +4418,81 @@ async def link_bid_received_file(bid_id: str, file_id: str, request: Request) ->
     )
 
 
-@app.post("/bids/{bid_id}/package-intake-addenda/files/{file_id}/controlled-document")
-async def control_bid_received_file(bid_id: str, file_id: str, request: Request) -> Response:
-    """Put a received file under document control using the managed original ContractIQ holds.
+def _control_received_file(
+    bid_id: str,
+    release_id: str,
+    file_id: str,
+    *,
+    operation_id: str,
+    title: str,
+    category: str,
+    version_label: str,
+    document_number: str | None = None,
+    issuer: str | None = None,
+    notes: str | None = None,
+    issued_date: str | None = None,
+    supersedes_link_id: str | None = None,
+) -> None:
+    """Put one received file under document control using the managed original ContractIQ holds.
 
     The bytes come from verified managed storage, never from a second upload, so the recorded
-    exact-bytes relationship is proven rather than asserted by the person filling the form.
+    exact-bytes relationship is proven rather than asserted. Shared by the single-file and
+    bulk 'Put under document control' routes so both run the identical register-then-link pair.
     """
+    source, evidence = bid_package_service.open_received_file(bid_id, release_id, file_id)
+    try:
+        _document, version = document_service.register_document_idempotent(
+            operation_id,
+            {
+                "bid_id": bid_id,
+                "title": title,
+                "document_number": document_number,
+                "category": category,
+                "issuer": issuer,
+                "notes": notes,
+                "version_label": version_label,
+                "issued_date": issued_date,
+            },
+            source,
+            str(evidence["original_filename"]),
+            str(evidence["detected_media_type"] or "") or None,
+            LOCAL_ACTOR,
+        )
+    finally:
+        source.close()
+    bid_package_service.link_file_document(
+        bid_id,
+        file_id,
+        FileDocumentLinkCreate(
+            document_version_id=version.document_version_id,
+            relationship=FileDocumentRelationship.EXACT_BYTES,
+            supersedes_link_id=supersedes_link_id,
+            operation_id=operation_id,
+        ),
+        LOCAL_ACTOR,
+    )
+
+
+@app.post("/bids/{bid_id}/package-intake-addenda/files/{file_id}/controlled-document")
+async def control_bid_received_file(bid_id: str, file_id: str, request: Request) -> Response:
+    """Put a received file under document control using the managed original ContractIQ holds."""
     raw = await request.form()
     entered = {key: str(value) for key, value in raw.items() if isinstance(value, str)}
     release_id = entered.get("release_id", "")
-    operation_id = entered.get("operation_id", "")
     try:
-        source, evidence = bid_package_service.open_received_file(bid_id, release_id, file_id)
-        try:
-            _document, version = document_service.register_document_idempotent(
-                operation_id,
-                {
-                    "bid_id": bid_id,
-                    "title": entered.get("title", ""),
-                    "document_number": entered.get("document_number") or None,
-                    "category": entered.get("category", ""),
-                    "issuer": entered.get("issuer") or None,
-                    "notes": entered.get("notes") or None,
-                    "version_label": entered.get("version_label") or "Original",
-                    "issued_date": entered.get("issued_date") or None,
-                },
-                source,
-                str(evidence["original_filename"]),
-                str(evidence["detected_media_type"] or "") or None,
-                LOCAL_ACTOR,
-            )
-        finally:
-            source.close()
-        bid_package_service.link_file_document(
+        _control_received_file(
             bid_id,
+            release_id,
             file_id,
-            FileDocumentLinkCreate(
-                document_version_id=version.document_version_id,
-                relationship=FileDocumentRelationship.EXACT_BYTES,
-                supersedes_link_id=entered.get("supersedes_link_id") or None,
-                operation_id=operation_id,
-            ),
-            LOCAL_ACTOR,
+            operation_id=entered.get("operation_id", ""),
+            title=entered.get("title", ""),
+            category=entered.get("category", ""),
+            version_label=entered.get("version_label") or "Original",
+            document_number=entered.get("document_number") or None,
+            issuer=entered.get("issuer") or None,
+            notes=entered.get("notes") or None,
+            issued_date=entered.get("issued_date") or None,
+            supersedes_link_id=entered.get("supersedes_link_id") or None,
         )
     except (
         ValueError,
@@ -3772,6 +4507,98 @@ async def control_bid_received_file(bid_id: str, file_id: str, request: Request)
         sqlite3.Error,
     ) as exc:
         return _intake_error_response(bid_id, exc, entered=entered, release_id=release_id)
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(release_id)}#files",
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/package-intake-addenda/releases/{release_id}/bulk-controlled-documents")
+async def bulk_control_bid_received_files(
+    bid_id: str, release_id: str, request: Request
+) -> Response:
+    """Put several selected, already-included files under document control in one action.
+
+    Each selected file still becomes its own controlled document — using the managed original
+    ContractIQ already holds, never a second upload, and never one document identity shared by
+    more than one file. Only the category and version label are shared across the selection,
+    the same way 'Review selected files' already shares one eligibility decision across a
+    selection; each file's title is proposed from its own filename, exactly as the single-file
+    form already proposes.
+    """
+    raw = await request.form()
+    entered = {
+        key: str(value)
+        for key, value in raw.items()
+        if isinstance(value, str) and key not in {"file_ids", "control_tokens"}
+    }
+    file_ids = [str(value) for value in raw.getlist("file_ids")]
+    if not file_ids:
+        return _release_files_redirect(
+            bid_id,
+            release_id,
+            notice="none_selected",
+            count=0,
+        )
+    completed = 0
+    total = 0
+    try:
+        tokens: dict[str, str] = {}
+        for value in raw.getlist("control_tokens"):
+            file_id, separator, operation_id = str(value).partition("|")
+            if not separator or not file_id or not operation_id or file_id in tokens:
+                raise ValueError(
+                    "the selected file control tokens are invalid; refresh the package"
+                )
+            tokens[file_id] = operation_id
+        total = len(file_ids)
+        command = BulkControlledDocumentCreate(
+            release_id=release_id,
+            items=tuple(
+                BulkControlledDocumentItem(file_id=file_id, operation_id=tokens.get(file_id, ""))
+                for file_id in file_ids
+            ),
+            category=str(raw.get("category") or ""),
+            version_label=str(raw.get("version_label") or "") or "Original",
+        )
+        detail = bid_package_service.release_detail(bid_id, release_id)
+        titles_by_file_id = {
+            str(item["file_id"]): proposed_document_title(str(item["original_filename"] or ""))
+            for item in detail["files"]
+        }
+        for item in command.items:
+            if item.file_id not in titles_by_file_id:
+                raise IntakeNotFoundError("selected received file not found in this Bid")
+            _control_received_file(
+                bid_id,
+                release_id,
+                item.file_id,
+                operation_id=item.operation_id,
+                title=titles_by_file_id[item.file_id],
+                category=command.category.value,
+                version_label=command.version_label,
+            )
+            completed += 1
+    except (
+        ValueError,
+        ValidationError,
+        OSError,
+        IntakeConflictError,
+        IntakeNotFoundError,
+        IntakePublicationError,
+        StaleIntakeError,
+        ManagedStorageFailureError,
+        DocumentStoreBusyError,
+        sqlite3.Error,
+    ) as exc:
+        message = validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc)
+        if completed:
+            message = (
+                f"{completed} of {total} selected file(s) were put under document control "
+                f"before this happened: {message}. Already-completed files do not need to be "
+                "redone."
+            )
+        return _intake_error_response(bid_id, message, entered=entered, release_id=release_id)
     return RedirectResponse(
         f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(release_id)}#files",
         status_code=303,
@@ -3886,6 +4713,44 @@ async def record_bid_release_acknowledgement(
         return _intake_error_response(bid_id, exc, entered=entered, release_id=release_id)
     return RedirectResponse(
         f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(release_id)}#acknowledgement",
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/package-intake-addenda/releases/{release_id}/reference-confirmation")
+async def confirm_bid_release_reference(bid_id: str, release_id: str, request: Request) -> Response:
+    """Confirm or correct the customer's own reference for a release (append-only)."""
+    raw = await request.form()
+    entered = {key: str(value) for key, value in raw.items() if isinstance(value, str)}
+    try:
+        state = entered.get("state", "")
+        if not state:
+            raise ValueError(
+                "Choose either 'The customer supplied a reference' or 'The customer provided "
+                "no reference'. An empty field is never treated as 'none provided'."
+            )
+        bid_package_service.record_reference_confirmation(
+            bid_id,
+            release_id,
+            ReferenceConfirmationCreate(
+                state=ReleaseReferenceState(state),
+                exact_customer_reference=entered.get("exact_customer_reference") or None,
+                note=entered.get("note") or None,
+                supersedes_event_id=entered.get("supersedes_event_id") or None,
+                operation_id=entered.get("operation_id", ""),
+            ),
+            LOCAL_ACTOR,
+        )
+    except (
+        ValueError,
+        ValidationError,
+        IntakeConflictError,
+        StaleIntakeError,
+        sqlite3.Error,
+    ) as exc:
+        return _intake_error_response(bid_id, exc, entered=entered, release_id=release_id)
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(release_id)}#reference",
         status_code=303,
     )
 
@@ -4101,7 +4966,7 @@ async def download_proposal_export(bid_id: str, export_id: str) -> Response:
         export.canonical_package_json.encode("utf-8"),
         media_type="application/json",
         headers={
-            "Content-Disposition": f'attachment; filename="{export.package_id}.json"',
+            "Content-Disposition": f'attachment; filename="{export.suggested_filename}"',
             "X-ContractIQ-Canonical-SHA256": export.canonical_sha256,
         },
     )
@@ -4243,9 +5108,7 @@ async def bid_handover_report(bid_id: str) -> HTMLResponse:
         report = bid_handover_service.report(
             bid_id,
             gate_verdict=workspace.readiness.verdict.value,
-            gate_blockers=[
-                f"{blocker.heading} — {blocker.detail}" for blocker in workspace.blockers
-            ],
+            gate_blockers=handover_gate_blockers(workspace.blockers, workspace.readiness),
             generated_by=f"ContractIQ server · {LOCAL_ACTOR}",
         )
     except (BidNotFoundError, ValueError) as exc:
@@ -4261,9 +5124,7 @@ async def bid_handover_csv(bid_id: str) -> Response:
         report = bid_handover_service.report(
             bid_id,
             gate_verdict=workspace.readiness.verdict.value,
-            gate_blockers=[
-                f"{blocker.heading} — {blocker.detail}" for blocker in workspace.blockers
-            ],
+            gate_blockers=handover_gate_blockers(workspace.blockers, workspace.readiness),
             generated_by=f"ContractIQ server · {LOCAL_ACTOR}",
         )
     except (BidNotFoundError, ValueError) as exc:
@@ -4553,6 +5414,443 @@ async def deliverable_history(deliverable_id: str) -> HTMLResponse:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return render("deliverable_history.html", history=history, deliverable_id=deliverable_id)
+
+
+def _deliverable_discovery_context(bid_id: str, **extra: object) -> dict[str, object]:
+    bid = bid_repository.get_bid(bid_id)
+    if bid is None:
+        raise ValueError(f"Bid not found: {bid_id}")
+    queue = deliverable_discovery_service.list_review_queue(bid_id)
+    flags = deliverable_discovery_repository.list_addendum_flags(bid_id)
+    promotions = deliverable_discovery_repository.list_promotions(bid_id)
+    unreadable_files = deliverable_discovery_repository.list_unreadable_extractions(bid_id)
+    package_repository = deliverable_discovery_service.bid_package_repository
+    intake = package_repository.summary(bid_id)
+    files = [
+        file_row
+        for release in intake.releases
+        for file_row in package_repository.release_detail(bid_id, str(release["release_id"]))[
+            "files"
+        ]
+    ]
+    undecided_files = sum(
+        1
+        for file_row in files
+        if file_row.get("analysis_eligibility") == AnalysisEligibility.NOT_ASSESSED.value
+    )
+    latest_release_id = str(intake.releases[0]["release_id"]) if intake.releases else None
+    latest_run, processed_file_ids = package_repository.latest_discovery_run_coverage(bid_id)
+    coverage = discovery_coverage(
+        files,
+        latest_run,
+        processed_file_ids,
+        unreadable_count=len(unreadable_files),
+    )
+    active_job = discovery_job_service.get_active_job(bid_id)
+    latest_finished_job = discovery_job_service.latest_finished_job(bid_id)
+    progress = discovery_source_progress(
+        {
+            str(file_row["file_id"])
+            for file_row in files
+            if file_row.get("analysis_eligibility") == AnalysisEligibility.ELIGIBLE.value
+        },
+        deliverable_discovery_repository.file_outcomes_for_bid(bid_id),
+    )
+    latest_outcome_views = [
+        file_outcome_view(row) for row in (latest_run or {}).get("file_outcomes") or []
+    ]
+    return {
+        "bid": bid,
+        "proposals": queue,
+        "flags": flags,
+        "promotions": promotions,
+        "unreadable_files": unreadable_files,
+        "coverage": coverage,
+        "active_job": active_job,
+        "latest_finished_job": latest_finished_job,
+        "retry_worthwhile": progress.retry_worthwhile,
+        "discovery_progress": progress.model_dump(),
+        "discovery_summary": progress_sentence(progress.model_dump()),
+        "discovery_labels": {
+            "active": job_state_label(str(active_job["state"])) if active_job else "",
+            "latest": (
+                job_state_label(
+                    str(latest_finished_job["state"]),
+                    str(latest_finished_job.get("error_code") or "") or None,
+                )
+                if latest_finished_job
+                else ""
+            ),
+        },
+        "not_analysed_view": [
+            view.model_dump() for view in latest_outcome_views if view.group != "analysed"
+        ],
+        "unreadable_view": [
+            {
+                "filename": str(item["original_filename"]),
+                "where": str(item["locator"]),
+                "label": unreadable_reason_label(item.get("failure_reason")),
+                "detail": str(item.get("failure_reason") or ""),
+            }
+            for item in unreadable_files
+        ],
+        "discovery_operation_id": f"OP-{uuid.uuid4().hex}",
+        "discovery_file_names": {
+            str(file_row["file_id"]): str(file_row["original_relative_path"]) for file_row in files
+        },
+        "discovery_undecided_files": undecided_files,
+        "discovery_files_path": (
+            f"/bids/{quote(bid_id)}/package-intake-addenda/releases/{quote(latest_release_id)}#files"
+            if latest_release_id
+            else f"/bids/{quote(bid_id)}/package-intake-addenda"
+        ),
+        "promoted_citation_ids": {row["citation_id"] for row in promotions},
+        "promotion_operation_id": f"OP-{uuid.uuid4().hex}",
+        **_bid_return_context(bid_id, BidWorkspaceSection.PACKAGE_INTAKE),
+        **extra,
+    }
+
+
+def _discovery_job_for_bid(bid_id: str, job_id: str) -> dict[str, object]:
+    job = discovery_job_service.get_job(job_id)
+    if job is None or str(job["bid_id"]) != bid_id:
+        raise HTTPException(status_code=404, detail="Discovery job not found")
+    return job
+
+
+def _human_elapsed(seconds: object) -> str:
+    total = max(0, int(float(seconds or 0)))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _discovery_endpoint_authority() -> str:
+    for name in ("base_url", "endpoint", "url"):
+        value = getattr(discovery_job_runner.llm_client, name, None)
+        if isinstance(value, str) and value:
+            parsed = urlsplit(value if "://" in value else f"//{value}")
+            return parsed.netloc or parsed.path.split("/")[0]
+    return "configured host:port"
+
+
+def _deliverable_discovery_job_context(
+    bid_id: str,
+    job_id: str,
+    *,
+    notice: str | None = None,
+) -> dict[str, object]:
+    job = _discovery_job_for_bid(bid_id, job_id)
+    context = _deliverable_discovery_context(bid_id)
+    package_repository = deliverable_discovery_service.bid_package_repository
+    intake = package_repository.summary(bid_id)
+    files = [
+        file_row
+        for release in intake.releases
+        for file_row in package_repository.release_detail(bid_id, str(release["release_id"]))[
+            "files"
+        ]
+    ]
+    run_facts = None
+    if job.get("run_id"):
+        run_facts = deliverable_discovery_repository.existing_run(bid_id, str(job["operation_id"]))
+    if run_facts is not None:
+        context["coverage"] = discovery_coverage(
+            files,
+            run_facts,
+            set(),
+            unreadable_count=len(context["unreadable_files"]),
+        )
+    terminal = str(job["state"]) in {"SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED"}
+    job["passages_not_attempted"] = (
+        max(0, int(job["passages_total"]) - int(job["passages_done"])) if terminal else 0
+    )
+    files_failed = int(run_facts.get("files_failed") or 0) if run_facts else 0
+    files_complete = (
+        int(run_facts.get("files_analysed") or 0)
+        if run_facts is not None
+        else int(job["files_done"])
+    )
+    file_outcomes = list(run_facts.get("file_outcomes") or []) if run_facts else []
+    context.update(
+        {
+            "job": job,
+            "run_facts": run_facts,
+            "file_outcomes": file_outcomes,
+            "discovery_view": discovery_job_view(
+                job, file_outcomes, retry_worthwhile=bool(context["retry_worthwhile"])
+            ),
+            "job_active": str(job["state"]) in {"QUEUED", "RUNNING", "CANCEL_REQUESTED"},
+            "job_terminal": terminal,
+            "files_complete": files_complete,
+            "files_failed": files_failed,
+            "elapsed": _human_elapsed(job["elapsed_seconds"]),
+            "endpoint_authority": _discovery_endpoint_authority(),
+            "already_active_notice": notice == "already_active",
+            "force_operation_id": f"OP-{uuid.uuid4().hex}",
+        }
+    )
+    return context
+
+
+@app.get("/bids/{bid_id}/deliverable-discovery", response_class=HTMLResponse)
+async def deliverable_discovery_page(bid_id: str) -> HTMLResponse:
+    try:
+        context = _deliverable_discovery_context(bid_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("deliverable_discovery.html", **context)
+
+
+def _owner_decision_context(
+    bid_id: str,
+    *,
+    return_path: str | None = None,
+    **extra: object,
+) -> dict[str, object]:
+    bid = bid_repository.get_bid(bid_id)
+    if bid is None:
+        raise ValueError(f"Bid not found: {bid_id}")
+    repository = owner_decision_service.repository
+    with db._conn() as conn:
+        evidence = collect_owner_decision_evidence(conn, bid_id)
+    context = build_owner_decision_page(
+        bid,
+        repository.get_current(bid_id),
+        repository.list_history(bid_id),
+        evidence,
+        bid_repository.list_approvals(bid_id),
+    )
+    safe_return_path = _owner_decision_return_path(bid_id, return_path)
+    context.update(_bid_return_context(bid_id, BidWorkspaceSection.OVERVIEW))
+    context["bid_return_path"] = safe_return_path
+    if safe_return_path.endswith("/proposal-issue-control"):
+        context["bid_section_label"] = "Proposal readiness and issue control"
+    context["owner_decision_return_path"] = safe_return_path
+    context.update(extra)
+    return context
+
+
+@app.get("/bids/{bid_id}/owner-decision", response_class=HTMLResponse)
+async def owner_decision_page(request: Request, bid_id: str) -> HTMLResponse:
+    try:
+        context = _owner_decision_context(
+            bid_id,
+            return_path=request.query_params.get("return"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if request.query_params.get("recorded") == "1":
+        context["recorded"] = True
+    return render("owner_decision.html", **context)
+
+
+@app.post("/bids/{bid_id}/owner-decision", response_class=HTMLResponse)
+async def record_owner_decision_route(request: Request, bid_id: str) -> Response:
+    form = dict(await request.form())
+    if bid_repository.get_bid(bid_id) is None:
+        raise HTTPException(status_code=404, detail=f"Bid not found: {bid_id}")
+    entered = {"reason": str(form.get("reason") or "")}
+    requested_return = str(form.get("return") or "") or None
+    return_path = _owner_decision_return_path(bid_id, requested_return)
+    try:
+        owner_decision_service.record_owner_decision(
+            bid_id,
+            str(form.get("decision") or ""),
+            str(form.get("reason") or ""),
+            LOCAL_ACTOR,
+            str(form.get("expected_current_decision_id") or "") or None,
+        )
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        context = _owner_decision_context(
+            bid_id,
+            return_path=return_path,
+            error=str(exc),
+            entered=entered,
+        )
+        return render("owner_decision.html", status_code=422, **context)
+    location = f"/bids/{quote(bid_id)}/owner-decision?recorded=1"
+    if requested_return is not None:
+        location += f"&{urlencode({'return': return_path})}"
+    return RedirectResponse(location, status_code=303)
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/run", response_class=HTMLResponse)
+async def deliverable_discovery_run(request: Request, bid_id: str) -> Response:
+    form = dict(await request.form())
+    operation_id = str(form.get("operation_id") or f"OP-{uuid.uuid4().hex}")
+    force_all = str(form.get("force_all") or "").lower() in {"1", "on", "true"}
+    try:
+        job = discovery_job_service.start_job(
+            bid_id, operation_id, LOCAL_ACTOR, force_all=force_all
+        )
+    except DiscoveryUnavailableError as exc:
+        context = _deliverable_discovery_context(bid_id, run_error=str(exc))
+        return render("deliverable_discovery.html", status_code=422, **context)
+    discovery_job_runner.notify()
+    path = f"/bids/{quote(bid_id)}/deliverable-discovery/jobs/{quote(str(job['job_id']))}"
+    if bool(job.get("already_active")):
+        path = f"{path}?{urlencode({'notice': 'already_active'})}"
+    return RedirectResponse(path, status_code=303)
+
+
+@app.get(
+    "/bids/{bid_id}/deliverable-discovery/jobs/{job_id}",
+    response_class=HTMLResponse,
+)
+async def deliverable_discovery_job_page(
+    request: Request, bid_id: str, job_id: str
+) -> HTMLResponse:
+    context = _deliverable_discovery_job_context(
+        bid_id,
+        job_id,
+        notice=request.query_params.get("notice"),
+    )
+    return render("deliverable_discovery_job.html", **context)
+
+
+@app.get("/bids/{bid_id}/deliverable-discovery/jobs/{job_id}/status")
+async def deliverable_discovery_job_status(bid_id: str, job_id: str) -> JSONResponse:
+    job = _discovery_job_for_bid(bid_id, job_id)
+    return JSONResponse(jsonable_encoder(job))
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/jobs/{job_id}/cancel")
+async def deliverable_discovery_job_cancel(bid_id: str, job_id: str) -> Response:
+    job = _discovery_job_for_bid(bid_id, job_id)
+    if str(job["state"]) in {"SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED"}:
+        return Response(
+            "Discovery job is already finished and cannot be cancelled.",
+            status_code=409,
+            media_type="text/plain",
+        )
+    discovery_job_service.cancel_job(job_id)
+    discovery_job_runner.notify()
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/deliverable-discovery/jobs/{quote(job_id)}",
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/jobs/{job_id}/resume")
+async def deliverable_discovery_job_resume(bid_id: str, job_id: str) -> Response:
+    _discovery_job_for_bid(bid_id, job_id)
+    try:
+        discovery_job_service.resume_job(job_id)
+    except ValueError:
+        return Response(
+            "Discovery job is not paused and cannot be resumed.",
+            status_code=409,
+            media_type="text/plain",
+        )
+    discovery_job_runner.notify()
+    return RedirectResponse(
+        f"/bids/{quote(bid_id)}/deliverable-discovery/jobs/{quote(job_id)}",
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/decide", response_class=HTMLResponse)
+async def deliverable_discovery_decide(request: Request, bid_id: str) -> Response:
+    form = await request.form()
+    action = str(form.get("action") or "")
+    rationale = str(form.get("rationale") or "").strip() or None
+    if action == "bulk_accept":
+        proposal_ids = [str(v) for v in form.getlist("proposal_id")]
+        decisions = [
+            ProposalDecisionInput(proposal_id=pid, decision=ProposalReviewDecision.ACCEPTED)
+            for pid in proposal_ids
+        ]
+    else:
+        proposal_id = str(form.get("proposal_id") or "")
+        try:
+            decision = ProposalReviewDecision(action.upper())
+        except ValueError:
+            context = _deliverable_discovery_context(bid_id, run_error=f"Unknown action: {action}")
+            return render("deliverable_discovery.html", status_code=422, **context)
+        decisions = [
+            ProposalDecisionInput(proposal_id=proposal_id, decision=decision, rationale=rationale)
+        ]
+    try:
+        results = deliverable_discovery_service.decide(bid_id, decisions, LOCAL_ACTOR)
+    except ValueError as exc:
+        context = _deliverable_discovery_context(bid_id, run_error=str(exc))
+        return render("deliverable_discovery.html", status_code=422, **context)
+    failures = [r for r in results if "error" in r]
+    context = _deliverable_discovery_context(
+        bid_id,
+        decide_error="; ".join(f"{r['proposal_id']}: {r['error']}" for r in failures)
+        if failures
+        else None,
+    )
+    status_code = 422 if failures else 200
+    return render("deliverable_discovery.html", status_code=status_code, **context)
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/promote-source", response_class=HTMLResponse)
+async def deliverable_discovery_promote_source(request: Request, bid_id: str) -> Response:
+    form = await request.form()
+    try:
+        result = deliverable_discovery_service.promote_source_to_controlled_version(
+            bid_id=bid_id,
+            deliverable_id=str(form.get("deliverable_id") or ""),
+            citation_id=str(form.get("citation_id") or ""),
+            document_version_id=str(form.get("document_version_id") or ""),
+            rationale=str(form.get("rationale") or ""),
+            operation_id=str(form.get("operation_id") or ""),
+            actor=LOCAL_ACTOR,
+        )
+    except ValueError as exc:
+        context = _deliverable_discovery_context(bid_id, promotion_error=str(exc))
+        return render("deliverable_discovery.html", status_code=422, **context)
+    context = _deliverable_discovery_context(
+        bid_id, promotion_result=result.model_dump(mode="json")
+    )
+    return render("deliverable_discovery.html", **context)
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/check-addendum-impact", response_class=HTMLResponse)
+async def deliverable_discovery_check_addendum_impact(bid_id: str) -> Response:
+    flagged = deliverable_discovery_service.detect_addendum_impacts(bid_id, LOCAL_ACTOR)
+    context = _deliverable_discovery_context(bid_id, addendum_check_result=flagged)
+    return render("deliverable_discovery.html", **context)
+
+
+@app.get("/bids/{bid_id}/deliverable-discovery/export")
+async def deliverable_discovery_export(bid_id: str) -> Response:
+    package = deliverable_discovery_service.export_package(bid_id)
+    body = package.model_dump_json(indent=2).encode("utf-8")
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{bid_id}-deliverable-candidates.json"'
+        },
+    )
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/import", response_class=HTMLResponse)
+async def deliverable_discovery_import(request: Request, bid_id: str) -> Response:
+    form = await request.form()
+    operation_id = str(form.get("operation_id") or f"OP-{uuid.uuid4().hex}")
+    upload = form.get("package_file")
+    if upload is None or not hasattr(upload, "read"):
+        context = _deliverable_discovery_context(bid_id, run_error="No import file was provided.")
+        return render("deliverable_discovery.html", status_code=422, **context)
+    try:
+        raw = await upload.read()
+        result = deliverable_discovery_service.import_package(
+            bid_id, raw, operation_id, LOCAL_ACTOR
+        )
+    except ImportRejectedError as exc:
+        context = _deliverable_discovery_context(bid_id, run_error=str(exc))
+        return render("deliverable_discovery.html", status_code=422, **context)
+    context = _deliverable_discovery_context(bid_id, import_result=result)
+    return render("deliverable_discovery.html", **context)
 
 
 @app.get("/api/deliverables")
@@ -5210,7 +6508,12 @@ async def revise_commercial_position(position_id: str, request: Request) -> Resp
             "new_source_file",
         }
         revision = PositionRevision.model_validate(
-            {key: value or None for key, value in form.items() if key not in source_fields}
+            {
+                # A blank customer position is an empty string, not an absent value.
+                key: value if key == "customer_position" else value or None
+                for key, value in form.items()
+                if key not in source_fields
+            }
         )
         ops08_repository.revise(
             position_id,
@@ -5514,8 +6817,6 @@ async def contract_risk_author(request: Request) -> Response:
         position_id = str(form.get("position_id") or "")
         if position_id:
             _position_context(position_id, bid_id)
-            if form.get("confirm_authoritative") != "on":
-                raise ValueError("Confirm creation of the authoritative contract risk")
         now = datetime.now(UTC)
         issue = ContractIssue(
             bid_id=bid_id,
@@ -5581,12 +6882,75 @@ async def contract_risk_detail(issue_id: str) -> HTMLResponse:
     )
 
 
+def _gate_approval_view(bid_id: str) -> dict[str, object]:
+    """Return gate-approval history (oldest first) plus the current decision per control."""
+    if not bid_id:
+        return {
+            "gate_approvals": [],
+            "current_gate_approvals": {},
+            "selected_pricing_baseline_id": None,
+            "selected_pricing_baseline": None,
+        }
+    history = sorted(
+        bid_repository.list_approvals(bid_id),
+        key=lambda item: (
+            item.recorded_at.isoformat() if item.recorded_at else "",
+            item.approval_id,
+        ),
+    )
+    current = {
+        item.approval_type.value: item for item in bid_repository.list_current_approvals(bid_id)
+    }
+    baseline = _pricing_baseline_summary(bid_id)
+    return {
+        "gate_approvals": history,
+        "current_gate_approvals": current,
+        "selected_pricing_baseline_id": (
+            str(baseline["selection_id"]) if baseline is not None else None
+        ),
+        "selected_pricing_baseline": baseline,
+    }
+
+
+def _has_effective_authority_policy() -> bool:
+    """Return whether issue authority can be assessed under a published policy."""
+    return bool(effective_policies(approval_repository.policies(), as_of=datetime.now(UTC)))
+
+
+def _offered_approval_types() -> list[ApprovalType]:
+    """Approval controls offered on the decisions page.
+
+    BID_NO_BID is no longer a gate approval: pursue/do-not-pursue is recorded as the
+    Bid's owner decision, so it is excluded from the controls a user can record here.
+    """
+    return [approval for approval in ApprovalType if approval is not ApprovalType.BID_NO_BID]
+
+
 @app.get("/decisions", response_class=HTMLResponse)
 async def decisions_register(
-    bid_id: str | None = None, position_id: str | None = None
+    bid_id: str | None = None,
+    position_id: str | None = None,
+    approval_type: str | None = None,
+    policy_notice: str | None = None,
+    copy_policy: str | None = None,
 ) -> HTMLResponse:
     contextual_position = None
     context_error = None
+    selected_approval_type = None
+    if approval_type:
+        try:
+            selected_approval_type = ApprovalType[approval_type]
+        except KeyError:
+            try:
+                selected_approval_type = ApprovalType(approval_type)
+            except ValueError:
+                pass
+    policy_entered: dict[str, Any] = (
+        _policy_entered_from_existing(copy_policy) if copy_policy else {}
+    )
+    offered = _offered_approval_types()
+    if selected_approval_type is not None and selected_approval_type not in offered:
+        selected_approval_type = None
     if position_id:
         try:
             contextual_position = _position_context(position_id, bid_id or "")
@@ -5597,10 +6961,12 @@ async def decisions_register(
         bids=bid_repository.list_bids(),
         bid_id=bid_id or "",
         policies=approval_repository.policies(),
+        has_effective_authority_policy=_has_effective_authority_policy(),
         cases=approval_repository.cases(bid_id),
         gaps=approval_service.gaps(bid_id),
-        gate_approvals=bid_repository.list_approvals(bid_id) if bid_id else [],
-        approval_types=list(ApprovalType),
+        **_gate_approval_view(bid_id or ""),
+        approval_types=offered,
+        selected_approval_type=selected_approval_type,
         decision_types=list(DecisionType),
         linked_position_labels=(
             _linked_position_labels(bid_id, "decision_case_id") if bid_id else {}
@@ -5608,11 +6974,31 @@ async def decisions_register(
         contextual_position=contextual_position,
         form_error=context_error,
         entered={"position_id": position_id or ""},
+        policy_form_error=None,
+        policy_entered=policy_entered,
+        policy_controls=_policy_controls(policy_entered.get("approval_controls", [])),
+        policy_notice={
+            "created": (
+                "Authority policy draft created. Review it below, then publish it when "
+                "the entered authority is approved and effective."
+            ),
+            "published": (
+                "Authority policy published. Its dates and declared roles now determine "
+                "whether it is effective and covers recorded approval evidence."
+            ),
+        }.get(policy_notice or ""),
         **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
     )
 
 
-def _decisions_error(bid_id: str, entered: dict[str, object], exc: Exception) -> HTMLResponse:
+def _decisions_error(
+    bid_id: str,
+    entered: dict[str, object],
+    exc: Exception,
+    *,
+    policy_entered: dict[str, Any] | None = None,
+    policy_error: bool = False,
+) -> HTMLResponse:
     position_id = str(entered.get("position_id") or "")
     contextual_position = None
     if position_id:
@@ -5620,24 +7006,267 @@ def _decisions_error(bid_id: str, entered: dict[str, object], exc: Exception) ->
             contextual_position = _position_context(position_id, bid_id)
         except ValueError:
             pass
+    try:
+        selected_approval_type = ApprovalType(str(entered.get("approval_type") or ""))
+    except ValueError:
+        selected_approval_type = None
     return render(
         "decisions.html",
         status_code=422,
         bids=bid_repository.list_bids(),
         bid_id=bid_id,
         policies=approval_repository.policies(),
+        has_effective_authority_policy=_has_effective_authority_policy(),
         cases=approval_repository.cases(bid_id or None),
         gaps=approval_service.gaps(bid_id or None),
-        gate_approvals=bid_repository.list_approvals(bid_id) if bid_id else [],
-        approval_types=list(ApprovalType),
+        **_gate_approval_view(bid_id or ""),
+        approval_types=_offered_approval_types(),
+        selected_approval_type=selected_approval_type,
         decision_types=list(DecisionType),
         contextual_position=contextual_position,
         linked_position_labels=(
             _linked_position_labels(bid_id, "decision_case_id") if bid_id else {}
         ),
-        form_error=validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc),
+        form_error=(
+            None
+            if policy_error
+            else validation_error_message(exc)
+            if isinstance(exc, ValidationError)
+            else str(exc)
+        ),
         entered=entered,
+        policy_form_error=(
+            (
+                "Authority policy was not changed. "
+                + (validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc))
+                + " Correct the policy fields described below and try again."
+            )
+            if policy_error
+            else None
+        ),
+        policy_entered=policy_entered or {},
+        policy_controls=_policy_controls(
+            [str(value) for value in (policy_entered or {}).get("approval_controls", [])]
+        ),
+        policy_notice=None,
         **_bid_return_context(bid_id or None, BidWorkspaceSection.COMMERCIAL_CONTRACT),
+    )
+
+
+def _required_policy_text(form: dict[str, object], field: str, label: str) -> str:
+    value = str(form.get(field) or "").strip()
+    if not value:
+        raise ValueError(f"{label} is required; enter the business value that was approved")
+    return value
+
+
+def _policy_instant(value: str, label: str, *, required: bool) -> datetime | None:
+    if not value:
+        if required:
+            raise ValueError(f"{label} is required; enter a date and time")
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid date and time") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=WORKING_TIMEZONE)
+    return parsed.astimezone(UTC)
+
+
+def _policy_roles(controls: Sequence[str], other_authorities: str) -> tuple[str, ...]:
+    """Combine ticked approval controls and typed authorities into the declared roles."""
+    offered = {approval.value for approval in _offered_approval_types()}
+    unknown = [control for control in controls if control not in offered]
+    if unknown:
+        raise ValueError(
+            f"Unknown approval control(s): {', '.join(unknown)}; tick only the controls offered"
+        )
+    typed = (line.strip() for line in other_authorities.splitlines())
+    roles = tuple(dict.fromkeys([*controls, *(line for line in typed if line)]))
+    if not roles:
+        raise ValueError(
+            "Choose at least one approval control or enter an approved authority; "
+            "a policy that covers nothing cannot authorise any approval"
+        )
+    return roles
+
+
+def _policy_json_list(value: str, label: str) -> list[dict[str, object]]:
+    """Decode an optional advanced JSON list verbatim; blank means none are defined."""
+    if not value.strip():
+        return []
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{label} must be valid JSON using the list format shown beside the field, "
+            "or left blank"
+        ) from exc
+    if not isinstance(decoded, list) or not all(isinstance(item, dict) for item in decoded):
+        raise ValueError(f"{label} must be a JSON list of objects, or left blank")
+    return decoded
+
+
+def _policy_controls(selected: Sequence[str]) -> list[dict[str, object]]:
+    """Approval controls offered on the policy form; nothing is ticked by default."""
+    return [
+        {
+            "value": approval.value,
+            "label": approval.value.replace("_", " ").title(),
+            "checked": approval.value in selected,
+        }
+        for approval in _offered_approval_types()
+    ]
+
+
+def _policy_entered_from_form(form: Any) -> dict[str, Any]:
+    """Capture every policy input so an invalid submission can be redisplayed intact."""
+    entered: dict[str, Any] = {
+        key: str(form.get(key) or "")
+        for key in (
+            "name",
+            "scope",
+            "description",
+            "effective_from",
+            "effective_until",
+            "other_authorities",
+            "rules",
+            "stages",
+        )
+    }
+    entered["approval_controls"] = [str(value) for value in form.getlist("approval_controls")]
+    return entered
+
+
+def _policy_entered_from_existing(policy_id: str) -> dict[str, Any]:
+    """Prefill a new draft from a stored policy, keeping rules and stages verbatim."""
+    for policy in approval_repository.policies():
+        if str(policy["policy_id"]) != policy_id:
+            continue
+        offered = {approval.value for approval in _offered_approval_types()}
+        roles = [str(role) for role in json.loads(policy["roles_json"])]
+        return {
+            "name": str(policy["name"]),
+            "scope": str(policy["scope"]),
+            "description": str(policy["description"]),
+            "effective_from": "",
+            "effective_until": "",
+            "approval_controls": [role for role in roles if role in offered],
+            "other_authorities": "\n".join(role for role in roles if role not in offered),
+            "rules": json.dumps(json.loads(policy["rules_json"]), indent=2),
+            "stages": json.dumps(json.loads(policy["stages_json"]), indent=2),
+        }
+    return {}
+
+
+def _authority_policy_from_form(form: Any) -> AuthorityPolicy:
+    """Build the existing AuthorityPolicy model from explicit business inputs."""
+    roles = _policy_roles(
+        [str(value) for value in form.getlist("approval_controls")],
+        str(form.get("other_authorities") or ""),
+    )
+    rules = _policy_json_list(str(form.get("rules") or ""), "Rules")
+    stages = _policy_json_list(str(form.get("stages") or ""), "Stages")
+    declared_roles = set(roles)
+    for index, rule in enumerate(rules, start=1):
+        if not str(rule.get("rule_id") or "").strip():
+            raise ValueError(f"Rule {index} needs a rule_id so matched authority is auditable")
+        if not isinstance(rule.get("dimensions"), dict):
+            raise ValueError(
+                f"Rule {index} dimensions must be a JSON object of exact fact names and values"
+            )
+    for index, stage in enumerate(stages, start=1):
+        order = stage.get("order")
+        if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+            raise ValueError(f"Stage {index} order must be a whole number of 1 or greater")
+        if stage.get("mode") not in {"ALL_REQUIRED", "ANY_ONE"}:
+            raise ValueError(f"Stage {index} mode must be ALL_REQUIRED or ANY_ONE")
+        stage_roles = stage.get("roles")
+        if (
+            not isinstance(stage_roles, list)
+            or not stage_roles
+            or not all(isinstance(role, str) and role.strip() for role in stage_roles)
+        ):
+            raise ValueError(f"Stage {index} roles must be a non-empty JSON list of role codes")
+        undeclared = [role for role in stage_roles if role not in declared_roles]
+        if undeclared:
+            raise ValueError(
+                f"Stage {index} uses undeclared role(s): {', '.join(undeclared)}; "
+                "tick or enter them above, or correct the stage"
+            )
+    effective_from = _policy_instant(
+        str(form.get("effective_from") or ""), "Effective from", required=True
+    )
+    effective_until = _policy_instant(
+        str(form.get("effective_until") or ""), "Effective until", required=False
+    )
+    if effective_from is None:
+        raise ValueError("Effective from is required; enter a date and time")
+    if effective_until is not None and effective_until <= effective_from:
+        raise ValueError("Effective until must be later than Effective from")
+    now = datetime.now(UTC)
+    return AuthorityPolicy(
+        name=_required_policy_text(form, "name", "Policy name"),
+        description=_required_policy_text(form, "description", "Description"),
+        scope=_required_policy_text(form, "scope", "Scope"),
+        effective_from=effective_from,
+        effective_until=effective_until,
+        roles=roles,
+        rules=tuple(rules),
+        stages=tuple(stages),
+        created_by=LOCAL_ACTOR,
+        created_at=now,
+        provenance=Provenance.from_human(LOCAL_ACTOR),
+    )
+
+
+@app.post("/decisions/authority-policies", response_class=HTMLResponse)
+async def create_authority_policy_html(request: Request) -> Response:
+    """Create a draft through the same service used by the authority-policy API."""
+    form = await request.form()
+    bid_id = str(form.get("bid_id") or "")
+    try:
+        policy = _authority_policy_from_form(form)
+        approval_service.create_policy(policy, LOCAL_ACTOR)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return _decisions_error(
+            bid_id,
+            {},
+            exc,
+            policy_entered=_policy_entered_from_form(form),
+            policy_error=True,
+        )
+    return RedirectResponse(
+        f"/decisions?bid_id={quote(bid_id)}&policy_notice=created#authority-policies",
+        status_code=303,
+    )
+
+
+@app.post(
+    "/decisions/authority-policies/{policy_id}/publish",
+    response_class=HTMLResponse,
+)
+async def publish_authority_policy_html(policy_id: str, request: Request) -> Response:
+    """Publish through ApprovalService so its transaction and audit stay authoritative."""
+    form = dict(await request.form())
+    bid_id = str(form.get("bid_id") or "")
+    try:
+        approval_service.publish_policy(policy_id, LOCAL_ACTOR)
+    except (ValueError, sqlite3.Error) as exc:
+        return _decisions_error(
+            bid_id,
+            {},
+            ValueError(
+                f"{exc}. Publish a policy that is still Draft; if it already changed, "
+                "reload this page and review its lifecycle"
+            ),
+            policy_entered={"publish_policy_id": policy_id},
+            policy_error=True,
+        )
+    return RedirectResponse(
+        f"/decisions?bid_id={quote(bid_id)}&policy_notice=published#authority-policies",
+        status_code=303,
     )
 
 
@@ -5651,13 +7280,19 @@ async def record_gate_approval(request: Request) -> Response:
         authority = str(form.get("authority") or "") or None
         evidence = str(form.get("evidence_ref") or "") or None
         decision = str(form.get("decision") or "") or None
+        if str(form.get("approval_type", "")).strip().lower() == "bid_no_bid":
+            raise ValueError(
+                "Bid/no-bid is now recorded as the owner decision, not as an approval; "
+                "use the owner decision page for this Bid"
+            )
         if obtained and (not authority or not evidence or not decision):
             raise ValueError("Obtained approval requires authority, evidence and decision")
-        bid_repository.create_approval(
+        approval_type = ApprovalType(str(form.get("approval_type", "")))
+        bid_repository.record_gate_approval(
             Approval(
                 approval_id=f"APR-{uuid.uuid4().hex}",
                 bid_id=bid_id,
-                approval_type=ApprovalType(str(form.get("approval_type", ""))),
+                approval_type=approval_type,
                 obtained=obtained,
                 authority=authority,
                 evidence_ref=evidence,
@@ -5666,10 +7301,14 @@ async def record_gate_approval(request: Request) -> Response:
                 provenance=Provenance.from_human(LOCAL_ACTOR),
             ),
             LOCAL_ACTOR,
+            str(form.get("expected_current_approval_id") or "") or None,
         )
     except (ValidationError, ValueError, sqlite3.Error) as exc:
         return _decisions_error(bid_id, form, exc)
-    return RedirectResponse(f"/decisions?bid_id={quote(bid_id)}#gate-approval", status_code=303)
+    return RedirectResponse(
+        f"/decisions?bid_id={quote(bid_id)}&approval_type={approval_type.name}#gate-approval",
+        status_code=303,
+    )
 
 
 @app.post("/decisions/cases", response_class=HTMLResponse)
@@ -5682,8 +7321,6 @@ async def create_decision_case_html(request: Request) -> Response:
         position_id = str(form.get("position_id") or "")
         if position_id:
             _position_context(position_id, bid_id)
-            if form.get("confirm_authoritative") != "on":
-                raise ValueError("Confirm creation of the authoritative approval request")
         now = datetime.now(UTC)
         case = DecisionCase(
             bid_id=bid_id,
@@ -5803,6 +7440,346 @@ async def record_approval_event(route_id: str, request: Request) -> JSONResponse
         raise _mutation_error(exc) from exc
 
 
+class _PricingBaselineFieldError(ValueError):
+    """A browser-form guard that can be rendered beside the responsible field."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+def _required_pricing_field(form: dict[str, object], field: str, label: str) -> str:
+    value = str(form.get(field) or "").strip()
+    if not value:
+        raise _PricingBaselineFieldError(
+            field,
+            f"{label} is required. Enter {label.lower()} and try again.",
+        )
+    return value
+
+
+def _pricing_amount(form: dict[str, object], field: str, label: str) -> Decimal:
+    value = _required_pricing_field(form, field, label)
+    try:
+        amount = Decimal(value)
+    except InvalidOperation as exc:
+        raise _PricingBaselineFieldError(
+            field,
+            f"{label} must be a number. Enter an amount such as 100000.00.",
+        ) from exc
+    if not amount.is_finite():
+        raise _PricingBaselineFieldError(
+            field,
+            f"{label} must be a finite number. Enter the exact monetary amount.",
+        )
+    return amount
+
+
+def _pricing_baseline_page_location(bid_id: str, return_to: str | None) -> str:
+    path = f"/bids/{quote(bid_id, safe='')}/pricing-baseline"
+    if return_to:
+        path += f"?{urlencode({'return_to': return_to})}"
+    return path
+
+
+def _pricing_version_rows(bid_id: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for family in scenario_repository.families(bid_id):
+        for version in scenario_repository.versions(str(family["family_id"])):
+            reviews = scenario_repository.reviews(str(version["scenario_version_id"]))
+            with db._conn() as conn:
+                stored = conn.execute(
+                    "SELECT result_json FROM scenario_results WHERE scenario_version_id=?",
+                    (str(version["scenario_version_id"]),),
+                ).fetchone()
+            result: dict[str, object] = {}
+            if stored is not None:
+                loaded = json.loads(str(stored["result_json"]))
+                if isinstance(loaded, dict):
+                    result = loaded
+            margin_bps = result.get("gross_margin_bps")
+            rows.append(
+                {
+                    **version,
+                    "scenario_code": str(family["code"]),
+                    "scenario_title": str(family["title"]),
+                    "reviews": reviews,
+                    "review_state": (str(reviews[-1]["decision"]) if reviews else "NOT_REVIEWED"),
+                    "accepted": any(
+                        str(review["decision"]) == ReviewDecision.ACCEPTED.value
+                        for review in reviews
+                    ),
+                    "result": result,
+                    "gross_margin": (
+                        f"{Decimal(str(margin_bps)) / Decimal(100):.2f}%"
+                        if margin_bps is not None
+                        else "Not available"
+                    ),
+                }
+            )
+    return rows
+
+
+def _pricing_baseline_context(
+    bid_id: str,
+    *,
+    return_to: str | None = None,
+    form_error: str | None = None,
+    field_errors: dict[str, str] | None = None,
+    entered: dict[str, object] | None = None,
+    active_form: str | None = None,
+) -> dict[str, object]:
+    bid = bid_repository.get_bid(bid_id)
+    if bid is None:
+        raise ValueError(f"Bid not found: {bid_id}")
+    safe_return = _safe_local_return_to(return_to)
+    families = scenario_repository.families(bid_id)
+    return {
+        "bid": bid,
+        "bid_id": bid_id,
+        "families": families,
+        "versions": _pricing_version_rows(bid_id),
+        "selected_baseline": _pricing_baseline_summary(bid_id),
+        "scenario_purposes": list(ScenarioPurpose),
+        "review_decisions": list(ReviewDecision),
+        "return_to": safe_return,
+        "form_error": form_error,
+        "field_errors": field_errors or {},
+        "entered": entered or {},
+        "active_form": active_form,
+        **_bid_return_context(bid_id, BidWorkspaceSection.COMMERCIAL_CONTRACT),
+    }
+
+
+def _pricing_baseline_error(
+    bid_id: str,
+    form: dict[str, object],
+    exc: Exception,
+    active_form: str,
+) -> HTMLResponse:
+    if isinstance(exc, _PricingBaselineFieldError):
+        field = exc.field
+        message = str(exc)
+    elif active_form == "review" and str(exc) == "scenario author cannot independently review":
+        field = "reviewer"
+        message = f"{exc}. Enter an independent reviewer who is different from {LOCAL_ACTOR}."
+    elif active_form == "baseline" and str(exc) == (
+        "baseline requires independent calculation acceptance"
+    ):
+        field = "scenario_version_id"
+        message = f"{exc}. Record an ACCEPTED review for this version, then select it again."
+    elif isinstance(exc, ValidationError):
+        errors = exc.errors(include_url=False)
+        field = str(errors[0]["loc"][-1]) if errors and errors[0].get("loc") else "form"
+        message = f"{validation_error_message(exc)}. Correct this value and try again."
+    elif isinstance(exc, sqlite3.IntegrityError):
+        field = "code" if active_form == "family" else "form"
+        message = (
+            "That scenario code is already used for this Bid. Enter a unique code and try again."
+            if active_form == "family"
+            else "The pricing record conflicts with an existing record. Reload and try again."
+        )
+    else:
+        field = "form"
+        message = f"{exc}. Correct the pricing details and try again."
+    return render(
+        "pricing_baseline.html",
+        status_code=422,
+        **_pricing_baseline_context(
+            bid_id,
+            return_to=str(form.get("return_to") or "") or None,
+            form_error=message,
+            field_errors={field: message},
+            entered=form,
+            active_form=active_form,
+        ),
+    )
+
+
+def _scenario_family_for_bid(bid_id: str, family_id: str) -> dict[str, object]:
+    family = next(
+        (row for row in scenario_repository.families(bid_id) if str(row["family_id"]) == family_id),
+        None,
+    )
+    if family is None:
+        raise _PricingBaselineFieldError(
+            "family_id",
+            "Scenario family was not found for this Bid. Choose a listed family and try again.",
+        )
+    return family
+
+
+def _scenario_version_for_bid(bid_id: str, version_id: str) -> dict[str, object]:
+    with db._conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM scenario_versions WHERE scenario_version_id=? AND bid_id=?",
+            (version_id, bid_id),
+        ).fetchone()
+    if row is None:
+        raise _PricingBaselineFieldError(
+            "scenario_version_id",
+            "Scenario version was not found for this Bid. Choose a listed version and try again.",
+        )
+    return dict(row)
+
+
+@app.get("/bids/{bid_id}/pricing-baseline", response_class=HTMLResponse)
+async def pricing_baseline_page(
+    bid_id: str,
+    return_to: str | None = None,
+) -> HTMLResponse:
+    try:
+        context = _pricing_baseline_context(bid_id, return_to=return_to)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return render("pricing_baseline.html", **context)
+
+
+@app.post("/bids/{bid_id}/pricing-baseline/families", response_class=HTMLResponse)
+async def create_pricing_scenario_family(bid_id: str, request: Request) -> Response:
+    form = dict(await request.form())
+    try:
+        if bid_repository.get_bid(bid_id) is None:
+            raise ValueError(f"Bid not found: {bid_id}")
+        family = ScenarioFamily(
+            bid_id=bid_id,
+            code=_required_pricing_field(form, "code", "Scenario code"),
+            purpose=_required_pricing_field(form, "purpose", "Purpose"),
+            title=_required_pricing_field(form, "title", "Title"),
+            owner=_required_pricing_field(form, "owner", "Owner"),
+            intent=_required_pricing_field(form, "intent", "Intent"),
+            created_by=LOCAL_ACTOR,
+            created_at=datetime.now(UTC),
+        )
+        scenario_service.create_family(family, LOCAL_ACTOR)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return _pricing_baseline_error(bid_id, form, exc, "family")
+    return RedirectResponse(
+        _pricing_baseline_page_location(
+            bid_id, _safe_local_return_to(str(form.get("return_to") or "") or None)
+        ),
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/pricing-baseline/versions", response_class=HTMLResponse)
+async def create_pricing_scenario_version(bid_id: str, request: Request) -> Response:
+    form = dict(await request.form())
+    try:
+        family_id = _required_pricing_field(form, "family_id", "Scenario family")
+        _scenario_family_for_bid(bid_id, family_id)
+        revenue_currency = _required_pricing_field(
+            form, "revenue_currency", "Revenue currency"
+        ).upper()
+        lines = [
+            ScenarioLine(
+                role=_required_pricing_field(form, "revenue_role", "Revenue role"),
+                amount=_pricing_amount(form, "revenue_amount", "Revenue amount"),
+                currency=revenue_currency,
+                contributes_to_revenue=True,
+            )
+        ]
+        for suffix in ("", "_2", "_3"):
+            fields = (
+                f"cost_role{suffix}",
+                f"cost_amount{suffix}",
+                f"cost_currency{suffix}",
+            )
+            supplied = any(str(form.get(field) or "").strip() for field in fields)
+            if suffix and not supplied:
+                continue
+            role = _required_pricing_field(form, fields[0], "Cost role")
+            amount = _pricing_amount(form, fields[1], "Cost amount")
+            currency = _required_pricing_field(form, fields[2], "Cost currency").upper()
+            if currency != revenue_currency:
+                raise _PricingBaselineFieldError(
+                    fields[2],
+                    "Cost currency must match the revenue currency because no currency "
+                    "conversion was entered. Use one currency for this version.",
+                )
+            lines.append(
+                ScenarioLine(
+                    role=role,
+                    amount=amount,
+                    currency=currency,
+                    contributes_to_cost=True,
+                )
+            )
+        existing_versions = scenario_repository.versions(family_id)
+        next_version = max((int(row["version_number"]) for row in existing_versions), default=0) + 1
+        version = ScenarioVersion(
+            family_id=family_id,
+            bid_id=bid_id,
+            version_number=next_version,
+            presentation_currency=revenue_currency,
+            lines=tuple(lines),
+            source_links=(),
+            created_by=LOCAL_ACTOR,
+            created_at=datetime.now(UTC),
+        )
+        scenario_service.calculate(version, LOCAL_ACTOR)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return _pricing_baseline_error(bid_id, form, exc, "version")
+    return RedirectResponse(
+        _pricing_baseline_page_location(
+            bid_id, _safe_local_return_to(str(form.get("return_to") or "") or None)
+        ),
+        status_code=303,
+    )
+
+
+@app.post(
+    "/bids/{bid_id}/pricing-baseline/versions/{version_id}/reviews",
+    response_class=HTMLResponse,
+)
+async def review_pricing_scenario_version(
+    bid_id: str, version_id: str, request: Request
+) -> Response:
+    form = dict(await request.form())
+    form["scenario_version_id"] = version_id
+    try:
+        _scenario_version_for_bid(bid_id, version_id)
+        review = ScenarioReview(
+            scenario_version_id=version_id,
+            decision=_required_pricing_field(form, "decision", "Review decision"),
+            reviewer=_required_pricing_field(form, "reviewer", "Reviewer"),
+            reviewed_at=datetime.now(UTC),
+            rationale=_required_pricing_field(form, "rationale", "Review rationale"),
+        )
+        scenario_service.review(review, bid_id, LOCAL_ACTOR)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return _pricing_baseline_error(bid_id, form, exc, "review")
+    return RedirectResponse(
+        _pricing_baseline_page_location(
+            bid_id, _safe_local_return_to(str(form.get("return_to") or "") or None)
+        ),
+        status_code=303,
+    )
+
+
+@app.post("/bids/{bid_id}/pricing-baseline/select", response_class=HTMLResponse)
+async def select_pricing_scenario_baseline(bid_id: str, request: Request) -> Response:
+    form = dict(await request.form())
+    try:
+        version_id = _required_pricing_field(form, "scenario_version_id", "Scenario version")
+        _scenario_version_for_bid(bid_id, version_id)
+        selection = BaselineSelection(
+            bid_id=bid_id,
+            scenario_version_id=version_id,
+            selected_by=LOCAL_ACTOR,
+            selected_at=datetime.now(UTC),
+            rationale=_required_pricing_field(form, "baseline_rationale", "Baseline rationale"),
+        )
+        scenario_service.select_baseline(selection)
+    except (ValidationError, ValueError, sqlite3.Error) as exc:
+        return _pricing_baseline_error(bid_id, form, exc, "baseline")
+    return_to = _safe_local_return_to(str(form.get("return_to") or "") or None)
+    return RedirectResponse(
+        return_to or _pricing_baseline_page_location(bid_id, None),
+        status_code=303,
+    )
+
+
 @app.get("/commercial-scenarios", response_class=HTMLResponse)
 async def commercial_scenarios_register(bid_id: str | None = None) -> HTMLResponse:
     return render(
@@ -5913,8 +7890,6 @@ async def create_negotiation_plan_html(request: Request) -> Response:
         if bid_repository.get_bid(bid_id) is None:
             raise ValueError("Bid not found")
         position = _position_context(position_id, bid_id) if position_id else None
-        if position_id and form.get("confirm_authoritative") != "on":
-            raise ValueError("Confirm creation of the authoritative negotiation plan")
         plan = NegotiationPlan(
             bid_id=bid_id,
             code=str(form.get("code") or ""),

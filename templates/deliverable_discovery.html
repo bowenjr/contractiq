@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Bid deliverables discovery · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<main class="page-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+{% if bid_context %}<p><a href="{{ bid_return_path }}">← Back to Bid {{ bid_context.bid_id }} — {{ bid_section_label }}</a></p>{% endif %}
+<div class="page-heading"><div><p class="eyebrow">Pre-award Bid submissions</p><h1>Find required Bid submissions</h1><p class="muted">Proposed deliverables extracted from the files you Included for analysis; a confirmed Bid Basis is not required. Accepted rows become authoritative deliverables in the existing register; rejected or deferred rows remain review evidence only and never affect readiness.</p></div></div>
+
+{% if run_error %}<div class="error" role="alert">{{ run_error }}</div>{% endif %}
+{% if decide_error %}<div class="error" role="alert">{{ decide_error }}</div>{% endif %}
+{% if promotion_error %}<div class="error" role="alert">{{ promotion_error }}</div>{% endif %}
+{% if promotion_result %}<p>Source promoted to controlled version {{ promotion_result.document_version_id }}.</p>{% endif %}
+
+<section class="card">
+  <h2>Run extraction and proposal</h2>
+  {% if active_job %}<div class="notice" role="status">Analysis in progress: {{ discovery_labels.active if discovery_labels is defined else active_job.state }} — {{ active_job.passages_done }}/{{ active_job.passages_total }}. <a href="/bids/{{ bid.bid_id }}/deliverable-discovery/jobs/{{ active_job.job_id }}">View progress</a></div>{% endif %}
+  {% if latest_finished_job %}<p><a href="/bids/{{ bid.bid_id }}/deliverable-discovery/jobs/{{ latest_finished_job.job_id }}">View the latest analysis ({{ discovery_labels.latest if discovery_labels is defined else latest_finished_job.state }})</a></p>{% endif %}
+  {% if coverage.has_run %}
+  {% if discovery_summary is defined and not coverage.legacy %}
+  <p><strong>{{ discovery_summary }}</strong>{% if coverage.undecided_count %} {{ coverage.undecided_count }} received file(s) are still undecided.{% endif %}</p>
+  {% if not_analysed_view %}<ul>{% for f in not_analysed_view %}<li><strong>{{ f.filename }}</strong> — {{ f.status }}.{% if f.remedy %} {{ f.remedy }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+  {% else %}
+  {% if coverage.legacy %}<div class="notice warning" role="alert"><strong>LEGACY</strong> — this run was recorded before per-file outcomes were kept.</div>{% elif coverage.outcome in ('PARTIAL', 'FAILED') %}<div class="notice warning" role="alert"><strong>{{ coverage.outcome }}</strong> — discovery did not fully analyse every Included file.</div>{% else %}<p><strong>{{ coverage.outcome }}</strong></p>{% endif %}
+  <p><strong>{{ coverage.included_count }} Included file(s): {{ coverage.extracted_count }} extracted{% if coverage.legacy %}; whether the model analysed them was not recorded for this run.{% else %}, {{ coverage.analysed_count }} analysed by the model, {{ coverage.not_analysed_count }} not analysed.{% endif %}</strong> {{ coverage.undecided_count }} file(s) still undecided/unanalysed.</p>
+  {% if not coverage.legacy %}<p><strong>{{ coverage.passages_not_attempted }} passage(s) not attempted.</strong></p>{% endif %}
+  {% if coverage.not_fully_analysed_files %}<ul>{% for item in coverage.not_fully_analysed_files %}<li><strong>{{ item.name }}</strong> — {{ item.outcome }}: {{ item.detail }}</li>{% endfor %}</ul>{% endif %}
+  {% endif %}
+  {% else %}
+  <p><strong>{{ coverage.included_count }} Included file(s) will be analysed;</strong> {{ coverage.undecided_count }} file(s) are still undecided and will not be.</p>
+  {% endif %}
+  {% if coverage.undecided_count %}<p><a href="/bids/{{ bid.bid_id }}/package-intake-addenda">Finish reviewing the package</a></p>{% endif %}
+  {% if not active_job %}<form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/run">
+    <input type="hidden" name="operation_id" value="{{ discovery_operation_id }}">
+    <label><input type="checkbox" name="force_all" value="1"> Re-analyse files that were already analysed</label>
+    <button type="submit">Run over the Included files</button>
+  </form>{% endif %}
+  {% if coverage.has_run and coverage.honesty_warning and discovery_summary is defined and not coverage.legacy %}<div class="notice warning" role="alert">The latest analysis found no possible returnables. That does not show the files contain none: some files were not analysed.<details><summary>Details</summary><p class="muted">{{ coverage.honesty_reasons|join('; ') }}</p></details></div>{% elif coverage.has_run and coverage.honesty_warning %}<div class="notice warning" role="alert">0 candidates is not a finding that this package has no deliverables: {{ coverage.honesty_reasons|join('; ') }}.</div>{% elif coverage.has_run and coverage.outcome == 'SUCCEEDED' and coverage.proposal_count == 0 %}<p>The model found 0 candidate deliverables across the fully analysed Included files.</p>{% endif %}
+  {% if import_result %}<p class="muted">Import {{ import_result.run_id }}: {{ import_result.proposal_count }} candidate(s) imported{% if import_result.rejected_source_count %}, {{ import_result.rejected_source_count }} rejected (fabricated or cross-Bid source){% endif %}.</p>{% endif %}
+  <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/check-addendum-impact">
+    <button type="submit">Check for addendum impact on existing proposals and deliverables</button>
+  </form>
+  {% if addendum_check_result is defined %}<p class="muted">{{ addendum_check_result|length }} item(s) flagged for re-review.</p>{% endif %}
+</section>
+
+{% if unreadable_files %}
+<section class="card rail" role="alert">
+  <h2>Files that could not be read</h2>
+  <p>These files were NOT analysed. The absence of proposals from them does not mean they contain no deliverables.</p>
+  {% if unreadable_view is defined %}
+  <ul>{% for item in unreadable_view %}<li><strong>{{ item.filename }}</strong> — {{ item.label }} <span class="muted">({{ item.where }})</span><details><summary>Details</summary><p class="muted">{{ item.detail }}</p></details></li>{% endfor %}</ul>
+  {% else %}
+  <ul>{% for item in unreadable_files %}<li><strong>{{ item.original_filename }}</strong> — {{ item.locator }}: {{ item.failure_reason }}</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if flags %}
+<section class="card rail">
+  <h2>Flagged for re-review after an addendum</h2>
+  <p class="muted">These items were sourced from a document version an addendum directive now targets. Nothing has been changed automatically — review and decide manually.</p>
+  <ul>{% for flag in flags %}<li>{% if flag.proposal_id %}Proposal {{ flag.proposal_id }}{% else %}Deliverable {{ flag.deliverable_id }}{% endif %} — {{ flag.rationale }} (directive {{ flag.directive_id }})</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section class="card" id="proposals">
+  <h2>Proposed submissions awaiting review</h2>
+  <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">
+    <input type="hidden" name="action" value="bulk_accept">
+    <table>
+      <thead><tr><th></th><th>Proposed deliverable</th><th>Required?</th><th>Source</th><th>Excerpt</th><th>Due</th><th>Format / recipient</th><th>Owner</th><th>Review</th></tr></thead>
+      <tbody>
+      {% for row in proposals %}
+        {% if row.current_decision == 'PENDING' %}
+        <tr>
+          <td>{% if row.unambiguous %}<input type="checkbox" name="proposal_id" value="{{ row.proposal_id }}">{% endif %}</td>
+          <td><strong>{{ row.title }}</strong><div class="muted">{{ row.category }}</div>{% if row.condition_text %}<div class="muted">Condition: {{ row.condition_text }}</div>{% endif %}</td>
+          <td>{{ row.criticality|title }}</td>
+          <td>{% for source in row.sources %}<div>{{ source.locator_type|title }} {{ source.locator }}{% if source.document_version_id %}<details><summary>Details</summary><span class="muted">{{ source.document_version_id }}</span></details>{% endif %}</div>{% endfor %}</td>
+          <td>{% for source in row.sources %}<q>{{ source.excerpt[:200] }}</q>{% endfor %}</td>
+          <td>{{ row.due_date or 'Not stated' }}</td>
+          <td>{{ row.requested_format or '—' }} / {{ row.requested_recipient or '—' }}</td>
+          <td>{{ row.proposed_owner or 'Not assigned' }}</td>
+          <td>
+            <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide" style="display:inline">
+              <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
+              <input type="hidden" name="action" value="accepted">
+              <button type="submit" {% if not row.unambiguous %}disabled title="Resolve UNCLEAR criticality before accepting"{% endif %}>Accept</button>
+            </form>
+            <button type="button" onclick="document.getElementById('reject-{{ row.proposal_id }}').hidden=false">Reject / defer</button>
+          </td>
+        </tr>
+        <tr id="reject-{{ row.proposal_id }}" hidden><td colspan="9">
+          <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">
+            <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
+            <label>Decision<select name="action"><option value="rejected">Reject</option><option value="deferred">Defer</option></select></label>
+            <label>Rationale (required)<input name="rationale" required></label>
+            <button type="submit">Confirm</button>
+          </form>
+        </td></tr>
+        {% endif %}
+      {% else %}
+        <tr><td colspan="9">No proposals yet. Run extraction and proposal above.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit">Bulk accept checked (unambiguous) rows</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Already reviewed</h2>
+  <table>
+    <thead><tr><th>Proposed deliverable</th><th>Decision</th><th>Source</th><th>Controlled version</th></tr></thead>
+    <tbody>
+    {% for row in proposals %}{% if row.current_decision != 'PENDING' %}
+      <tr><td>{{ row.title }}</td><td>{{ row.current_decision|title }}</td><td>{% for source in row.sources %}{{ source.locator_type|title }} {{ source.locator }}{% if not loop.last %}; {% endif %}{% endfor %}</td><td>
+        {% if row.current_decision == 'ACCEPTED' %}{% for source in row.sources %}{% if source.received_file_id and source.citation_id not in promoted_citation_ids %}
+        <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/promote-source">
+          <input type="hidden" name="deliverable_id" value="{{ row.linked_deliverable_id }}">
+          <input type="hidden" name="operation_id" value="{{ promotion_operation_id }}">
+          <label>Citation <input name="citation_id" value="{{ source.citation_id }}" readonly></label>
+          <label>Document version <input name="document_version_id" required></label>
+          <label>Rationale <input name="rationale" required></label>
+          <button type="submit">Associate controlled version</button>
+        </form>
+        {% endif %}{% endfor %}{% endif %}
+      </td></tr>
+    {% endif %}{% else %}<tr><td colspan="4">No proposals have been reviewed yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if promotions %}
+<section class="card">
+  <h2>Promoted controlled-version sources</h2>
+  <table><thead><tr><th>Citation</th><th>Deliverable</th><th>Controlled version</th><th>Basis</th></tr></thead><tbody>
+  {% for promotion in promotions %}<tr><td>{{ promotion.citation_id }}</td><td>{{ promotion.deliverable_id }}</td><td>{{ promotion.document_version_id }}</td><td>{{ promotion.link_relationship|replace('_', ' ')|title }} — {{ promotion.rationale }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Work ChatGPT preparation package</h2>
+  <p class="muted">Download a self-contained, versioned analysis package for offline review, or import a validated package back into this queue. No direct network connection to Work ChatGPT is made in this release — file download/upload only.</p>
+  <p><a href="/bids/{{ bid.bid_id }}/deliverable-discovery/export">Download candidate package (JSON)</a></p>
+  <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/import" enctype="multipart/form-data">
+    <label>Import package<input type="file" name="package_file" accept="application/json"></label>
+    <button type="submit">Import for review</button>
+  </form>
+</section>
+</main>
+</body>
+</html>

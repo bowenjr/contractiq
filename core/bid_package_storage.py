@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import tempfile
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -20,6 +21,9 @@ from core.bid_package_intake import IntakeInbox, IntakeInboxFolder, PreviewFile,
 
 CHUNK_SIZE = 1024 * 1024
 DEFAULT_MAX_PATH_DEPTH = 32
+BROWSER_UPLOAD_ALIAS = "browser"
+DEFAULT_BROWSER_UPLOAD_RETENTION_HOURS = 4
+_UPLOAD_TOKEN_RE_CHARS = frozenset("0123456789abcdef")
 
 _SUPPORTED_INTAKE_EXTENSIONS = frozenset(
     {
@@ -148,6 +152,7 @@ class BidPackageStorage:
         max_relative_path_length: int = 2_048,
         max_path_depth: int = DEFAULT_MAX_PATH_DEPTH,
         quarantine_days: int = 7,
+        browser_upload_retention_hours: int = DEFAULT_BROWSER_UPLOAD_RETENTION_HOURS,
         opener: Callable[[Path, str], BinaryIO] | None = None,
     ) -> None:
         if not source_roots:
@@ -160,6 +165,7 @@ class BidPackageStorage:
                 max_relative_path_length,
                 max_path_depth,
                 quarantine_days,
+                browser_upload_retention_hours,
             )
             < 1
         ):
@@ -170,6 +176,10 @@ class BidPackageStorage:
             normalized_alias = alias.strip()
             if not normalized_alias or "/" in normalized_alias or "\\" in normalized_alias:
                 raise ValueError("source source-root alias is invalid")
+            if normalized_alias == BROWSER_UPLOAD_ALIAS:
+                raise ValueError(
+                    f"source-root alias {BROWSER_UPLOAD_ALIAS!r} is reserved for browser uploads"
+                )
             if untrusted_root.is_symlink():
                 raise UnsafeIntakeSourceError("configured source root cannot be a symbolic link")
             try:
@@ -188,10 +198,17 @@ class BidPackageStorage:
         self.max_relative_path_length = max_relative_path_length
         self.max_path_depth = max_path_depth
         self.quarantine_days = quarantine_days
+        self.browser_upload_retention_hours = browser_upload_retention_hours
         self.staging_root = self.managed_root / ".staging"
         self.quarantine_root = self.managed_root / ".quarantine"
         self.releases_root = self.managed_root / "releases"
-        for directory in (self.staging_root, self.quarantine_root, self.releases_root):
+        self.browser_uploads_root = self.managed_root / ".browser-uploads"
+        for directory in (
+            self.staging_root,
+            self.quarantine_root,
+            self.releases_root,
+            self.browser_uploads_root,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
         self._opener = opener or open
 
@@ -208,8 +225,13 @@ class BidPackageStorage:
         except KeyError as exc:
             raise UnsafeIntakeSourceError("source root is not allowlisted") from exc
 
-    def _selected_source_root(self, alias: str, source_folder: str | None) -> Path:
-        """Resolve only one non-symlink immediate child beneath an allowlisted inbox."""
+    def _selected_source_root(
+        self, alias: str, source_folder: str | None, *, expected_bid_id: str | None = None
+    ) -> Path:
+        """Resolve only one non-symlink immediate child beneath an allowlisted inbox, or — for
+        the reserved `browser` alias — a bid-scoped browser-upload staging root."""
+        if alias == BROWSER_UPLOAD_ALIAS:
+            return self._resolve_browser_upload_root(source_folder, expected_bid_id)
         root = self._source_root(alias)
         if source_folder is None:
             return root
@@ -228,6 +250,49 @@ class BidPackageStorage:
         if candidate.is_symlink() or not candidate.exists() or not candidate.is_dir():
             raise UnsafeIntakeSourceError("selected intake folder is unavailable")
         return candidate
+
+    def _validated_browser_upload_meta(
+        self, token: str | None, expected_bid_id: str | None
+    ) -> tuple[Path, dict[str, object]]:
+        if not token or len(token) != 32 or set(token) - _UPLOAD_TOKEN_RE_CHARS:
+            raise UnsafeIntakeSourceError("browser upload reference is invalid")
+        if expected_bid_id is None:
+            raise UnsafeIntakeSourceError("browser upload requires a Bid context")
+        token_dir = self.browser_uploads_root / token
+        self._assert_no_symlink_components(self.browser_uploads_root, token_dir)
+        meta = self._read_browser_upload_meta(token_dir)
+        if meta is None:
+            raise UnsafeIntakeSourceError(
+                "browser upload is no longer available; upload the folder again"
+            )
+        if meta.get("bid_id") != expected_bid_id:
+            raise UnsafeIntakeSourceError("browser upload does not belong to this Bid")
+        return token_dir, meta
+
+    def _resolve_browser_upload_root(self, token: str | None, expected_bid_id: str | None) -> Path:
+        token_dir, meta = self._validated_browser_upload_meta(token, expected_bid_id)
+        top_folder = str(meta.get("top_folder", ""))
+        candidate = token_dir / "files" / top_folder
+        self._assert_no_symlink_components(token_dir, candidate)
+        if candidate.is_symlink() or not candidate.exists() or not candidate.is_dir():
+            raise UnsafeIntakeSourceError("browser upload contents are unavailable")
+        return candidate
+
+    def browser_upload_display_name(self, token: str | None, expected_bid_id: str) -> str:
+        """The original folder name the user picked, for display only (never used as a
+        filesystem path — the actual root is resolved separately with full validation)."""
+        _token_dir, meta = self._validated_browser_upload_meta(token, expected_bid_id)
+        return str(meta.get("top_folder", "Uploaded folder"))
+
+    @staticmethod
+    def _read_browser_upload_meta(token_dir: Path) -> dict[str, object] | None:
+        meta_path = token_dir / "meta.json"
+        if meta_path.is_symlink() or not meta_path.is_file():
+            return None
+        try:
+            return json.loads(meta_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
 
     @staticmethod
     def _assert_no_symlink_components(root: Path, path: Path) -> None:
@@ -272,6 +337,48 @@ class BidPackageStorage:
             os.close(descriptor)
         return size, digest.hexdigest()
 
+    def read_preview_file(
+        self,
+        source_root_alias: str,
+        source_folder: str | None,
+        relative_path: str,
+        *,
+        expected_bid_id: str | None = None,
+        max_bytes: int,
+    ) -> bytes | None:
+        """Read one source file for a mutation-free capability check.
+
+        Return ``None`` when the file is larger than ``max_bytes``.
+        """
+        if max_bytes < 0:
+            raise ValueError("preview read limit must not be negative")
+        pure = PurePosixPath(relative_path)
+        if (
+            not relative_path
+            or pure.is_absolute()
+            or any(part in {"", ".", ".."} for part in relative_path.split("/"))
+        ):
+            raise UnsafeIntakeSourceError("source relative path is unsafe")
+        root = self._selected_source_root(
+            source_root_alias,
+            source_folder,
+            expected_bid_id=expected_bid_id,
+        )
+        path = root.joinpath(*pure.parts)
+        self._assert_no_symlink_components(root, path)
+        descriptor = os.open(path, self._open_flags())
+        try:
+            source_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(source_stat.st_mode):
+                raise UnsafeIntakeSourceError("only regular files can be previewed")
+            if source_stat.st_size > max_bytes:
+                return None
+            with os.fdopen(descriptor, "rb", closefd=False) as source:
+                data = source.read(max_bytes + 1)
+            return None if len(data) > max_bytes else data
+        finally:
+            os.close(descriptor)
+
     def _walk(self, root: Path) -> list[Path]:
         files: list[Path] = []
         pending = [root]
@@ -303,9 +410,17 @@ class BidPackageStorage:
                         )
         return sorted(files, key=lambda item: item.relative_to(root).as_posix())
 
-    def preview(self, source_root_alias: str, source_folder: str | None = None) -> ReleasePreview:
+    def preview(
+        self,
+        source_root_alias: str,
+        source_folder: str | None = None,
+        *,
+        expected_bid_id: str | None = None,
+    ) -> ReleasePreview:
         """Read and hash an allowlisted landing location without any mutation."""
-        root = self._selected_source_root(source_root_alias, source_folder)
+        root = self._selected_source_root(
+            source_root_alias, source_folder, expected_bid_id=expected_bid_id
+        )
         files: list[PreviewFile] = []
         total_bytes = 0
         for path in self._walk(root):
@@ -442,6 +557,132 @@ class BidPackageStorage:
         )
 
     @staticmethod
+    def _validate_untrusted_relative_path(
+        relative: str, *, max_length: int, max_depth: int
+    ) -> PurePosixPath:
+        """Validate a client-supplied relative path (e.g. a browser's webkitRelativePath)
+        before it is ever used to construct a filesystem path. Mirrors the same rules
+        `preview()` applies to paths derived from an actual directory walk."""
+        normalized = relative.strip().replace("\\", "/")
+        pure = PurePosixPath(normalized)
+        if (
+            not normalized
+            or pure.is_absolute()
+            or any(part in {"", ".", ".."} for part in pure.parts)
+        ):
+            raise UnsafeIntakeSourceError("uploaded relative path is unsafe")
+        if len(normalized) > max_length:
+            raise IntakeLimitError("uploaded relative path exceeds the configured limit")
+        if len(pure.parts) > max_depth:
+            raise IntakeLimitError("uploaded hierarchy exceeds the configured path-depth limit")
+        return pure
+
+    def stage_browser_upload(
+        self, bid_id: str, uploads: Iterable[tuple[str, BinaryIO]]
+    ) -> ReleasePreview:
+        """Receive a browser-selected folder (relative paths already carrying the picked
+        folder name as their first segment, as `File.webkitRelativePath` does) into a private,
+        bid-scoped staging area, then return the same `ReleasePreview` shape a configured-inbox
+        selection would produce. Aborts and removes everything written on any failure — no
+        partial upload is ever left importable."""
+        token = uuid.uuid4().hex
+        token_dir = self.browser_uploads_root / token
+        files_root = token_dir / "files"
+        files_root.mkdir(parents=True)
+        top_folder: str | None = None
+        file_count = 0
+        total_bytes = 0
+        try:
+            for raw_relative, source in uploads:
+                pure = self._validate_untrusted_relative_path(
+                    raw_relative,
+                    max_length=self.max_relative_path_length,
+                    max_depth=self.max_path_depth,
+                )
+                segment = pure.parts[0]
+                if top_folder is None:
+                    top_folder = segment
+                elif segment != top_folder:
+                    raise UnsafeIntakeSourceError(
+                        "all uploaded files must come from the same selected folder"
+                    )
+                file_count += 1
+                if file_count > self.max_outer_files:
+                    raise IntakeLimitError(
+                        f"upload exceeds the {self.max_outer_files} outer-file limit"
+                    )
+                destination = files_root / Path(*pure.parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                size = 0
+                descriptor = os.open(
+                    destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+                )
+                with os.fdopen(descriptor, "wb") as target:
+                    while chunk := source.read(CHUNK_SIZE):
+                        size += len(chunk)
+                        if size > self.max_file_bytes:
+                            raise IntakeLimitError(
+                                f"file exceeds the {self.max_file_bytes}-byte individual limit"
+                            )
+                        target.write(chunk)
+                    target.flush()
+                    os.fsync(target.fileno())
+                total_bytes += size
+                if total_bytes > self.max_total_bytes:
+                    raise IntakeLimitError(
+                        f"upload exceeds the {self.max_total_bytes}-byte aggregate limit"
+                    )
+            if top_folder is None or file_count == 0:
+                raise UnsafeIntakeSourceError("no files were received in this upload")
+            (token_dir / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "bid_id": bid_id,
+                        "top_folder": top_folder,
+                        "created_at": datetime.now(UTC).isoformat(),
+                    }
+                )
+            )
+            self._fsync_directory(files_root / top_folder)
+            self._fsync_directory(token_dir)
+            return self.preview(BROWSER_UPLOAD_ALIAS, token, expected_bid_id=bid_id)
+        except Exception:
+            if token_dir.exists():
+                shutil.rmtree(token_dir)
+            raise
+
+    def discard_browser_upload(self, token: str) -> None:
+        """Remove one browser-upload staging directory. Safe to call more than once."""
+        if not token or len(token) != 32 or set(token) - _UPLOAD_TOKEN_RE_CHARS:
+            return
+        token_dir = self.browser_uploads_root / token
+        try:
+            token_dir.relative_to(self.browser_uploads_root)
+        except ValueError:
+            return
+        if token_dir.exists() and not token_dir.is_symlink():
+            shutil.rmtree(token_dir)
+
+    def prune_browser_uploads(self, now: datetime | None = None) -> int:
+        """Remove abandoned browser-upload staging directories past their retention window."""
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        cutoff = current - timedelta(hours=self.browser_upload_retention_hours)
+        removed = 0
+        for path in tuple(self.browser_uploads_root.iterdir()):
+            if path.is_symlink() or not path.is_dir():
+                continue
+            meta = self._read_browser_upload_meta(path)
+            created_raw = meta.get("created_at") if meta else None
+            try:
+                created_at = datetime.fromisoformat(str(created_raw)) if created_raw else None
+            except ValueError:
+                created_at = None
+            if created_at is None or created_at < cutoff:
+                shutil.rmtree(path)
+                removed += 1
+        return removed
+
+    @staticmethod
     def _fsync_directory(path: Path) -> None:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
@@ -455,12 +696,18 @@ class BidPackageStorage:
         release_id: str,
         operation_id: str,
         file_ids: Mapping[str, str],
+        *,
+        expected_bid_id: str | None = None,
     ) -> StagedRelease:
         """Copy expected source bytes to a same-filesystem, fsynced staging tree."""
-        current = self.preview(preview.source_root_alias, preview.source_folder)
+        current = self.preview(
+            preview.source_root_alias, preview.source_folder, expected_bid_id=expected_bid_id
+        )
         if current.source_fingerprint != preview.source_fingerprint:
             raise SourceChangedError("source changed after preview; preview the release again")
-        root = self._selected_source_root(preview.source_root_alias, preview.source_folder)
+        root = self._selected_source_root(
+            preview.source_root_alias, preview.source_folder, expected_bid_id=expected_bid_id
+        )
         stage_directory = Path(tempfile.mkdtemp(prefix="release-", dir=self.staging_root))
         originals = stage_directory / "originals"
         originals.mkdir()
@@ -631,10 +878,12 @@ class BidPackageStorage:
             self._fsync_directory(self.releases_root)
             self._fsync_directory(self.quarantine_root)
         self.prune_quarantine()
+        self.prune_browser_uploads()
         return staged_count, orphan_count
 
 
 __all__ = [
+    "BROWSER_UPLOAD_ALIAS",
     "BidPackageStorage",
     "IntakeLimitError",
     "IntakePublicationError",

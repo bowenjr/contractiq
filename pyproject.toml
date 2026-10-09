@@ -81,11 +81,18 @@ files = [
     "core/proposal_exchange_contract.py",
     "core/proposal_exchange_service.py",
     "core/bid_control_center.py",
+    "core/deliverable_discovery.py",
+    "core/deliverable_discovery_llm.py",
     "scripts/validate_task_09.py",
 ]
 
 [[tool.mypy.overrides]]
 module = "*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "core.deliverable_discovery_extraction"
+follow_imports = "skip"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
@@ -123,6 +130,8 @@ module = [
     "core.proposal_exchange_contract",
     "core.proposal_exchange_service",
     "core.bid_control_center",
+    "core.deliverable_discovery",
+    "core.deliverable_discovery_llm",
     "scripts.validate_task_09",
 ]
 ignore_errors = false

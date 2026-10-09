@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.enums import Gate
 from core.gates import ConditionState, GateResult
 from core.materiality import is_material
+from core.readiness_phases import BlockerPhase, condition_phase
 
 
 class ReadinessVerdict(str, Enum):  # noqa: UP042 - task specification requires str, Enum
@@ -24,6 +25,7 @@ class Blocker(BaseModel):
     description: str
     detail: str
     material: bool
+    phase: BlockerPhase = BlockerPhase.DEVELOPMENT
     overridden: bool = False
     override_by: str | None = None
     override_note: str | None = None
@@ -35,12 +37,60 @@ class ReadinessReport(BaseModel):
     bid_id: str
     verdict: ReadinessVerdict
     blockers: list[Blocker] = Field(default_factory=list)
+    issue_blockers: list[Blocker] = Field(default_factory=list)
     not_assessable: list[str] = Field(default_factory=list)
     gates_passed: list[Gate] = Field(default_factory=list)
     gates_blocked: list[Gate] = Field(default_factory=list)
     generated_at: datetime
     summary: str
     advisory: str
+
+    @property
+    def development_gate_label(self) -> str:
+        """Name the verdict as a development check, never whole-Bid readiness."""
+        if self.verdict is ReadinessVerdict.CLEAR:
+            return "Development gate check: Clear (G0–G5 conditions assessed so far)"
+        active = sum(1 for blocker in self.blockers if not blocker.overridden)
+        noun = "blocker" if active == 1 else "blockers"
+        return f"Development gate check: {self.verdict.value.title()} — {active} {noun}"
+
+    @property
+    def not_yet_assessed(self) -> tuple[str, ...]:
+        """Return business labels for registers absent from this assessment."""
+        labels = {
+            "g2.no_scope_gaps": "scope",
+            "g2.strategy_recorded": "Bid strategy",
+            "g3.suppliers_supported": "supplier coverage",
+            "g5.mandatory_requirements_complete": "requirements",
+            "g5.no_unconfirmed_material": "analysis findings",
+            "g6.concessions_approved": "concession approvals",
+            "g7.award_matches_offer": "award reconciliation",
+            "g7.handover_accepted": "handover acceptance",
+        }
+        facts = [
+            labels.get(item, item.split(".", 1)[-1].replace("_", " "))
+            for item in self.not_assessable
+        ]
+        if any(
+            "pricing basis missing" in blocker.detail.casefold() for blocker in self.issue_blockers
+        ):
+            facts.append("pricing basis")
+        return tuple(dict.fromkeys(facts))
+
+    @property
+    def pending_before_issue_count(self) -> int:
+        """Count active issue-phase controls without changing verdict semantics."""
+        return sum(1 for blocker in self.issue_blockers if not blocker.overridden)
+
+    @property
+    def presentation_summary(self) -> str:
+        """Explain scope gaps and issue controls alongside the development verdict."""
+        parts = [self.development_gate_label + "."]
+        if self.not_yet_assessed:
+            parts.append("Not yet assessed: " + ", ".join(self.not_yet_assessed) + ".")
+        if self.pending_before_issue_count:
+            parts.append(f"Before issue: {self.pending_before_issue_count} approval(s) pending.")
+        return " ".join(parts)
 
 
 def _remove_satisfied_prior_gate_derivation(blockers: list[Blocker]) -> list[Blocker]:
@@ -51,6 +101,7 @@ def _remove_satisfied_prior_gate_derivation(blockers: list[Blocker]) -> list[Blo
         for blocker in blockers
         if blocker.gate in {Gate.G2, Gate.G3, Gate.G4}
         and blocker.condition_id != prior_condition_id
+        and blocker.phase is BlockerPhase.DEVELOPMENT
     ]
     if not source_blockers or not all(blocker.overridden for blocker in source_blockers):
         return blockers
@@ -79,7 +130,7 @@ def assess_readiness(
         raise ValueError("now must be supplied by the service layer")
 
     applied_overrides = overrides or {}
-    blockers: list[Blocker] = []
+    all_blockers: list[Blocker] = []
     not_assessable: list[str] = []
     not_assessable_details: list[str] = []
     non_material: list[str] = []
@@ -99,20 +150,23 @@ def assess_readiness(
                 non_material.append(condition.condition_id)
                 continue
             override = applied_overrides.get(condition.condition_id)
-            blockers.append(
+            all_blockers.append(
                 Blocker(
                     condition_id=condition.condition_id,
                     gate=result.gate,
                     description=condition.description,
                     detail=condition.detail,
                     material=material,
+                    phase=condition_phase(condition.condition_id),
                     overridden=override is not None,
                     override_by=override[0] if override is not None else None,
                     override_note=override[1] if override is not None else None,
                 )
             )
 
-    blockers = _remove_satisfied_prior_gate_derivation(blockers)
+    all_blockers = _remove_satisfied_prior_gate_derivation(all_blockers)
+    blockers = [blocker for blocker in all_blockers if blocker.phase is BlockerPhase.DEVELOPMENT]
+    issue_blockers = [blocker for blocker in all_blockers if blocker.phase is BlockerPhase.ISSUE]
     active_blockers = [blocker for blocker in blockers if not blocker.overridden]
     blocked_set = {blocker.gate for blocker in active_blockers}
     all_gates = list(dict.fromkeys(result.gate for result in gate_results))
@@ -123,15 +177,36 @@ def assess_readiness(
         verdict = ReadinessVerdict.HOLD
         count = len(active_blockers)
         blocker_word = "blocker" if count == 1 else "blockers"
-        summary = f"Bid is on HOLD: {count} material {blocker_word} require resolution or override."
+        summary = (
+            f"Development gate check: Hold — {count} material {blocker_word} "
+            "require resolution or override."
+        )
     else:
         verdict = ReadinessVerdict.CLEAR
-        summary = "Bid is CLEAR: no material blockers remain."
+        summary = "Development gate check: Clear (G0–G5 conditions assessed so far)."
+        if not_assessable:
+            provisional = ReadinessReport(
+                bid_id="",
+                verdict=verdict,
+                blockers=blockers,
+                issue_blockers=issue_blockers,
+                not_assessable=not_assessable,
+                gates_passed=gates_passed,
+                gates_blocked=gates_blocked,
+                generated_at=now,
+                summary=summary,
+                advisory="",
+            )
+            summary += " Not yet assessed: " + ", ".join(provisional.not_yet_assessed) + "."
+    active_issue = [blocker for blocker in issue_blockers if not blocker.overridden]
+    if active_issue:
+        summary += f" Before issue: {len(active_issue)} approval(s) pending."
 
     return ReadinessReport(
         bid_id="",
         verdict=verdict,
         blockers=blockers,
+        issue_blockers=issue_blockers,
         not_assessable=not_assessable,
         gates_passed=gates_passed,
         gates_blocked=gates_blocked,

@@ -12,6 +12,7 @@ from core.enums import GateStatus
 from core.gate_service import build_gate_context
 from core.gates import evaluate_all_gates
 from core.readiness import ReadinessReport, assess_readiness
+from core.readiness_phases import ISSUE_PHASE_CONDITION_IDS
 from core.schemas import AuditEntry, GateRecord
 
 
@@ -127,6 +128,15 @@ def request_override(
     risk_note: str,
 ) -> ReadinessReport:
     """Record an authorized per-condition override and reassess readiness."""
+    if condition_id == "g1.owner_pursuit_decided":
+        raise ValueError(
+            "Owner pursuit decisions cannot be overridden; record an owner decision instead"
+        )
+    if condition_id in ISSUE_PHASE_CONDITION_IDS:
+        raise ValueError(
+            "Issue-phase readiness conditions cannot be overridden; obtain the required "
+            "approval evidence before issue"
+        )
     normalized_note = risk_note.strip()
     if not normalized_note:
         raise ValueError("risk_note must be non-empty")

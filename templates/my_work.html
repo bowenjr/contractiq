@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>My Work — ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
 <body><main class="page-shell">{% set current_nav = 'my-work' %}{% include '_primary_navigation.html' %}
-<header class="page-heading"><div><p class="eyebrow">Operational control</p><h1>My Work</h1><p class="muted">Capture, prioritize, and maintain the authoritative register of Bid and standalone work.</p></div><a class="button" href="#quick-capture">Add Work</a></header>
+<header class="page-heading"><div><p class="eyebrow">Operational control</p><h1>My Work</h1><p class="muted">Capture, prioritize, and maintain Bid and standalone work.</p></div><a class="button" href="#quick-capture">Add Work</a></header>
 <section class="card compact" id="quick-capture"><h2>Quick Capture</h2><p class="muted">Record the action now; add ownership, context, and lifecycle detail in the editor.</p>
 {% if capture_error %}<div class="alert" role="alert">{{ capture_error }}</div>{% endif %}
 <form class="quick-capture-form" method="post" action="/my-work">
