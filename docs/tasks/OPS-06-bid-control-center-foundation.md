@@ -119,7 +119,7 @@ Classification presentation mirrors existing gate rules:
 
 - Bid intake completeness applies to all Levels.
 - Bid/no-bid approval applies to Level 1–4, not Level 0.
-- Margin approval applies to Level 2–4, not Level 0–1.
+- Margin approval applies to Level 2–4 under a temporary governance-level rule, not Level 0–1; monetary-value and margin-percentage thresholds are not enforced.
 - Existing risk triggers are shown without inventing authorities, policies or thresholds.
 
 OPS-06 does not create a decision mutation surface because the existing browser decision service does not provide a settled optimistic-concurrency HTML command for that action.

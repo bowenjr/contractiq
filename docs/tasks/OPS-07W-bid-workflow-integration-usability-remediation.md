@@ -14,7 +14,7 @@ The Bid overview provides a compact, non-linear eight-stage Setup and Response N
 
 ## Classification policy
 
-The existing deterministic classifier remains authoritative. Value, EPC/EPCM, strategic-customer and configured risk-trigger facts produce a minimum level. Level 1 begins G1 bid/no-bid approval; Level 2 begins G4 margin approval; Level 3 is the floor for $1M+, EPC/EPCM, strategic customers and configured Level-3 triggers; Level 4 is the highest trigger-driven level. No unsupported approval distinction is claimed.
+The existing deterministic classifier remains authoritative. Value, EPC/EPCM, strategic-customer and configured risk-trigger facts produce a minimum level. Level 1 begins G1 bid/no-bid approval; Level 2 begins G4 margin approval under a temporary governance-level rule; Level 3 is the floor for $1M+, EPC/EPCM, strategic customers and configured Level-3 triggers; Level 4 is the highest trigger-driven level. The approval rule does not enforce monetary-value or margin-percentage thresholds, and no unsupported approval distinction is claimed.
 
 A selected level may equal or exceed the recommendation. An upward selection requires rationale; a downward selection is rejected without mutation or audit. Creation writes the Bid, assessment, triggers and audit atomically. Reassessment is protected by the Bid `updated_at` snapshot, is append-only, and cannot silently lower existing governance. Legacy Bids display “Legacy/manual classification — review classification” without fabricated evidence.
 
