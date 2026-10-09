@@ -1,3 +1,7 @@
+import atexit
+import os
+import shutil
+import tempfile
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -8,6 +12,24 @@ from core.bid_repository import BidRepository
 from core.database import Database
 from core.enums import Actor, BidLevel, CustomerType
 from core.schemas import Bid, Provenance
+
+# ``app.py`` opens its database and storage roots when it is first imported. A test that
+# imports it without pointing those at a temporary location would initialise (and rewrite)
+# the repo-local ``data/contractiq.db``. Route every default to a throwaway directory
+# before any test module can import ``app``; tests that need their own paths still
+# override these with ``monkeypatch.setenv``. Assigned unconditionally so an exported
+# real database path in the developer's shell can never be reached by the suite.
+_ISOLATED_ROOT = Path(tempfile.mkdtemp(prefix="contractiq-tests-"))
+atexit.register(shutil.rmtree, _ISOLATED_ROOT, ignore_errors=True)
+for _name, _relative in {
+    "CONTRACTIQ_DB_PATH": "contractiq.db",
+    "CONTRACTIQ_DOCUMENT_ROOT": "documents",
+    "CONTRACTIQ_INTAKE_STORAGE_ROOT": "managed_intake",
+    "CONTRACTIQ_PROPOSAL_ARTIFACT_ROOT": "proposal_artifacts",
+}.items():
+    os.environ[_name] = str(_ISOLATED_ROOT / _relative)
+for _legacy in ("CONTRACTIQ_INTAKE_ROOTS", "CONTRACTIQ_INTAKE_SOURCE_ROOTS"):
+    os.environ.pop(_legacy, None)
 
 
 @pytest.fixture
