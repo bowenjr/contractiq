@@ -55,6 +55,7 @@ from core.readiness_service import evaluate_readiness
 MIGRATION_ID = "ops_09_proposal_exchange_issue_control_v1"
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PDF_MEDIA_TYPE = "application/pdf"
+_EXCEPTION_STATUSES = frozenset({"CONFIRMED_WITH_EXCEPTION", "CANNOT_COMPLY"})
 
 
 class ProposalExchangeNotFoundError(ValueError):
@@ -100,6 +101,13 @@ def _source(source_type: str, source_id: str, version: object, projection: objec
         "source_version": _version(version),
         "source_sha256": canonical_sha256(projection),
     }
+
+
+def _manufacturer_disposition_approved(row: Mapping[str, object]) -> bool:
+    """Whether a manufacturer row's Bid disposition is recorded and approved."""
+    return str(row.get("bid_disposition") or "NONE") != "NONE" and bool(
+        row.get("disposition_approved")
+    )
 
 
 def _row_projection(row: Mapping[str, object], fields: Sequence[str]) -> JsonObject:
@@ -304,10 +312,15 @@ class ProposalExchangeService:
         bid_version = bid.updated_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         bid_source = _source("bid", bid.bid_id, bid_version, bid_dump)
         customer_projection = {"name": bid.customer, "customer_type": bid.customer_type.value}
+        # The deadline is exported only when its time and zone are recorded. A date alone is
+        # not a moment, and no end-of-day time is invented for it.
+        closing = bid.customer_closing_instant()
+        due_at = closing.strftime("%Y-%m-%dT%H:%M:%SZ") if closing is not None else None
         opportunity_projection = {
             "name": bid.project_name,
             "location": bid.location,
-            "due_at": bid.customer_due_date.isoformat(),
+            "due_at": due_at,
+            "customer_due_date": bid.customer_due_date.isoformat(),
         }
         with self._conn() as conn:
             requirement_rows = self._rows(
@@ -635,6 +648,40 @@ class ProposalExchangeService:
                         ),
                     }
                 )
+            for row in package_vendor_rows:
+                if str(row["verification_status"]) not in _EXCEPTION_STATUSES:
+                    continue
+                approved = _manufacturer_disposition_approved(row)
+                bid_disposition = str(row.get("bid_disposition") or "NONE")
+                detail = _text(row.get("proposed_exception")) or "Manufacturer exception."
+                qualifications.append(
+                    {
+                        "item_id": f"QD-{row['requirement_id']}",
+                        "kind": "DEVIATION"
+                        if bid_disposition in {"ACCEPTED", "MODIFIED"}
+                        else "QUALIFICATION",
+                        "text": f"{row['deliverable_title']}: {detail}",
+                        "status": "APPROVED" if approved else "PENDING",
+                        "related_requirement_ids": [],
+                        "source": _source(
+                            "manufacturer_exception",
+                            str(row["requirement_id"]),
+                            row["version"],
+                            _row_projection(
+                                row,
+                                (
+                                    "requirement_id",
+                                    "deliverable_title",
+                                    "verification_status",
+                                    "proposed_exception",
+                                    "bid_disposition",
+                                    "disposition_approved",
+                                    "version",
+                                ),
+                            ),
+                        ),
+                    }
+                )
             package_projection = _row_projection(
                 package_row,
                 (
@@ -698,6 +745,39 @@ class ProposalExchangeService:
             }
             for row in commercial_rows
         ]
+
+        for row in commercial_rows:
+            if str(row["disposition"]) != "QUALIFY":
+                continue
+            customer = _text(row.get("customer_position"))
+            qualifications.append(
+                {
+                    "item_id": f"QD-{row['position_id']}",
+                    "kind": "QUALIFICATION",
+                    "text": (
+                        f"{row['label']}: {_text(row.get('proposed_position')) or ''}"
+                        + (f" (customer position: {customer})" if customer else "")
+                    ),
+                    "status": "APPROVED" if row["negotiation_state"] == "RESOLVED" else "PENDING",
+                    "related_requirement_ids": [],
+                    "source": _source(
+                        "commercial_position",
+                        str(row["position_id"]),
+                        row["version_number"],
+                        _row_projection(
+                            row,
+                            (
+                                "position_id",
+                                "customer_position",
+                                "proposed_position",
+                                "disposition",
+                                "negotiation_state",
+                                "version_number",
+                            ),
+                        ),
+                    ),
+                }
+            )
 
         risks = []
         for row in risk_rows:
@@ -882,7 +962,7 @@ class ProposalExchangeService:
                 "name": bid.project_name,
                 "customer_reference": None,
                 "rfp_reference": None,
-                "due_at": f"{bid.customer_due_date.isoformat()}T23:59:59Z",
+                "due_at": due_at,
                 "project_location": bid.location,
                 "source": _source("opportunity", bid.bid_id, bid_version, opportunity_projection),
             },
@@ -1127,13 +1207,34 @@ class ProposalExchangeService:
                 )
         for row in vendor:
             status = str(row["verification_status"])
-            if status not in {"CONFIRMED_COMPLIANT", "NOT_APPLICABLE"}:
+            title = row["deliverable_title"]
+            destination = f"/vendor-documents/packages/{row['package_id']}"
+            record = str(row["requirement_id"])
+            # An exception, or a cannot-comply, with a recorded and approved Bid disposition is
+            # resolved: the Bid has decided what to do about it and the package carries it as an
+            # exception. Same rule as core.handover and core.vendor_document_control.
+            disposition_approved = _manufacturer_disposition_approved(row)
+            if status in _EXCEPTION_STATUSES:
+                if not disposition_approved:
+                    add(
+                        "MANUFACTURER_EXCEPTION_UNDISPOSED",
+                        "Manufacturer and VDRL",
+                        f"{title} has an exception without approved disposition.",
+                        destination,
+                        record,
+                    )
+            elif status not in {"CONFIRMED_COMPLIANT", "NOT_APPLICABLE"}:
+                reason = (
+                    "needs a clarification before the manufacturer's response is clear"
+                    if status == "CLARIFICATION_REQUIRED"
+                    else "has no manufacturer response yet"
+                )
                 add(
                     "MANUFACTURER_RESPONSE_BLOCKER",
                     "Manufacturer and VDRL",
-                    f"{row['deliverable_title']} has no clear manufacturer response or disposition.",
-                    f"/vendor-documents/packages/{row['package_id']}",
-                    str(row["requirement_id"]),
+                    f"{title} {reason}.",
+                    destination,
+                    record,
                 )
             if status == "CONFIRMED_COMPLIANT" and (
                 not _text(row.get("response_source"))
@@ -1142,17 +1243,9 @@ class ProposalExchangeService:
                 add(
                     "MISSING_MANUFACTURER_EVIDENCE",
                     "Manufacturer and VDRL",
-                    f"{row['deliverable_title']} lacks response source or response date evidence.",
-                    f"/vendor-documents/packages/{row['package_id']}",
-                    str(row["requirement_id"]),
-                )
-            if status == "CONFIRMED_WITH_EXCEPTION" and not bool(row["disposition_approved"]):
-                add(
-                    "MANUFACTURER_EXCEPTION_UNDISPOSED",
-                    "Manufacturer and VDRL",
-                    f"{row['deliverable_title']} has an exception without approved disposition.",
-                    f"/vendor-documents/packages/{row['package_id']}",
-                    str(row["requirement_id"]),
+                    f"{title} lacks response source or response date evidence.",
+                    destination,
+                    record,
                 )
         if not commercial:
             add(
@@ -1176,6 +1269,10 @@ class ProposalExchangeService:
                     str(row["position_id"]),
                 )
         for row in cast(list[JsonObject], package["qualifications_and_deviations"]):
+            # Exceptions taken from commercial positions and manufacturer rows are already
+            # gated by their own blockers above; this one concerns requirement responses.
+            if not cast(list[str], row["related_requirement_ids"]):
+                continue
             if row["status"] != "APPROVED":
                 add(
                     "UNDISPOSED_QUALIFICATION",

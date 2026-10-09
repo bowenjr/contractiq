@@ -168,6 +168,10 @@ class BidPortfolioRow(BaseModel):
     pending_before_issue_count: int = 0
     highest_blocker: BidBlockerView | None
     additional_blocker_count: int = 0
+    blocking_count: int = 0
+    """Records blocking this Bid, from the same list the Bid workspace shows."""
+    overdue_returnable_count: int = 0
+    """Dated returnables past their date and not yet satisfied; part of the overdue figure."""
     waiting_count: int
     overdue_work_count: int = 0
     decision_count: int
@@ -819,10 +823,62 @@ def _other_attention_count(
     return count
 
 
-def _supplier_response_position(bid_id: str, supplier_attention: list[dict[str, str]]) -> str:
+_MANUFACTURER_CODES = frozenset(
+    {
+        "MANUFACTURER_RESPONSE_BLOCKER",
+        "MANUFACTURER_EXCEPTION_UNDISPOSED",
+        "MISSING_MANUFACTURER_EVIDENCE",
+    }
+)
+
+
+def _blockers_from_workflow(bid: Bid, workflow: BidWorkflowProjection) -> list[BidBlockerView]:
+    """The Bid's blockers as the Bid workspace lists them, one per heading.
+
+    Gate blockers, proposal-readiness blockers and package-intake blockers all reach the workspace
+    through ``workflow.outstanding``. Reading that same list keeps My Day, the Bids list and the
+    workspace in agreement. Items due only before issue are not development blockers.
+    """
+    return [
+        BidBlockerView(
+            condition_id=item.code or f"outstanding:{item.heading}",
+            gate=bid.current_gate,
+            heading=item.heading,
+            description=item.heading,
+            detail=item.detail,
+            consequence=item.consequence,
+            owner=item.owner,
+            owing_party=item.owing_party,
+            due_date=item.due_date,
+            evidence_source=item.evidence_source,
+            destination=item.resolve_path,
+        )
+        for item in workflow.outstanding
+        if item.blocking and item.scope != "pending_before_issue"
+    ]
+
+
+def _overdue_returnable_count(bid_id: str, deliverable_attention: list[dict[str, str]]) -> int:
+    return sum(
+        1
+        for item in deliverable_attention
+        if item.get("bid_id") == bid_id and item.get("code") == "DELIVERABLE_OVERDUE_NO_SUBMISSION"
+    )
+
+
+def _supplier_response_position(
+    bid_id: str,
+    supplier_attention: list[dict[str, str]],
+    workflow: BidWorkflowProjection | None = None,
+) -> str:
     """Business-worded supplier-response state, derived from already-loaded attention."""
     items = [item for item in supplier_attention if item.get("bid_id") == bid_id]
     if not items:
+        if workflow is not None and any(
+            item.blocking and item.code in _MANUFACTURER_CODES for item in workflow.outstanding
+        ):
+            # The manufacturer register has open rows; do not report the supplier side as clear.
+            return "Manufacturer response open"
         return "Clear"
     if any(
         "NO_RESPONSE" in item.get("code", "") or "SILENT" in item.get("code", "") for item in items
@@ -1038,6 +1094,14 @@ def project_bid_portfolio(
             # Review and the initial assessment come first: the portfolio headline must not
             # present the owner decision as a blocker before that step can be performed.
             blockers = [b for b in blockers if b.condition_id != "g1.owner_pursuit_decided"]
+        blocking_count = len(blockers)
+        if workflow is not None:
+            from_workflow = _blockers_from_workflow(bid, workflow)
+            represented = {item.condition_id for item in from_workflow}
+            blockers = from_workflow + [b for b in blockers if b.condition_id not in represented]
+            blocking_count = workflow.blocking_count - workflow.blocking_count_for(
+                "pending_before_issue"
+            )
         if workflow is None:
             next_action, destination = _next_action(
                 bid,
@@ -1066,7 +1130,8 @@ def project_bid_portfolio(
             contract_risk_attention,
             intake_attention,
         )
-        overdue_work_count = _overdue_work_count(bid_work, as_of)
+        overdue_returnables = _overdue_returnable_count(bid.bid_id, deliverable_attention)
+        overdue_work_count = _overdue_work_count(bid_work, as_of) + overdue_returnables
         rows.append(
             BidPortfolioRow(
                 bid=bid,
@@ -1076,12 +1141,14 @@ def project_bid_portfolio(
                 pending_before_issue_count=readiness.pending_before_issue_count,
                 highest_blocker=blockers[0] if blockers else None,
                 additional_blocker_count=max(len(blockers) - 1, 0),
+                blocking_count=blocking_count,
+                overdue_returnable_count=overdue_returnables,
                 waiting_count=len(waiting) + len(waiting_controls),
                 overdue_work_count=overdue_work_count,
                 decision_count=len(decisions),
                 other_attention_count=other_attention_count,
                 supplier_response_position=_supplier_response_position(
-                    bid.bid_id, supplier_attention
+                    bid.bid_id, supplier_attention, workflow
                 ),
                 last_activity=bid_last_activity,
                 next_action=next_action,

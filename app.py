@@ -13,7 +13,7 @@ import os
 import sqlite3
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
@@ -190,6 +190,13 @@ from core.deliverable_discovery_presentation import (
 )
 from core.deliverable_discovery_progress import discovery_source_progress
 from core.deliverable_discovery_repository import DeliverableDiscoveryRepository
+from core.date_integrity import deliverable_date_note
+from core.deliverable_discovery_review import (
+    DEFAULT_STATUS as DEFAULT_REVIEW_STATUS,
+)
+from core.deliverable_discovery_review import (
+    build_review_view,
+)
 from core.deliverable_discovery_service import (
     DeliverableDiscoveryService,
     DiscoveryUnavailableError,
@@ -450,6 +457,19 @@ jinja_env = Environment(
 # One negative-heading vocabulary for every surface that lists something missing.
 jinja_env.globals["intake_heading"] = intake_heading
 jinja_env.globals["proposal_heading"] = proposal_heading
+
+
+def _deliverable_date_note(item: object) -> str | None:
+    """How a deliverable's due date is known: stated, calculated, confirmed, or only proposed."""
+    provenance = getattr(item, "provenance", None)
+    return deliverable_date_note(
+        str(getattr(item, "description", "") or ""),
+        getattr(item, "fixed_due_date", None),
+        getattr(provenance, "agent_name", None) == "deliverable_discovery",
+    )
+
+
+jinja_env.globals["deliverable_date_note"] = _deliverable_date_note
 
 
 jinja_env.globals["proposal_resolve_label"] = proposal_resolve_label
@@ -738,6 +758,7 @@ def _draft_preparation_items(
         return []
     seen = {item.heading for item in existing}
     items: list[OutstandingItem] = []
+    records: dict[str, int] = {}
     for blocker in proposal_exchange_service.assess(bid.bid_id).blockers:
         if (
             blocker.phase is not BlockerPhase.DEVELOPMENT
@@ -746,9 +767,12 @@ def _draft_preparation_items(
         ):
             continue
         heading = proposal_heading(blocker.code, blocker.heading or blocker.message)
+        if heading in records:
+            records[heading] += 1
+            continue
         if heading in seen:
             continue
-        seen.add(heading)
+        records[heading] = 1
         resolve_label, resolve_path = "Resolve in this Bid", blocker.destination
         if blocker.code == "MISSING_CONTROLLED_SOURCE" and intake.latest_release_id:
             # The files were received: control them where they sit, not in the empty register.
@@ -766,8 +790,10 @@ def _draft_preparation_items(
                 resolve_path=resolve_path,
                 blocking=True,
                 scope="whole_bid",
+                code=blocker.code,
             )
         )
+    items = [item.model_copy(update={"count": records[item.heading]}) for item in items]
     return items
 
 
@@ -3354,6 +3380,37 @@ async def reassess_bid_classification(bid_id: str, request: Request) -> Response
     return RedirectResponse(f"/bids/{quote(bid_id)}#navigator", status_code=303)
 
 
+@app.post("/bids/{bid_id}/customer-closing", response_class=HTMLResponse)
+async def record_customer_closing(request: Request, bid_id: str) -> Response:
+    """Record the customer's closing time and time zone, exactly as the customer's document states."""
+    form = dict(await request.form())
+    closing_time = str(form.get("customer_due_time") or "").strip()
+    timezone = str(form.get("customer_due_timezone") or "").strip()
+    source_note = str(form.get("source_note") or "").strip()
+    try:
+        if (closing_time or timezone) and not source_note:
+            raise ValueError(
+                "Say where the closing time is stated (document, page), so it can be checked."
+            )
+        bid_repository.record_customer_closing(
+            bid_id,
+            time.fromisoformat(closing_time) if closing_time else None,
+            timezone or None,
+            LOCAL_ACTOR,
+            source_note or "cleared",
+        )
+    except (ValidationError, ValueError) as exc:
+        if bid_repository.get_bid(bid_id) is None:
+            raise HTTPException(status_code=404, detail=f"Bid not found: {bid_id}") from exc
+        context = _bid_workspace_context(bid_id, BidWorkspaceSection.OVERVIEW)
+        context["closing_error"] = (
+            validation_error_message(exc) if isinstance(exc, ValidationError) else str(exc)
+        )
+        context["closing_entered"] = form
+        return render("bid_detail.html", status_code=422, **context)
+    return RedirectResponse(f"/bids/{quote(bid_id)}", status_code=303)
+
+
 @app.get("/bids/{bid_id}", response_class=HTMLResponse)
 async def bid_detail(request: Request, bid_id: str) -> HTMLResponse:
     return _render_bid_workspace(bid_id, BidWorkspaceSection.OVERVIEW)
@@ -5416,7 +5473,14 @@ async def deliverable_history(deliverable_id: str) -> HTMLResponse:
     return render("deliverable_history.html", history=history, deliverable_id=deliverable_id)
 
 
-def _deliverable_discovery_context(bid_id: str, **extra: object) -> dict[str, object]:
+def _deliverable_discovery_context(
+    bid_id: str,
+    *,
+    status: str = DEFAULT_REVIEW_STATUS,
+    document: str = "",
+    page: int = 1,
+    **extra: object,
+) -> dict[str, object]:
     bid = bid_repository.get_bid(bid_id)
     if bid is None:
         raise ValueError(f"Bid not found: {bid_id}")
@@ -5459,9 +5523,13 @@ def _deliverable_discovery_context(bid_id: str, **extra: object) -> dict[str, ob
     latest_outcome_views = [
         file_outcome_view(row) for row in (latest_run or {}).get("file_outcomes") or []
     ]
+    file_names = {
+        str(file_row["file_id"]): str(file_row["original_relative_path"]) for file_row in files
+    }
     return {
         "bid": bid,
         "proposals": queue,
+        "review": build_review_view(queue, file_names, status, document, page),
         "flags": flags,
         "promotions": promotions,
         "unreadable_files": unreadable_files,
@@ -5597,10 +5665,25 @@ def _deliverable_discovery_job_context(
     return context
 
 
-@app.get("/bids/{bid_id}/deliverable-discovery", response_class=HTMLResponse)
-async def deliverable_discovery_page(bid_id: str) -> HTMLResponse:
+def _review_view_params(source: Mapping[str, object]) -> dict[str, object]:
+    """The review filter a request carries: status, document and page."""
     try:
-        context = _deliverable_discovery_context(bid_id)
+        page = int(str(source.get("page") or 1))
+    except ValueError:
+        page = 1
+    return {
+        "status": str(source.get("status") or DEFAULT_REVIEW_STATUS),
+        "document": str(source.get("document") or ""),
+        "page": page,
+    }
+
+
+@app.get("/bids/{bid_id}/deliverable-discovery", response_class=HTMLResponse)
+async def deliverable_discovery_page(request: Request, bid_id: str) -> HTMLResponse:
+    try:
+        context = _deliverable_discovery_context(
+            bid_id, **_review_view_params(request.query_params)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return render("deliverable_discovery.html", **context)
@@ -5754,41 +5837,105 @@ async def deliverable_discovery_job_resume(bid_id: str, job_id: str) -> Response
     )
 
 
+_BULK_DECISIONS = {
+    "accept": ProposalReviewDecision.ACCEPTED,
+    "reject": ProposalReviewDecision.REJECTED,
+    "defer": ProposalReviewDecision.DEFERRED,
+}
+_DECISION_WORDS = {
+    ProposalReviewDecision.ACCEPTED: "accepted",
+    ProposalReviewDecision.REJECTED: "rejected",
+    ProposalReviewDecision.DEFERRED: "deferred",
+}
+
+
+def _parse_review_request(form: Mapping[str, object] | Any) -> list[ProposalDecisionInput]:
+    """Turn a review form post into decisions, or raise ``ValueError`` saying what is wrong.
+
+    A single-row decision carries exactly one ``action`` and one ``proposal_id``. A bulk decision
+    carries one ``bulk_action`` and the ticked ``proposal_id`` values and no ``action``. Anything
+    else is contradictory and is refused whole: nothing is guessed and nothing is written.
+    """
+    actions = [str(value) for value in form.getlist("action")]
+    bulk_actions = [str(value) for value in form.getlist("bulk_action")]
+    proposal_ids = [str(value).strip() for value in form.getlist("proposal_id") if str(value).strip()]
+    rationale = str(form.get("rationale") or "").strip() or None
+    if actions and bulk_actions:
+        raise ValueError(
+            "This page sent a contradictory request (a single action and a bulk action). "
+            "Reload the page and try again."
+        )
+    if len(bulk_actions) > 1 or len(actions) > 1:
+        raise ValueError("This page sent more than one action. Reload the page and try again.")
+    if len(set(proposal_ids)) != len(proposal_ids):
+        raise ValueError("The same finding was selected twice. Reload the page and try again.")
+    if bulk_actions:
+        decision = _BULK_DECISIONS.get(bulk_actions[0])
+        if decision is None:
+            raise ValueError(f"Unknown bulk action: {bulk_actions[0]}")
+    elif actions:
+        try:
+            decision = ProposalReviewDecision(actions[0].upper())
+        except ValueError:
+            raise ValueError(f"Unknown action: {actions[0]}") from None
+        if len(proposal_ids) != 1:
+            raise ValueError("A single decision applies to exactly one finding.")
+    else:
+        raise ValueError("No action was chosen. Choose accept, reject or defer.")
+    if not proposal_ids:
+        raise ValueError("No findings are selected. Tick at least one finding, then choose the action.")
+    if decision is not ProposalReviewDecision.ACCEPTED and not rationale:
+        raise ValueError(
+            f"A reason is required to {decision.value.lower().removesuffix('ed')}"
+            " findings. Enter one in the reason box."
+        )
+    due: date | None = None
+    if decision is ProposalReviewDecision.ACCEPTED and not bulk_actions:
+        raw_due = str(form.get("due_date") or "").strip()
+        if raw_due:
+            try:
+                due = date.fromisoformat(raw_due)
+            except ValueError:
+                raise ValueError(f"Due date {raw_due!r} is not a valid date (YYYY-MM-DD).") from None
+    return [
+        ProposalDecisionInput(
+            proposal_id=pid,
+            decision=decision,
+            rationale=None if decision is ProposalReviewDecision.ACCEPTED else rationale,
+            due_date=due,
+        )
+        for pid in proposal_ids
+    ]
+
+
 @app.post("/bids/{bid_id}/deliverable-discovery/decide", response_class=HTMLResponse)
 async def deliverable_discovery_decide(request: Request, bid_id: str) -> Response:
     form = await request.form()
-    action = str(form.get("action") or "")
-    rationale = str(form.get("rationale") or "").strip() or None
-    if action == "bulk_accept":
-        proposal_ids = [str(v) for v in form.getlist("proposal_id")]
-        decisions = [
-            ProposalDecisionInput(proposal_id=pid, decision=ProposalReviewDecision.ACCEPTED)
-            for pid in proposal_ids
-        ]
-    else:
-        proposal_id = str(form.get("proposal_id") or "")
-        try:
-            decision = ProposalReviewDecision(action.upper())
-        except ValueError:
-            context = _deliverable_discovery_context(bid_id, run_error=f"Unknown action: {action}")
-            return render("deliverable_discovery.html", status_code=422, **context)
-        decisions = [
-            ProposalDecisionInput(proposal_id=proposal_id, decision=decision, rationale=rationale)
-        ]
+    view = _review_view_params(form)
     try:
+        decisions = _parse_review_request(form)
         results = deliverable_discovery_service.decide(bid_id, decisions, LOCAL_ACTOR)
     except ValueError as exc:
-        context = _deliverable_discovery_context(bid_id, run_error=str(exc))
+        context = _deliverable_discovery_context(bid_id, run_error=str(exc), **view)
         return render("deliverable_discovery.html", status_code=422, **context)
     failures = [r for r in results if "error" in r]
+    done = len(results) - len(failures)
+    word = _DECISION_WORDS[decisions[0].decision]
+    summary = f"{done} of {len(results)} finding(s) {word}."
+    if decisions[0].decision is ProposalReviewDecision.ACCEPTED and len(results) > 1:
+        summary += " Due dates were applied only where the document states them."
     context = _deliverable_discovery_context(
         bid_id,
-        decide_error="; ".join(f"{r['proposal_id']}: {r['error']}" for r in failures)
-        if failures
-        else None,
+        decide_summary=summary,
+        decide_error=(
+            f"{len(failures)} could not be {word}: "
+            + "; ".join(f"{r['proposal_id']}: {r['error']}" for r in failures)
+            if failures
+            else None
+        ),
+        **view,
     )
-    status_code = 422 if failures else 200
-    return render("deliverable_discovery.html", status_code=status_code, **context)
+    return render("deliverable_discovery.html", status_code=422 if failures else 200, **context)
 
 
 @app.post("/bids/{bid_id}/deliverable-discovery/promote-source", response_class=HTMLResponse)

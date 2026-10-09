@@ -99,6 +99,7 @@ def _fixture(tmp_path: Path, files: dict[str, bytes], client: FakeClient) -> dic
         "repository": repository,
         "database": database,
         "client": client,
+        "deliverables": deliverables,
     }
 
 

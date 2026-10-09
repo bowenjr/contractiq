@@ -170,12 +170,12 @@
       <article class="hold" data-bid-row="{{ row.bid.bid_id }}">
         <div class="hold-title">
           <a href="/bids/{{ row.bid.bid_id }}"><span>{{ row.bid.project_name }} · {{ row.bid.customer }}</span></a>
-          <span class="badge {{ 'status-COMPLETED' if row.readiness.verdict.value == 'clear' else 'status-BLOCKED' }}">{{ 'Development checks clear' if row.readiness.verdict.value == 'clear' else 'Development checks need attention' }}</span>
+          <span class="badge {{ 'status-COMPLETED' if row.readiness.verdict.value == 'clear' and not row.blocking_count else 'status-BLOCKED' }}">{% if row.blocking_count %}Development checks: {{ row.blocking_count }} blocking{% elif row.readiness.verdict.value == 'clear' %}Development checks clear{% else %}Development checks need attention{% endif %}</span>
         </div>
-        <p><strong>{{ row.bid.current_gate.value|upper }}</strong> — {{ gate_labels[row.bid.current_gate] }} · Deadline {{ row.bid.customer_due_date }}</p>
+        <p><strong>{{ row.bid.current_gate.value|upper }}</strong> — {{ gate_labels[row.bid.current_gate] }} · Deadline {{ row.bid.customer_closing_label() }}</p>
         <p class="context">
-          {% if row.highest_blocker %}{{ row.highest_blocker.heading }}{% if row.additional_blocker_count %} (+{{ row.additional_blocker_count }} more){% endif %}{% else %}No active blocker{% endif %}
-          · Waiting: {{ row.waiting_count }} · Overdue: {{ row.overdue_work_count }} · Owner: {{ row.bid.bc_owner }} · Last activity: {{ row.last_activity.strftime('%Y-%m-%d') if row.last_activity else 'Not recorded' }}
+          {% if row.highest_blocker %}{{ row.blocking_count }} blocking — {{ row.highest_blocker.heading }}{% if row.additional_blocker_count %} (+{{ row.additional_blocker_count }} more){% endif %}{% else %}No active blocker{% endif %}
+          · Waiting: {{ row.waiting_count }} · Overdue: {{ row.overdue_work_count }}{% if row.overdue_returnable_count %} ({{ row.overdue_returnable_count }} returnable(s) past their date){% endif %} · Owner: {{ row.bid.bc_owner }} · Last activity: {{ row.last_activity.strftime('%Y-%m-%d') if row.last_activity else 'Not recorded' }}
         </p>
         {% if row.not_yet_assessed %}<p class="context">Not yet assessed: {{ row.not_yet_assessed|join(', ') }}.</p>{% endif %}
         {% if row.pending_before_issue_count %}<p class="context">Before issue: {{ row.pending_before_issue_count }} approval(s) pending.</p>{% endif %}

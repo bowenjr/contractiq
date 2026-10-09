@@ -129,6 +129,9 @@ class OutstandingItem(BaseModel):
     # ("package_intake"), confirming the Bid Basis after document control
     # ("bid_basis"), or later whole-Bid readiness ("whole_bid").
     scope: str = "whole_bid"
+    # How many underlying records this line stands for (for example, 42 unanswered manufacturer
+    # rows under one heading). Blocking totals count records, not headings.
+    count: int = Field(default=1, ge=1)
 
 
 class BidWorkflowProjection(BaseModel):
@@ -194,11 +197,11 @@ class BidWorkflowProjection(BaseModel):
 
     @property
     def blocking_count(self) -> int:
-        return sum(1 for item in self.outstanding if item.blocking)
+        return sum(item.count for item in self.outstanding if item.blocking)
 
     def blocking_count_for(self, scope: str) -> int:
         """Count blocking items belonging to one scope."""
-        return sum(1 for item in self.outstanding if item.blocking and item.scope == scope)
+        return sum(item.count for item in self.outstanding if item.blocking and item.scope == scope)
 
     def items_for(self, scope: str) -> tuple[OutstandingItem, ...]:
         """Return the outstanding items belonging to one scope, in display order."""
@@ -971,7 +974,7 @@ def project_bid_workflow(
 
 
 def _readiness_line(readiness_verdict: str, outstanding: Sequence[OutstandingItem]) -> str:
-    blocking = sum(1 for item in outstanding if item.blocking)
+    blocking = sum(item.count for item in outstanding if item.blocking)
     if not blocking:
         return (
             f"Development gate check: {readiness_verdict.title()} "

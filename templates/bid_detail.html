@@ -57,7 +57,18 @@ a.button-lg:hover{background:var(--brand-hover);color:#fff}
   <div>
     <p class="eyebrow">Bid workspace · {{ bid_section_label }}</p>
     <h1>{{ bid.project_name }}</h1>
-    <p class="facts"><b>{{ bid.bid_id }}</b> · {{ bid.customer }} · {{ bid.classification.value|replace('_',' ')|title }} {{ governance_guide.name }} · Owner <b>{{ bid.bc_owner }}</b> · Customer due <b>{{ bid.customer_due_date }}</b> · Internal due <b>{{ bid.internal_due_date }}</b> · {{ bid.status.value|replace('_',' ')|title }}</p>
+    <p class="facts"><b>{{ bid.bid_id }}</b> · {{ bid.customer }} · {{ bid.classification.value|replace('_',' ')|title }} {{ governance_guide.name }} · Owner <b>{{ bid.bc_owner }}</b> · Customer closing <b>{{ bid.customer_closing_label() }}</b> · Internal due <b>{{ bid.internal_due_date }}</b> · {{ bid.status.value|replace('_',' ')|title }}</p>
+    <details class="facts"{% if closing_error is defined and closing_error %} open{% endif %}><summary>{% if bid.customer_due_time %}Customer closing time recorded{% else %}Record the customer's closing time and time zone{% endif %}</summary>
+      {% if closing_error is defined and closing_error %}<p class="error" role="alert">{{ closing_error }}</p>{% endif %}
+      <form method="post" action="/bids/{{ bid.bid_id }}/customer-closing">
+        <label>Closing time (local) <input type="time" name="customer_due_time" value="{{ (closing_entered.customer_due_time if closing_entered is defined and closing_entered else (bid.customer_due_time.strftime('%H:%M') if bid.customer_due_time else '')) }}"></label>
+        <label>Time zone <input name="customer_due_timezone" list="closing-zones" placeholder="America/Toronto" value="{{ (closing_entered.customer_due_timezone if closing_entered is defined and closing_entered else (bid.customer_due_timezone or '')) }}"></label>
+        <datalist id="closing-zones"><option value="America/Toronto"><option value="America/Halifax"><option value="America/Winnipeg"><option value="America/Edmonton"><option value="America/Vancouver"><option value="UTC"></datalist>
+        <label>Where it is stated <input name="source_note" placeholder="Invitation letter p.1" value="{{ closing_entered.source_note if closing_entered is defined and closing_entered else '' }}"></label>
+        <button type="submit">Save closing time</button>
+      </form>
+      <p class="muted">The Proposal Studio package states a deadline only when both time and zone are recorded.</p>
+    </details>
     <p class="facts"><b>Pricing baseline:</b> {% if pricing_baseline %}Selected — {{ pricing_baseline.scenario_code }}{% if pricing_baseline.version_number %} version {{ pricing_baseline.version_number }}{% endif %} · {% if pricing_baseline.revenue is not none %}{{ pricing_baseline.currency }} {{ pricing_baseline.revenue }} revenue · {{ pricing_baseline.gross_margin }} margin · {% endif %}<span title="Pricing baseline selection identifier">{{ pricing_baseline.selection_id }}</span>{% else %}None selected{% endif %} · <a href="/bids/{{ bid.bid_id }}/pricing-baseline">{{ 'Review pricing baseline' if pricing_baseline else 'Set pricing baseline' }}</a></p>
   </div>
   <p class="facts"><a href="/bids">← All Bids</a> · <a href="/my-day">My Day</a></p>
@@ -141,7 +152,7 @@ a.button-lg:hover{background:var(--brand-hover);color:#fff}
   {% for item in group_items %}
   <div class="outstanding-row">
     <div>
-      <h3>{{ item.heading }}</h3>
+      <h3>{{ item.heading }}{% if item.count > 1 %} — {{ item.count }} records{% endif %}</h3>
       <p><span class="s-badge {{ 'blocked' if item.blocking else 'in-progress' }}">{{ 'Blocking' if item.blocking else 'Before issue' if item.scope == 'pending_before_issue' else 'Advisory' }}</span> {{ item.detail }}</p>
     </div>
     <div>

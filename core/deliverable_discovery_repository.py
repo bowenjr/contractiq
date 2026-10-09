@@ -5,7 +5,7 @@ docs/tasks/OPS-13A-bid-deliverables-discovery.md for the additive migration plan
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 from uuid import uuid4
 
@@ -17,6 +17,11 @@ from core.deliverable_discovery import (
     ExtractionUnit,
     ProposalReviewEvent,
     SourcePromotion,
+)
+from core.deliverable_discovery_evidence import (
+    attach_evidence,
+    ensure_evidence_tables,
+    insert_proposal_evidence,
 )
 from core.deliverable_discovery_job_repository import migrate_deliverable_discovery_jobs
 from core.deliverable_discovery_migrations import migrate_deliverable_discovery_not_attempted
@@ -248,6 +253,7 @@ class DeliverableDiscoveryRepository:
                 )
                 migrate_deliverable_discovery_jobs(conn, datetime.now(UTC).isoformat())
                 migrate_deliverable_discovery_not_attempted(conn, datetime.now(UTC).isoformat())
+                ensure_evidence_tables(conn)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -441,6 +447,7 @@ class DeliverableDiscoveryRepository:
                                 source.excerpt,
                             ),
                         )
+                    insert_proposal_evidence(conn, proposal)
                 if run_outcome is not None:
                     conn.execute(
                         "INSERT INTO deliverable_discovery_run_outcomes VALUES "
@@ -502,6 +509,19 @@ class DeliverableDiscoveryRepository:
                 conn.rollback()
                 raise
 
+    def date_triggers(self, bid_id: str) -> dict[str, date]:
+        """Dates a person recorded on the Bid that a calendar-day rule may be counted from."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT release_date,customer_due_date FROM bids WHERE bid_id=?", (bid_id,)
+            ).fetchone()
+        if row is None:
+            return {}
+        return {
+            "issue": date.fromisoformat(str(row["release_date"])),
+            "closing": date.fromisoformat(str(row["customer_due_date"])),
+        }
+
     def list_proposals(self, bid_id: str) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = [
@@ -521,6 +541,7 @@ class DeliverableDiscoveryRepository:
                     ).fetchall()
                 ]
                 row["review_events"] = self._review_events(conn, row["proposal_id"])
+                attach_evidence(conn, row)
             return rows
 
     def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
@@ -540,6 +561,7 @@ class DeliverableDiscoveryRepository:
                 ).fetchall()
             ]
             data["review_events"] = self._review_events(conn, proposal_id)
+            attach_evidence(conn, data)
             return data
 
     @staticmethod

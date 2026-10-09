@@ -29,13 +29,19 @@ technical schedule, a pricing schedule, a certificate). Respond ONLY with JSON m
 
 {"candidates": [{"title": str, "category": str, "criticality": "REQUIRED"|"CONDITIONAL"|"UNCLEAR", \
 "condition_text": str|null, "due_date": "YYYY-MM-DD"|null, "requested_format": str|null, \
-"requested_recipient": str|null, "proposed_owner": str|null}]}
+"requested_recipient": str|null, "proposed_owner": str|null, "due_date_text": str|null, \
+"source_quote": str|null}]}
 
 Rules:
 - "candidates" may be an empty list if the passage names no deliverable.
 - Use "CONDITIONAL" only when the passage states a condition, and always include condition_text.
 - Use "UNCLEAR" when the passage implies an obligation but its requiredness is ambiguous.
-- due_date is null unless the passage states an explicit date. Never guess a date.
+- due_date is null unless the passage prints an explicit calendar date. Never calculate or \
+guess a date.
+- due_date_text is the exact wording the passage uses for a date, time or timing rule \
+(for example "3 Business Days Before RFP Closing Date"), or null.
+- source_quote is the one sentence of the passage that creates the obligation, copied word for \
+word (at most 300 characters), or null. Never paraphrase it.
 - Never invent a deliverable not actually named or clearly implied in the passage text.
 - Do not include any field, explanation, or text outside this JSON object."""
 
@@ -58,6 +64,8 @@ CANDIDATE_RESPONSE_SCHEMA: dict[str, object] = {
                     "requested_format": {"type": ["string", "null"]},
                     "requested_recipient": {"type": ["string", "null"]},
                     "proposed_owner": {"type": ["string", "null"]},
+                    "due_date_text": {"type": ["string", "null"]},
+                    "source_quote": {"type": ["string", "null"]},
                 },
                 "required": [
                     "title",
@@ -68,6 +76,8 @@ CANDIDATE_RESPONSE_SCHEMA: dict[str, object] = {
                     "requested_format",
                     "requested_recipient",
                     "proposed_owner",
+                    "due_date_text",
+                    "source_quote",
                 ],
                 "additionalProperties": False,
             },
@@ -121,6 +131,8 @@ class RawCandidate(BaseModel):
     requested_format: str | None = None
     requested_recipient: str | None = None
     proposed_owner: str | None = None
+    due_date_text: str | None = Field(default=None, max_length=1000)
+    source_quote: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def conditional_requires_condition(self) -> RawCandidate:
@@ -143,6 +155,8 @@ class ProposedCandidate(BaseModel):
     requested_format: str | None
     requested_recipient: str | None
     proposed_owner: str | None
+    due_date_text: str | None = None
+    source_quote: str | None = None
 
 
 class PassageOutcomeKind(StrEnum):
@@ -389,6 +403,8 @@ def analyse_units(
                     requested_format=parsed.requested_format,
                     requested_recipient=parsed.requested_recipient,
                     proposed_owner=parsed.proposed_owner,
+                    due_date_text=parsed.due_date_text,
+                    source_quote=parsed.source_quote,
                 )
             )
             accepted += 1

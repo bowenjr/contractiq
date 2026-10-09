@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import cast
 from uuid import uuid4
@@ -65,7 +65,9 @@ class BidRepository:
                     risk_triggers TEXT NOT NULL DEFAULT '[]',
                     inference_policy TEXT NOT NULL DEFAULT 'local_only',
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    customer_due_time TEXT,
+                    customer_due_timezone TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS approvals (
@@ -113,6 +115,12 @@ class BidRepository:
             }
             if "bid_id" not in document_columns:
                 conn.execute("ALTER TABLE documents ADD COLUMN bid_id TEXT REFERENCES bids(bid_id)")
+            bid_columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(bids)").fetchall()
+            }
+            for column in ("customer_due_time", "customer_due_timezone"):
+                if column not in bid_columns:
+                    conn.execute(f"ALTER TABLE bids ADD COLUMN {column} TEXT")
             self._evolve_approval_lineage(conn)
             conn.commit()
 
@@ -209,6 +217,8 @@ class BidRepository:
             bid.inference_policy.value,
             bid.created_at.isoformat(),
             bid.updated_at.isoformat(),
+            bid.customer_due_time.isoformat() if bid.customer_due_time else None,
+            bid.customer_due_timezone,
         )
 
     @classmethod
@@ -227,6 +237,12 @@ class BidRepository:
             executive_sponsor=cls._optional_str(row["executive_sponsor"]),
             release_date=date.fromisoformat(str(row["release_date"])),
             customer_due_date=date.fromisoformat(str(row["customer_due_date"])),
+            customer_due_time=(
+                time.fromisoformat(str(row["customer_due_time"]))
+                if row["customer_due_time"]
+                else None
+            ),
+            customer_due_timezone=cls._optional_str(row["customer_due_timezone"]),
             internal_due_date=date.fromisoformat(str(row["internal_due_date"])),
             anticipated_award_date=(
                 date.fromisoformat(anticipated_award) if anticipated_award is not None else None
@@ -254,8 +270,9 @@ class BidRepository:
                 customer_due_date, internal_due_date, anticipated_award_date,
                 estimated_value, currency, margin_range, win_probability,
                 classification, current_gate, status, risk_triggers,
-                inference_policy, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                inference_policy, created_at, updated_at,
+                customer_due_time, customer_due_timezone
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             cls._bid_values(bid),
         )
@@ -325,8 +342,9 @@ class BidRepository:
                     customer_due_date, internal_due_date, anticipated_award_date,
                     estimated_value, currency, margin_range, win_probability,
                     classification, current_gate, status, risk_triggers,
-                    inference_policy, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    inference_policy, created_at, updated_at,
+                    customer_due_time, customer_due_timezone
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(bid_id) DO UPDATE SET
                     customer = excluded.customer,
                     customer_type = excluded.customer_type,
@@ -349,11 +367,69 @@ class BidRepository:
                     risk_triggers = excluded.risk_triggers,
                     inference_policy = excluded.inference_policy,
                     created_at = excluded.created_at,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    customer_due_time = excluded.customer_due_time,
+                    customer_due_timezone = excluded.customer_due_timezone
                 """,
                 self._bid_values(updated_bid),
             )
             conn.commit()
+
+    def record_customer_closing(
+        self,
+        bid_id: str,
+        closing_time: time | None,
+        timezone: str | None,
+        actor: str,
+        source_note: str,
+    ) -> Bid:
+        """Record (or clear) the customer's closing time and zone, with its audit row.
+
+        The Bid is revalidated first, so an unknown zone or a time without a zone is refused with
+        a message before anything is written. The change and its audit entry share one transaction.
+        """
+        bid = self.get_bid(bid_id)
+        if bid is None:
+            raise ValueError(f"Bid not found: {bid_id}")
+        updated = Bid.model_validate(
+            {
+                **bid.model_dump(),
+                "customer_due_time": closing_time,
+                "customer_due_timezone": timezone,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        label = updated.customer_closing_label()
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "UPDATE bids SET customer_due_time=?, customer_due_timezone=?, updated_at=? "
+                    "WHERE bid_id=?",
+                    (
+                        closing_time.isoformat() if closing_time else None,
+                        timezone,
+                        updated.updated_at.isoformat(),
+                        bid_id,
+                    ),
+                )
+                conn.execute(
+                    "INSERT INTO audit_log(entry_id,bid_id,actor,action,detail,timestamp) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        f"AUD-{uuid4().hex}",
+                        bid_id,
+                        actor,
+                        "customer_closing_recorded",
+                        f"Customer closing recorded as {label}. Source: {source_note}",
+                        updated.updated_at.isoformat(),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return updated
 
     def bid_exists(self, bid_id: str) -> bool:
         with self._conn() as conn:

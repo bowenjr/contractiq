@@ -14,6 +14,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.date_integrity import DueDateBasis
+
 
 class LocatorType(StrEnum):
     PAGE = "PAGE"
@@ -87,6 +89,8 @@ class SourceCitation(BaseModel):
     locator_type: LocatorType
     locator: str = Field(min_length=1, max_length=200)
     excerpt: str = Field(max_length=2000)
+    quote: str | None = Field(default=None, max_length=2000)
+    """The sentence that creates the obligation, verified to occur word for word in the passage."""
 
     @model_validator(mode="after")
     def source_identity(self) -> Self:
@@ -111,6 +115,12 @@ class DeliverableProposal(BaseModel):
     criticality: DiscoveryCriticality
     condition_text: str | None = None
     due_date: date | None = None
+    """Set only when the date is stated in the document or calculated from a recorded trigger."""
+    due_date_basis: DueDateBasis = DueDateBasis.UNKNOWN
+    proposed_due_date: date | None = None
+    """A date the model suggested that nothing verifies. A person must confirm it."""
+    due_date_text: str | None = None
+    """The customer's wording of the date or timing rule, verified to occur in the source."""
     requested_format: str | None = None
     requested_recipient: str | None = None
     proposed_owner: str | None = None

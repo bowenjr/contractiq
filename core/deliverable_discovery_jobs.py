@@ -268,7 +268,7 @@ class DiscoveryJobRunner:
                 analysis = analyse_units(self.llm_client, [(key, raw)], timeout=600)
                 outcome = analysis.outcomes[0]
                 now = self.service.clock()
-                passage = {
+                passage: dict[str, object] = {
                     "passage_key": key,
                     "received_file_id": item.received_file_id,
                     "locator_type": raw.locator_type,
@@ -437,7 +437,14 @@ class DiscoveryJobRunner:
             return
         run_outcome, file_outcomes = derive_discovery_outcomes(run_id, evidence, tuple(outcomes))
         lookup = {item.extraction_id: item for item in extractions}
-        proposals = _consolidate(str(job["bid_id"]), run_id, started, candidates, lookup)
+        proposals = _consolidate(
+            str(job["bid_id"]),
+            run_id,
+            started,
+            candidates,
+            lookup,
+            self.service.repository.date_triggers(str(job["bid_id"])),
+        )
         known = self.jobs.existing_dedup_keys(str(job["bid_id"]))
         proposals = [proposal for proposal in proposals if proposal.dedup_key not in known]
         invalid = sum(

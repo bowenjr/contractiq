@@ -1,8 +1,9 @@
 """Pydantic schemas for ContractIQ's deterministic bid-management spine."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -81,6 +82,10 @@ class Bid(BaseModel):
     executive_sponsor: str | None = None
     release_date: date
     customer_due_date: date
+    customer_due_time: time | None = None
+    """Local closing time the customer's document states. ``None`` when not recorded."""
+    customer_due_timezone: str | None = None
+    """IANA zone the closing time is in, such as ``America/Toronto``. Set with the time."""
     internal_due_date: date
     anticipated_award_date: date | None = None
     estimated_value: Decimal
@@ -100,6 +105,44 @@ class Bid(BaseModel):
         if self.internal_due_date > self.customer_due_date:
             raise ValueError("internal_due_date must be on or before customer_due_date")
         return self
+
+    @model_validator(mode="after")
+    def validate_customer_closing(self) -> Self:
+        if (self.customer_due_time is None) != (self.customer_due_timezone is None):
+            raise ValueError(
+                "customer closing time and time zone are recorded together: enter both "
+                "(for example 12:00 and America/Toronto) or leave both blank"
+            )
+        if self.customer_due_timezone is not None:
+            try:
+                ZoneInfo(self.customer_due_timezone)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(
+                    f"unknown time zone {self.customer_due_timezone!r}; use an IANA name such "
+                    "as America/Toronto"
+                ) from exc
+        return self
+
+    def customer_closing_instant(self) -> datetime | None:
+        """The customer's closing moment in UTC, or ``None`` unless time and zone are recorded."""
+        if self.customer_due_time is None or self.customer_due_timezone is None:
+            return None
+        local = datetime.combine(
+            self.customer_due_date, self.customer_due_time, ZoneInfo(self.customer_due_timezone)
+        )
+        return local.astimezone(UTC)
+
+    def customer_closing_label(self) -> str:
+        """The closing date, with its local time and zone when recorded, else saying it is not."""
+        if self.customer_due_time is None or self.customer_due_timezone is None:
+            return f"{self.customer_due_date.isoformat()} (closing time not recorded)"
+        local = datetime.combine(
+            self.customer_due_date, self.customer_due_time, ZoneInfo(self.customer_due_timezone)
+        )
+        return (
+            f"{self.customer_due_date.isoformat()} {self.customer_due_time.strftime('%H:%M')} "
+            f"{local.tzname()} ({self.customer_due_timezone})"
+        )
 
 
 class Approval(BaseModel):

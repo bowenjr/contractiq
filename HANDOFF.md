@@ -1,3 +1,33 @@
+# Handoff — Stage 1: core reliability
+
+Branch `ciq/stage1-core-reliability`, based on baseline `e9c916d` (`local/ops-13a-bid-deliverables-discovery`).
+Six defects found by the Goldboro evaluation (CIQ-EVAL-001 / CIQ-00) are corrected. Operational database and the
+port-8000 server are unchanged; nothing is merged or deployed.
+
+| # | Behavior now | Where |
+|---|---|---|
+| 1 | Bulk review acts on exactly the ticked findings. Nothing ticked, a contradictory request, or a repeated id is refused whole with a message and no writes. Reject/defer need a reason. The result reads "N of M finding(s) accepted" and names failures. Cause was nested `<form>`s; checkboxes now attach with `form="bulk-review"`. | `app.py` (`_parse_review_request`, decide route), `templates/deliverable_discovery.html` |
+| 2 | My Day, the Bids list and the workspace read one blocker list (`workflow.outstanding`), counted in records. Overdue returnables are part of "Overdue". "No active blocker" no longer appears while a blocker exists. | `core/bid_control_center.py`, `core/bid_workflow.py`, `my_day.html`, `bids.html`, `bid_detail.html` |
+| 3 | A manufacturer exception or cannot-comply with a recorded **and approved** Bid disposition no longer blocks export (same rule as handover and vendor control). Unresolved ones still block. Approved exceptions and QUALIFY positions are exported in `qualifications_and_deviations`. | `core/proposal_exchange_service.py` |
+| 4 | Passages over 4,000 characters are split into ordered parts (400-character overlap, locator suffix `p.2 (part 1 of 2)`), never cut. Job keys stay unique and stable, so restart/cancel behave as before. Model request size is unchanged. | `core/deliverable_discovery_extraction.py` |
+| 5 | A due date is STATED (printed in the passage), CALCULATED (calendar-day rule from a recorded trigger), PROPOSED (model guess; never applied unless a reviewer confirms) or UNKNOWN. Findings recorded before this change show their date as UNVERIFIED. `Bid` gains optional `customer_due_time` + `customer_due_timezone` (both or neither); the exported `due_at` is the UTC instant, or `null` — no invented end-of-day. | `core/date_integrity.py`, `core/deliverable_discovery_evidence.py`, `core/schemas.py`, `core/bid_repository.py` |
+| 6 | Findings show the source document, location and the quoted sentence (verified word for word against the passage, else the start of the passage is shown and labelled). Status filter, document filter and 100-per-page paging. | `core/deliverable_discovery_review.py`, `deliverable_discovery.html`, `static/style.css` |
+
+**Schema changes (additive, `IF NOT EXISTS` / guarded `ALTER`):** two nullable `bids` columns; insert-only tables
+`deliverable_discovery_proposal_dates` and `deliverable_discovery_citation_quotes` (immutable by trigger, so the
+immutable proposal tables are untouched).
+
+**Limitations:** the prompt now asks the model for `source_quote` and `due_date_text`; this was tested with scripted
+models, not benchmarked against the real model. Only calendar-day rules are calculated; business-day rules stay
+PROPOSED. Existing findings have no quote or date evidence until rediscovered. The review queue is filtered and
+paged, not grouped per document. The port-8000 server runs the old code until deliberately restarted.
+
+**Verification:** full suite 1070 passed (930 baseline + 140 new `tests/unit/test_stage1_*.py`). Browser walkthrough on
+a private copy of the retained Goldboro data: `~/contractiq-review/stage1/` (scripts `walk1*.py`, `walk2*.py`,
+`walk3*.py`, `truncation_check.py`, screenshots in `shots/`).
+
+---
+
 # Handoff — Post-import review / document-control workflow fix
 
 ## Status (OPS-11/OPS-13A post-import workflow, on top of the browser-picker and OPS-13A work below)

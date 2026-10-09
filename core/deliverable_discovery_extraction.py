@@ -14,7 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+# One passage is at most this many characters: the bound the model request and the stored
+# extraction row were sized for. Text longer than this is split into several passages, never cut.
 MAX_EXCERPT_CHARS = 4000
+# Consecutive parts of one over-long unit share this many characters so that a sentence that
+# straddles a split is whole in at least one part.
+SEGMENT_OVERLAP_CHARS = 400
 MIN_READABLE_WORDS = 10
 _LOCATOR_TYPE_BY_SUFFIX = {
     ".pdf": "PAGE",
@@ -36,6 +41,71 @@ class RawUnit:
 
 class UnsupportedMediaTypeError(ValueError):
     pass
+
+
+def segment_spans(
+    text: str, limit: int = MAX_EXCERPT_CHARS, overlap: int = SEGMENT_OVERLAP_CHARS
+) -> list[tuple[int, int]]:
+    """Return ``(start, end)`` spans of ``text`` of at most ``limit`` characters.
+
+    Spans are in reading order, overlap by about ``overlap`` characters, and together cover every
+    character of ``text``. A split prefers a paragraph, line, sentence or word boundary in the last
+    30 % of a window. A text that fits in ``limit`` is one span.
+    """
+    if limit <= 0 or overlap < 0 or overlap >= int(limit * 0.7):
+        raise ValueError("segment limit must be positive and the overlap well below it")
+    length = len(text)
+    if length <= limit:
+        return [(0, length)]
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        end = min(start + limit, length)
+        if end < length:
+            floor = start + int(limit * 0.7)
+            for separator in ("\n\n", "\n", ". ", " "):
+                cut = text.rfind(separator, floor, end)
+                if cut >= 0:
+                    end = cut + len(separator)
+                    break
+        spans.append((start, end))
+        if end >= length:
+            return spans
+        next_start = max(end - overlap, start + 1)
+        # Do not begin a part in the middle of a word when a boundary is within the overlap.
+        boundary = text.find(" ", next_start, end)
+        start = boundary + 1 if boundary >= 0 else next_start
+
+
+def segment_text(
+    text: str, limit: int = MAX_EXCERPT_CHARS, overlap: int = SEGMENT_OVERLAP_CHARS
+) -> list[str]:
+    """Split ``text`` into ordered, overlapping, non-empty parts of at most ``limit`` characters."""
+    parts = [text[a:b].strip() for a, b in segment_spans(text, limit, overlap)]
+    return [part for part in parts if part]
+
+
+def _units_from_text(locator_type: str, locator: str, text: str) -> list[RawUnit]:
+    """One unit when the text fits; otherwise ordered parts that keep the original locator."""
+    parts = segment_text(text)
+    if len(parts) <= 1:
+        return [
+            RawUnit(
+                locator_type=locator_type,
+                locator=locator,
+                text=parts[0] if parts else "",
+                readable=bool(parts),
+            )
+        ]
+    return [
+        RawUnit(
+            locator_type=locator_type,
+            locator=f"{locator} (part {index} of {len(parts)})",
+            text=part,
+            readable=True,
+        )
+        for index, part in enumerate(parts, start=1)
+    ]
 
 
 def extract_units(filename: str, media_type: str | None, handle: BinaryIO) -> list[RawUnit]:
@@ -115,14 +185,7 @@ def _extract_pdf(data: bytes) -> list[RawUnit]:
                         )
                     )
                 else:
-                    units.append(
-                        RawUnit(
-                            locator_type="PAGE",
-                            locator=locator,
-                            text=text[:MAX_EXCERPT_CHARS],
-                            readable=True,
-                        )
-                    )
+                    units.extend(_units_from_text("PAGE", locator, text))
         finally:
             doc.close()
     except Exception as exc:
@@ -147,14 +210,7 @@ def _extract_docx(data: bytes, suffix: str) -> list[RawUnit]:
             if not text:
                 continue
             para_index += 1
-            units.append(
-                RawUnit(
-                    locator_type="PARAGRAPH",
-                    locator=f"para.{para_index}",
-                    text=_clean(text)[:MAX_EXCERPT_CHARS],
-                    readable=True,
-                )
-            )
+            units.extend(_units_from_text("PARAGRAPH", f"para.{para_index}", _clean(text)))
         for table_index, table in enumerate(document.tables, start=1):
             rows = []
             for row in table.rows:
@@ -162,13 +218,8 @@ def _extract_docx(data: bytes, suffix: str) -> list[RawUnit]:
                 if cells:
                     rows.append(" | ".join(cells))
             if rows:
-                units.append(
-                    RawUnit(
-                        locator_type="PARAGRAPH",
-                        locator=f"table.{table_index}",
-                        text=_clean("\n".join(rows))[:MAX_EXCERPT_CHARS],
-                        readable=True,
-                    )
+                units.extend(
+                    _units_from_text("PARAGRAPH", f"table.{table_index}", _clean("\n".join(rows)))
                 )
         if not units:
             units.append(
@@ -209,15 +260,18 @@ def _extract_xlsx(data: bytes, suffix: str) -> list[RawUnit]:
                     ]
                     if not row_values:
                         continue
+                    row_text = " | ".join(f"{coord}: {value}" for coord, value in row_values)
+                    if block and len("\n".join([*block, row_text])) > MAX_EXCERPT_CHARS:
+                        # Close the block before the row that would overflow it, so the row
+                        # starts the next block whole.
+                        units.extend(_sheet_units(sheet.title, block_start, block_end, block))
+                        block, block_start = [], None
                     if block_start is None:
                         block_start = row_values[0][0]
                     block_end = row_values[-1][0]
-                    block.append(" | ".join(f"{coord}: {value}" for coord, value in row_values))
-                    if len("\n".join(block)) > MAX_EXCERPT_CHARS:
-                        units.append(_sheet_unit(sheet.title, block_start, block_end, block))
-                        block, block_start, block_end = [], None, None
+                    block.append(row_text)
                 if block:
-                    units.append(_sheet_unit(sheet.title, block_start, block_end, block))
+                    units.extend(_sheet_units(sheet.title, block_start, block_end, block))
             if not units:
                 units.append(
                     RawUnit(
@@ -235,12 +289,12 @@ def _extract_xlsx(data: bytes, suffix: str) -> list[RawUnit]:
     return units
 
 
-def _sheet_unit(
+def _sheet_units(
     sheet_title: str,
     start: str | None,
     end: str | None,
     block: list[str],
-) -> RawUnit:
+) -> list[RawUnit]:
     start_coord = start or "?"
     end_coord = end or "?"
     locator = (
@@ -248,9 +302,4 @@ def _sheet_unit(
         if start_coord == end_coord
         else f"{sheet_title}!{start_coord}:{end_coord}"
     )
-    return RawUnit(
-        locator_type="SHEET_CELL",
-        locator=locator,
-        text=_clean("\n".join(block))[:MAX_EXCERPT_CHARS],
-        readable=True,
-    )
+    return _units_from_text("SHEET_CELL", locator, _clean("\n".join(block)))

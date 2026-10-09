@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -18,6 +19,13 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from core.bid_package_repository import BidPackageRepository
+from core.date_integrity import (
+    DUE_DATE_BASIS_MARKER,
+    DueDateBasis,
+    classify_due_date,
+    evidence_window,
+    locate_quote,
+)
 from core.deliverable_discovery import (
     AddendumDiscoveryFlag,
     DeliverableProposal,
@@ -33,6 +41,7 @@ from core.deliverable_discovery import (
     SourcePromotion,
     normalize_dedup_key,
 )
+from core.deliverable_discovery_evidence import parse_date
 from core.deliverable_discovery_extraction import (
     RawUnit,
     UnsupportedMediaTypeError,
@@ -85,6 +94,8 @@ class ProposalDecisionInput:
     criticality: DeliverableCriticality | None = None
     owner: str | None = None
     recipient: str | None = None
+    due_date: date | None = None
+    """A due date the reviewer confirmed against the source while accepting."""
 
 
 class ExportSourceCitation(BaseModel):
@@ -277,7 +288,14 @@ class DeliverableDiscoveryService:
         )
 
         extraction_lookup = {unit.extraction_id: unit for unit in extractions}
-        proposals = _consolidate(bid_id, run_id, started_at, candidates, extraction_lookup)
+        proposals = _consolidate(
+            bid_id,
+            run_id,
+            started_at,
+            candidates,
+            extraction_lookup,
+            self.repository.date_triggers(bid_id),
+        )
         known_dedup_keys = self.repository.existing_dedup_keys(bid_id)
         proposals = [p for p in proposals if p.dedup_key not in known_dedup_keys]
 
@@ -394,6 +412,42 @@ class DeliverableDiscoveryService:
             actor=actor,
         )
 
+    def _accepted_due_date(
+        self,
+        proposal: dict[str, Any],
+        decision_input: ProposalDecisionInput,
+        reviewer: str,
+    ) -> tuple[date | None, str]:
+        """The due date an accepted finding may carry, and how it is known.
+
+        Only a date the reviewer confirmed, or one stated in the document or calculated from a
+        recorded trigger, becomes a fixed due date. A model-proposed date is described but not
+        applied; it never silently becomes the customer's deadline.
+        """
+        if decision_input.due_date is not None:
+            return decision_input.due_date, f"confirmed by {reviewer} against the source"
+        if proposal.get("due_date"):
+            effective = date.fromisoformat(str(proposal["due_date"]))
+            if proposal.get("due_date_basis") == DueDateBasis.CALCULATED.value:
+                rule = proposal.get("due_date_text") or "the customer's calendar-day rule"
+                return effective, f"calculated from a recorded date by the rule “{rule}”"
+            return effective, "stated in the customer's document"
+        proposed = proposal.get("proposed_due_date")
+        if proposed:
+            rule = f" (from “{proposal['due_date_text']}”)" if proposal.get("due_date_text") else ""
+            return None, f"not confirmed; analysis suggested {proposed}{rule}"
+        return None, "not stated"
+
+    def _source_name(self, bid_id: str, proposal: dict[str, Any]) -> str | None:
+        """The file name behind a finding's primary source, when it is a received file."""
+        file_id = proposal["sources"][0].get("received_file_id")
+        if not file_id:
+            return None
+        try:
+            return str(self.bid_package_repository.file(str(file_id), bid_id)["original_filename"])
+        except Exception:
+            return None
+
     def _build_deliverable(
         self,
         bid_id: str,
@@ -404,7 +458,7 @@ class DeliverableDiscoveryService:
         criticality = decision_input.criticality or _map_criticality(proposal["criticality"])
         if criticality is None:
             raise ValueError("an UNCLEAR proposal requires an explicit criticality to accept")
-        due_date = date.fromisoformat(proposal["due_date"]) if proposal["due_date"] else None
+        due_date, date_basis = self._accepted_due_date(proposal, decision_input, reviewer)
         primary_source = proposal["sources"][0]
         source_id = primary_source["document_version_id"] or primary_source["received_file_id"]
         if not source_id:
@@ -414,7 +468,7 @@ class DeliverableDiscoveryService:
         item = Deliverable(
             bid_id=bid_id,
             title=proposal["title"],
-            description=_description(proposal),
+            description=_description(proposal, self._source_name(bid_id, proposal), date_basis),
             category=proposal["category"],
             criticality=criticality,
             lifecycle_phase=LifecyclePhase.WITH_BID,
@@ -683,7 +737,12 @@ class DeliverableDiscoveryService:
                     category=candidate.category,
                     criticality=candidate.criticality,
                     condition_text=candidate.condition_text,
-                    due_date=candidate.due_date,
+                    # An imported date is the importer's claim, not the document's.
+                    due_date=None,
+                    due_date_basis=(
+                        DueDateBasis.PROPOSED if candidate.due_date else DueDateBasis.UNKNOWN
+                    ),
+                    proposed_due_date=candidate.due_date,
                     requested_format=candidate.requested_format,
                     requested_recipient=candidate.requested_recipient,
                     proposed_owner=candidate.proposed_owner,
@@ -717,16 +776,27 @@ def _map_criticality(value: str) -> DeliverableCriticality | None:
     }.get(value)
 
 
-def _description(proposal: dict[str, Any]) -> str:
+def _description(proposal: dict[str, Any], source_name: str | None, date_basis: str) -> str:
     primary = proposal["sources"][0]
-    if primary["received_file_id"] is not None:
+    if source_name:
+        source_label = source_name
+    elif primary["received_file_id"] is not None:
         source_label = f"received file {primary['received_file_id']}"
     else:
         source_label = f"document version {primary['document_version_id']}"
+    evidence = primary.get("quote") or primary["excerpt"][:400]
     return (
-        f"Proposed from {primary['locator_type']} {primary['locator']} "
-        f"of {source_label}: {primary['excerpt'][:400]}"
+        f"Proposed from {primary['locator_type']} {primary['locator']} of {source_label}: "
+        f"{evidence}\n{DUE_DATE_BASIS_MARKER} {date_basis}."
     )
+
+
+_BASIS_RANK = {
+    DueDateBasis.STATED: 0,
+    DueDateBasis.CALCULATED: 1,
+    DueDateBasis.PROPOSED: 2,
+    DueDateBasis.UNKNOWN: 3,
+}
 
 
 def _consolidate(
@@ -735,9 +805,16 @@ def _consolidate(
     created_at: datetime,
     candidates: list[ProposedCandidate],
     extraction_lookup: dict[str, ExtractionUnit],
+    triggers: Mapping[str, date] | None = None,
 ) -> list[DeliverableProposal]:
     """Merge candidates that name the same obligation (same normalized title+category) into one
-    proposal with multiple source citations, instead of one proposal per mention."""
+    proposal with multiple source citations, instead of one proposal per mention.
+
+    Each citation carries the sentence the model quoted, but only when that sentence is found word
+    for word in the passage; its excerpt is then the text around it rather than the top of the
+    page. Each due date is classified against the passage (see ``core.date_integrity``): only a
+    date that is stated or calculated becomes ``due_date``; the model's own guess stays a proposal.
+    """
     grouped: dict[str, list[ProposedCandidate]] = {}
     for candidate in candidates:
         key = normalize_dedup_key(bid_id, candidate.title, candidate.category)
@@ -747,25 +824,34 @@ def _consolidate(
     for dedup_key, group in grouped.items():
         first = group[0]
         sources = []
+        dates = []
         for candidate in group:
             unit = extraction_lookup.get(candidate.extraction_id)
             if unit is None:
                 continue
+            passage = unit.text_excerpt
+            span = locate_quote(passage, candidate.source_quote)
             sources.append(
                 SourceCitation(
                     document_version_id=unit.document_version_id,
                     received_file_id=unit.received_file_id,
                     locator_type=unit.locator_type,
                     locator=unit.locator,
-                    excerpt=unit.text_excerpt[:2000],
+                    excerpt=evidence_window(passage, span) if span else passage[:2000],
+                    quote=passage[span[0] : span[1]] if span else None,
+                )
+            )
+            dates.append(
+                classify_due_date(
+                    passage,
+                    parse_date(candidate.due_date),
+                    candidate.due_date_text,
+                    triggers,
                 )
             )
         if not sources:
             continue
-        due_date = next(
-            (date.fromisoformat(c.due_date) for c in group if c.due_date),
-            None,
-        )
+        due = min(dates, key=lambda item: _BASIS_RANK[item.basis])
         proposals.append(
             DeliverableProposal(
                 bid_id=bid_id,
@@ -774,7 +860,10 @@ def _consolidate(
                 category=first.category,
                 criticality=first.criticality,
                 condition_text=first.condition_text,
-                due_date=due_date,
+                due_date=due.effective,
+                due_date_basis=due.basis,
+                proposed_due_date=due.proposed,
+                due_date_text=next((item.rule_text for item in dates if item.rule_text), None),
                 requested_format=next(
                     (c.requested_format for c in group if c.requested_format), None
                 ),
