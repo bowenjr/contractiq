@@ -1,3 +1,23 @@
+# Handoff — Stage 2: RFP requirements intelligence
+
+Branch `ciq/stage2-requirements-intelligence` (from Stage 1 `e27fe88`). Spec: `docs/tasks/CIQ-STAGE2-requirements-intelligence.md`
+(+ `CIQ-STAGE2-prompt.txt`, the model prompt as validated against the real model). Live app/port 8000 untouched; nothing merged or deployed.
+
+| Area | What it does | Where |
+|---|---|---|
+| Lifecycle classification | Every new finding is PRE_BID_ACTION, BID_RETURNABLE, MANUFACTURER_INPUT, POST_AWARD, CONDITIONAL, NOT_APPLICABLE or NEEDS_REVIEW, with required/optional/conditional status, item kind, description, explicit responsible party, timing text, dependencies, confidence, section and verified quote. Stored beside the immutable proposals in insert-only tables; reviewer moves are append-only events. Existing `LifecyclePhase` is reused unchanged. | `core/requirement_lifecycle.py`, `core/deliverable_discovery_classification.py` |
+| Guards (no LLM) | Unverifiable quote, low confidence, conditional without a condition -> NEEDS_REVIEW (model view kept, finding kept). Timing text and responsible party must occur in the passage. Dates follow the Stage 1 evidence rules (model date never applied). | `core/requirement_lifecycle.py`, `core/deliverable_discovery_requirements.py` |
+| VDDR table | `find_tables()` rebuilds the Schedule of Vendor Drawing and Data Requirements; rows are read by rules (no model call): Required? column = applicability, TENDER qty = bid component, REVIEW/FINAL/AS BUILT = post-award component with its due text. Both components -> two findings. | `core/vddr_table.py`, `core/deliverable_discovery_extraction.py` |
+| Dedup / sources | Key = lifecycle bucket + normalised title (category ignored). A re-found obligation appends its citation (and a source link on an accepted Deliverable) instead of a duplicate. | `core/deliverable_discovery_service.py`, `..._classification.py` |
+| Registers | Accept routes by lifecycle: bid/post-award/conditional -> Deliverable (phase WITH_BID/POST_AWARD); manufacturer input -> vendor-document requirement; commercial qualification -> evidence on its commercial position (disposition untouched); pre-bid action -> work item. Duplicates are linked. NOT_APPLICABLE / NEEDS_REVIEW cannot be accepted. | `core/deliverable_discovery_destinations.py`, `Ops08Repository.ensure_position` |
+| Review screen | Opens on "With the bid"; five-question strip; tabs per category with remaining/total; status + document filters; group by document or category; Stage 1 bulk accept/reject/defer unchanged; per-row and bulk "Move to another category" with a reason. | `core/deliverable_discovery_review.py`, `templates/_discovery_review.html`, `app.py` |
+
+**Schema:** additive only (3 insert-only tables: classification, reclassifications, destinations).
+**Limitations:** see the completion report; notably non-Deliverable registers are written in two steps (own transaction each, retry-safe via a `[DISC:<id>]` marker); export/import package unchanged (no lifecycle); legacy findings appear under "Needs review / not yet classified"; PDF table reading is rule-based only for the VDDR layout.
+**Tests:** `tests/unit/test_stage2_*.py` (49). Browser walkthrough and real-model runs: `~/contractiq-review/stage2/` (outside Git).
+
+---
+
 # Handoff — Stage 1: core reliability
 
 Branch `ciq/stage1-core-reliability`, based on baseline `e9c916d` (`local/ops-13a-bid-deliverables-discovery`).

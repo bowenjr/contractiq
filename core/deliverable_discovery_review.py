@@ -16,6 +16,20 @@ from typing import Any
 PAGE_SIZE = 100
 STATUSES = ("pending", "accepted", "rejected", "deferred", "all")
 DEFAULT_STATUS = "pending"
+LIFECYCLE_TABS: tuple[tuple[str, str, str], ...] = (
+    ("bid", "With the bid", "BID_RETURNABLE"),
+    ("pre", "Before bidding", "PRE_BID_ACTION"),
+    ("mfr", "From the manufacturer", "MANUFACTURER_INPUT"),
+    ("post", "After award", "POST_AWARD"),
+    ("cond", "Conditional or optional", "CONDITIONAL"),
+    ("na", "Not applicable", "NOT_APPLICABLE"),
+    ("review", "Needs review", "NEEDS_REVIEW"),
+)
+LIFECYCLE_KEYS = tuple(key for key, _, _ in LIFECYCLE_TABS) + ("all",)
+DEFAULT_LIFECYCLE = "bid"
+GROUPS = ("document", "lifecycle")
+_KEY_BY_LIFECYCLE = {value: key for key, _, value in LIFECYCLE_TABS}
+_LABEL_BY_KEY = {key: label for key, label, _ in LIFECYCLE_TABS}
 _NATURAL = re.compile(r"(\d+)")
 
 
@@ -31,6 +45,10 @@ class ReviewView:
     matching: int
     counts: Mapping[str, int]
     documents: tuple[dict[str, Any], ...]
+    lifecycle: str = "all"
+    group: str = "document"
+    lifecycle_counts: Mapping[str, Mapping[str, int]] | None = None
+    groups: tuple[tuple[str, tuple[Mapping[str, Any], ...]], ...] = ()
 
 
 def _natural(text: str) -> list[object]:
@@ -57,6 +75,16 @@ def source_sort_key(row: Mapping[str, Any], names: Mapping[str, str]) -> tuple[o
     )
 
 
+def lifecycle_key(row: Mapping[str, Any]) -> str:
+    """The tab a finding belongs to; a finding with no lifecycle is one that needs review."""
+    return _KEY_BY_LIFECYCLE.get(str(row.get("lifecycle") or ""), "review")
+
+
+def lifecycle_label(key: str) -> str:
+    """The plain label of a lifecycle tab."""
+    return _LABEL_BY_KEY.get(key, "All findings")
+
+
 def build_review_view(
     queue: Sequence[Mapping[str, Any]],
     names: Mapping[str, str],
@@ -64,9 +92,30 @@ def build_review_view(
     document: str = "",
     page: int = 1,
     page_size: int = PAGE_SIZE,
+    lifecycle: str = "all",
+    group: str = "document",
 ) -> ReviewView:
-    """Select, order and page the queue. Unknown status values fall back to ``pending``."""
+    """Select, order and page the queue.
+
+    Unknown status values fall back to ``pending`` and unknown lifecycle or group values to
+    ``all`` / ``document``. ``counts`` are the review-status counts inside the chosen lifecycle
+    tab; ``lifecycle_counts`` give every tab's pending and total findings, whatever is selected.
+    """
     status = status if status in STATUSES else DEFAULT_STATUS
+    lifecycle = lifecycle if lifecycle in LIFECYCLE_KEYS else "all"
+    group = group if group in GROUPS else "document"
+
+    lifecycle_counts: dict[str, dict[str, int]] = {
+        key: {"pending": 0, "total": 0} for key in LIFECYCLE_KEYS
+    }
+    for row in queue:
+        tab = lifecycle_key(row)
+        for key in (tab, "all"):
+            lifecycle_counts[key]["total"] += 1
+            if str(row["current_decision"]).lower() == "pending":
+                lifecycle_counts[key]["pending"] += 1
+    queue = [row for row in queue if lifecycle == "all" or lifecycle_key(row) == lifecycle]
+
     counts: Counter[str] = Counter()
     for row in queue:
         counts[str(row["current_decision"]).lower()] += 1
@@ -88,7 +137,11 @@ def build_review_view(
     if document and document not in per_document:
         document = ""
     selected = [row for row in in_status if not document or document in document_ids(row)]
-    selected.sort(key=lambda row: source_sort_key(row, names))
+    if group == "lifecycle":
+        order = {key: index for index, key in enumerate(LIFECYCLE_KEYS)}
+        selected.sort(key=lambda row: (order[lifecycle_key(row)], source_sort_key(row, names)))
+    else:
+        selected.sort(key=lambda row: source_sort_key(row, names))
 
     page_count = max(1, -(-len(selected) // page_size))
     page = min(max(1, page), page_count)
@@ -102,4 +155,27 @@ def build_review_view(
         matching=len(selected),
         counts=dict(counts),
         documents=documents,
+        lifecycle=lifecycle,
+        group=group,
+        lifecycle_counts=lifecycle_counts,
+        groups=_groups(window, names, group),
     )
+
+
+def _groups(
+    rows: Sequence[Mapping[str, Any]], names: Mapping[str, str], group: str
+) -> tuple[tuple[str, tuple[Mapping[str, Any], ...]], ...]:
+    """Consecutive rows under one heading: the document, or the lifecycle then document."""
+    grouped: list[tuple[str, list[Mapping[str, Any]]]] = []
+    for row in rows:
+        sources = row.get("sources") or [{}]
+        first = sources[0]
+        file_id = str(first.get("received_file_id") or first.get("document_version_id") or "")
+        document = str(names.get(file_id, file_id) or "Document").split("/")[-1]
+        heading = document
+        if group == "lifecycle":
+            heading = f"{lifecycle_label(lifecycle_key(row))} — {document}"
+        if not grouped or grouped[-1][0] != heading:
+            grouped.append((heading, []))
+        grouped[-1][1].append(row)
+    return tuple((heading, tuple(items)) for heading, items in grouped)

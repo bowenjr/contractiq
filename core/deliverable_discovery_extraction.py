@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 # One passage is at most this many characters: the bound the model request and the stored
 # extraction row were sized for. Text longer than this is split into several passages, never cut.
@@ -37,6 +37,13 @@ class RawUnit:
     text: str
     readable: bool
     failure_reason: str | None = None
+    document: str = ""
+    """The file's name or relative path, shown to the model as context. Set by the runners."""
+    kind: str = "TEXT"
+    """``TEXT`` is read by the model; ``VDDR_TABLE`` is rendered table rows read by rules."""
+
+
+VDDR_TABLE_KIND = "VDDR_TABLE"
 
 
 class UnsupportedMediaTypeError(ValueError):
@@ -168,6 +175,10 @@ def _extract_pdf(data: bytes) -> list[RawUnit]:
         doc = fitz.open(stream=data, filetype="pdf")
         try:
             for page_index, page in enumerate(doc, start=1):
+                table_units = _vddr_table_units(page, page_index)
+                if table_units:
+                    units.extend(table_units)
+                    continue
                 text = _clean(page.get_text("text"))
                 word_count = len(text.split())
                 locator = f"p.{page_index}"
@@ -191,6 +202,39 @@ def _extract_pdf(data: bytes) -> list[RawUnit]:
     except Exception as exc:
         units.append(_parse_failure(".pdf", "PAGE", exc))
     return units
+
+
+def _vddr_table_units(page: Any, page_index: int) -> list[RawUnit]:
+    """Rendered-row units for a VDDR table on ``page``; empty when there is none.
+
+    Any failure of table detection falls back to the page's plain text, as before.
+    """
+    from core.vddr_table import find_vddr_header, group_lines, render_rows
+
+    try:
+        rows: list[list[object]] = []
+        for table in page.find_tables().tables:
+            extracted = table.extract()
+            if find_vddr_header(extracted) is not None:
+                rows.extend(extracted)
+        header_index = find_vddr_header(rows)
+        if header_index is None:
+            return []
+        lines = render_rows(rows, header_index)
+    except Exception:
+        return []
+    return [
+        RawUnit(
+            locator_type="PAGE",
+            locator=f"p.{page_index} rows {first}-{last}"
+            if first != last
+            else f"p.{page_index} row {first}",
+            text=text,
+            readable=True,
+            kind=VDDR_TABLE_KIND,
+        )
+        for first, last, text in group_lines(lines)
+    ]
 
 
 def _extract_docx(data: bytes, suffix: str) -> list[RawUnit]:

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from core.database import Database
 from core.deliverable_discovery import DeliverableProposal, DiscoveryRun, ExtractionUnit
+from core.deliverable_discovery_classification import insert_proposal_classification
 from core.deliverable_discovery_evidence import insert_proposal_evidence
 from core.deliverable_discovery_migrations import migrate_deliverable_discovery_not_attempted
 from core.deliverable_discovery_outcomes import DiscoveryFileOutcome, DiscoveryRunOutcome
@@ -645,6 +646,7 @@ class DeliverableDiscoveryJobRepository:
                     ),
                 )
             insert_proposal_evidence(conn, proposal)
+            insert_proposal_classification(conn, proposal)
         conn.execute(
             "INSERT INTO deliverable_discovery_run_outcomes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (

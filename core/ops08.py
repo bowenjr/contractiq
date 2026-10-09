@@ -320,6 +320,51 @@ class Ops08Repository:
                 raise
         return created
 
+    def ensure_position(self, bid_id: str, topic_key: str, owner: str, actor: str) -> str:
+        """Return the Bid's position for ``topic_key``, creating just that one if it is missing.
+
+        Mirrors ``initialize`` for a single topic; an existing position is returned untouched.
+        """
+        now = datetime.now(UTC)
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if conn.execute("SELECT 1 FROM bids WHERE bid_id=?", (bid_id,)).fetchone() is None:
+                    raise ValueError("Bid not found")
+                topic = conn.execute(
+                    "SELECT * FROM commercial_topics WHERE topic_key=?", (topic_key,)
+                ).fetchone()
+                if topic is None:
+                    raise ValueError(f"Unknown commercial topic {topic_key!r}")
+                row = conn.execute(
+                    "SELECT position_id FROM commercial_positions WHERE bid_id=? AND topic_id=?",
+                    (bid_id, topic["topic_id"]),
+                ).fetchone()
+                if row is not None:
+                    conn.commit()
+                    return str(row["position_id"])
+                position_id = f"CP-{uuid4().hex}"
+                conn.execute(
+                    "INSERT INTO commercial_positions VALUES(?,?,?,1,?,?)",
+                    (position_id, bid_id, topic["topic_id"], now.isoformat(), actor),
+                )
+                self._insert_revision(
+                    conn,
+                    position_id,
+                    bid_id,
+                    str(topic["topic_id"]),
+                    1,
+                    PositionRevision(owner=owner),
+                    actor,
+                    now,
+                )
+                self._audit(conn, bid_id, actor, "commercial_position_initialized", position_id)
+                conn.commit()
+                return position_id
+            except Exception:
+                conn.rollback()
+                raise
+
     def _insert_revision(
         self,
         conn: sqlite3.Connection,

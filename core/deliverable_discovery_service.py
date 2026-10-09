@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
@@ -40,6 +40,12 @@ from core.deliverable_discovery import (
     SourceCitation,
     SourcePromotion,
     normalize_dedup_key,
+)
+from core.deliverable_discovery_destinations import (
+    AcceptedRecord,
+    DestinationWriter,
+    FindingFacts,
+    accept_into_record,
 )
 from core.deliverable_discovery_evidence import parse_date
 from core.deliverable_discovery_extraction import (
@@ -73,6 +79,18 @@ from core.deliverables import (
 )
 from core.document_service import DocumentService
 from core.enums import Actor
+from core.requirement_lifecycle import (
+    Confidence,
+    DestinationKind,
+    DiscoveryLifecycle,
+    ProposalClassification,
+    RequirementStatus,
+    deliverable_criticality,
+    deliverable_phase,
+    destination_for,
+    is_acceptable,
+    needs_criticality,
+)
 from core.schemas import Provenance
 
 SCHEMA_VERSION = "ops-13a-discovery-export-v1"
@@ -96,6 +114,8 @@ class ProposalDecisionInput:
     recipient: str | None = None
     due_date: date | None = None
     """A due date the reviewer confirmed against the source while accepting."""
+    package_id: str | None = None
+    """The manufacturer package a manufacturer input is registered in, when the Bid has several."""
 
 
 class ExportSourceCitation(BaseModel):
@@ -141,6 +161,11 @@ class ExportPackage(BaseModel):
     proposals: tuple[ExportProposal, ...]
 
 
+def _document_label(file_row: Mapping[str, Any], filename: str) -> str:
+    """The file's relative path (so the folder names the document's role), else its name."""
+    return str(file_row.get("original_relative_path") or filename)
+
+
 def _managed_copy_failure(locator_type: LocatorType, exc: Exception) -> RawUnit:
     return RawUnit(
         locator_type=locator_type.value,
@@ -170,6 +195,8 @@ class DeliverableDiscoveryService:
         self.deliverable_repository = deliverable_repository
         self.deliverable_service = deliverable_service
         self.llm_client = llm_client
+        self.destinations: DestinationWriter | None = None
+        """Set at start-up; routes classified findings to their register."""
 
     # -- discovery run -----------------------------------------------------------------
 
@@ -223,13 +250,16 @@ class DeliverableDiscoveryService:
                         raw_units = [_managed_copy_failure(file_locator_type, exc)]
                     else:
                         try:
-                            raw_units = extract_units(
-                                str(evidence["original_filename"]),
-                                str(evidence["detected_media_type"])
-                                if evidence["detected_media_type"] is not None
-                                else None,
-                                io.BytesIO(data),
-                            )
+                            raw_units = [
+                                replace(unit, document=_document_label(file_row, filename))
+                                for unit in extract_units(
+                                    str(evidence["original_filename"]),
+                                    str(evidence["detected_media_type"])
+                                    if evidence["detected_media_type"] is not None
+                                    else None,
+                                    io.BytesIO(data),
+                                )
+                            ]
                             extraction_completed = True
                         except ImportError:
                             raise
@@ -296,8 +326,9 @@ class DeliverableDiscoveryService:
             extraction_lookup,
             self.repository.date_triggers(bid_id),
         )
-        known_dedup_keys = self.repository.existing_dedup_keys(bid_id)
-        proposals = [p for p in proposals if p.dedup_key not in known_dedup_keys]
+        proposals, appends = split_known_duplicates(
+            proposals, self.repository.existing_dedup_index(bid_id)
+        )
 
         completed_at = datetime.now(UTC)
         run = DiscoveryRun(
@@ -326,6 +357,8 @@ class DeliverableDiscoveryService:
             run_outcome=run_outcome,
             file_outcomes=file_outcomes,
         )
+        for existing_id, sources in appends:
+            self.repository.append_citations(existing_id, list(sources))
         return self.repository.existing_run(bid_id, operation_id) or run.model_dump(mode="json")
 
     # -- review queue --------------------------------------------------------------------
@@ -339,6 +372,20 @@ class DeliverableDiscoveryService:
             row["unambiguous"] = row["criticality"] in ("REQUIRED",) or (
                 row["criticality"] == "CONDITIONAL" and bool(row["condition_text"])
             )
+            row["needs_criticality"] = False
+            if row["classification"] is None:
+                row["acceptable"] = True
+                row["accept_block_reason"] = ""
+            else:
+                classification = ProposalClassification.model_validate(row["classification"])
+                # A reviewer can settle an unclear "how firmly required" while accepting, so it
+                # does not block the button; every other missing choice does.
+                acceptable, reason = is_acceptable(classification, row["condition_text"], True)
+                row["acceptable"] = acceptable
+                row["accept_block_reason"] = reason
+                row["needs_criticality"] = acceptable and needs_criticality(
+                    classification, row["condition_text"]
+                )
         return rows
 
     def decide(
@@ -366,6 +413,12 @@ class DeliverableDiscoveryService:
         if current and current["decision"] == "ACCEPTED":
             raise ValueError("proposal already accepted")
 
+        classification = _effective_classification(proposal)
+        if decision_input.decision is ProposalReviewDecision.ACCEPTED and classification:
+            return self._accept_classified(
+                bid_id, proposal, classification, decision_input, reviewer, current
+            )
+
         linked_deliverable_id: str | None = None
         item: Deliverable | None = None
         link: DeliverableLink | None = None
@@ -388,6 +441,94 @@ class DeliverableDiscoveryService:
         else:
             self.repository.add_review_event(event, reviewer)
         return {"proposal_id": decision_input.proposal_id, "deliverable_id": linked_deliverable_id}
+
+    def _accept_classified(
+        self,
+        bid_id: str,
+        proposal: dict[str, Any],
+        classification: ProposalClassification,
+        decision_input: ProposalDecisionInput,
+        reviewer: str,
+        current: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Accept a classified finding into the register its lifecycle names.
+
+        Mirrors the legacy Deliverable path for DELIVERABLE destinations; the other registers are
+        written by ``DestinationWriter`` and then recorded by ``accept_into_record``.
+        """
+        acceptable, reason = is_acceptable(
+            classification, proposal["condition_text"], decision_input.criticality is not None
+        )
+        if not acceptable:
+            raise ValueError(reason)
+        kind = destination_for(classification)
+        if kind is None or self.destinations is None:
+            raise ValueError("This finding cannot be registered yet. Move it to a lifecycle first.")
+        supersedes = current["event_id"] if current else None
+        due_date, date_basis = self._accepted_due_date(proposal, decision_input, reviewer)
+        source_name = self._source_name(bid_id, proposal)
+
+        if kind is DestinationKind.DELIVERABLE:
+            phase = deliverable_phase(classification)
+            existing_id = self.destinations.existing_deliverable(bid_id, proposal["title"], phase)
+            if existing_id is None:
+                item, link = self._build_deliverable(
+                    bid_id, proposal, decision_input, reviewer, classification
+                )
+                event = ProposalReviewEvent(
+                    proposal_id=decision_input.proposal_id,
+                    bid_id=bid_id,
+                    decision=ProposalReviewDecision.ACCEPTED,
+                    reviewer=reviewer,
+                    linked_deliverable_id=item.deliverable_id,
+                    destination_kind=DestinationKind.DELIVERABLE,
+                    destination_record_id=item.deliverable_id,
+                    supersedes_event_id=supersedes,
+                    reviewed_at=datetime.now(UTC),
+                )
+                self.repository.accept_proposal(item, link, event, reviewer)
+                return {
+                    "proposal_id": decision_input.proposal_id,
+                    "deliverable_id": item.deliverable_id,
+                    "destination": kind.value,
+                    "reused": False,
+                }
+            record = AcceptedRecord(
+                kind, existing_id, True, "Already registered as a Deliverable of this phase"
+            )
+            source_link = self._source_link(bid_id, proposal, existing_id, reviewer)
+        else:
+            facts = _finding_facts(
+                bid_id,
+                proposal,
+                classification,
+                _source_label(proposal, source_name),
+                due_date,
+                date_basis,
+            )
+            record = self.destinations.register(kind, facts, reviewer, decision_input.package_id)
+            source_link = None
+        event = ProposalReviewEvent(
+            proposal_id=decision_input.proposal_id,
+            bid_id=bid_id,
+            decision=ProposalReviewDecision.ACCEPTED,
+            reviewer=reviewer,
+            linked_deliverable_id=record.record_id if kind is DestinationKind.DELIVERABLE else None,
+            destination_kind=kind,
+            destination_record_id=record.record_id,
+            supersedes_event_id=supersedes,
+            reviewed_at=datetime.now(UTC),
+        )
+        accept_into_record(
+            self.repository._conn, self.repository._audit, event, record, source_link, reviewer
+        )
+        return {
+            "proposal_id": decision_input.proposal_id,
+            "deliverable_id": record.record_id if kind is DestinationKind.DELIVERABLE else None,
+            "destination": kind.value,
+            "record_id": record.record_id,
+            "reused": record.reused,
+        }
 
     def promote_source_to_controlled_version(
         self,
@@ -454,8 +595,16 @@ class DeliverableDiscoveryService:
         proposal: dict[str, Any],
         decision_input: ProposalDecisionInput,
         reviewer: str,
+        classification: ProposalClassification | None = None,
     ) -> tuple[Deliverable, DeliverableLink]:
-        criticality = decision_input.criticality or _map_criticality(proposal["criticality"])
+        if classification is None:
+            criticality = decision_input.criticality or _map_criticality(proposal["criticality"])
+            phase = LifecyclePhase.WITH_BID
+        else:
+            criticality = decision_input.criticality or deliverable_criticality(classification)
+            if criticality is DeliverableCriticality.CONDITIONAL and not proposal["condition_text"]:
+                criticality = None
+            phase = deliverable_phase(classification)
         if criticality is None:
             raise ValueError("an UNCLEAR proposal requires an explicit criticality to accept")
         due_date, date_basis = self._accepted_due_date(proposal, decision_input, reviewer)
@@ -471,7 +620,7 @@ class DeliverableDiscoveryService:
             description=_description(proposal, self._source_name(bid_id, proposal), date_basis),
             category=proposal["category"],
             criticality=criticality,
-            lifecycle_phase=LifecyclePhase.WITH_BID,
+            lifecycle_phase=phase,
             direction=DeliverableDirection.COMPANY_TO_CUSTOMER,
             owner=decision_input.owner or proposal["proposed_owner"],
             recipient=decision_input.recipient or proposal["requested_recipient"],
@@ -493,10 +642,20 @@ class DeliverableDiscoveryService:
             updated_at=now,
             created_by=reviewer,
         )
+        return item, self._source_link(bid_id, proposal, item.deliverable_id, reviewer)
+
+    def _source_link(
+        self, bid_id: str, proposal: dict[str, Any], deliverable_id: str, reviewer: str
+    ) -> DeliverableLink:
+        """The link from a Deliverable to the finding's primary source."""
+        primary_source = proposal["sources"][0]
+        source_id = primary_source["document_version_id"] or primary_source["received_file_id"]
+        if not source_id:
+            raise ValueError("proposal source identity is missing")
         is_received_file = primary_source["received_file_id"] is not None
         link = DeliverableLink(
             bid_id=bid_id,
-            deliverable_id=item.deliverable_id,
+            deliverable_id=deliverable_id,
             target_type=(
                 DeliverableTargetType.RECEIVED_FILE
                 if is_received_file
@@ -508,10 +667,10 @@ class DeliverableDiscoveryService:
                 if is_received_file
                 else DeliverableRelation.SOURCE_DOCUMENT_VERSION
             ),
-            created_at=now,
+            created_at=datetime.now(UTC),
             created_by=reviewer,
         )
-        return item, link
+        return link
 
     # -- addendum integration -------------------------------------------------------------
 
@@ -769,6 +928,42 @@ class DeliverableDiscoveryService:
         return self.repository.existing_run(bid_id, operation_id) or run.model_dump(mode="json")
 
 
+def _effective_classification(proposal: dict[str, Any]) -> ProposalClassification | None:
+    data = proposal.get("classification")
+    return ProposalClassification.model_validate(data) if data else None
+
+
+def _source_label(proposal: dict[str, Any], source_name: str | None) -> str:
+    primary = proposal["sources"][0]
+    where = f"{primary['locator_type'].title()} {primary['locator']}"
+    return f"{source_name or 'controlled document'} {where}"
+
+
+def _finding_facts(
+    bid_id: str,
+    proposal: dict[str, Any],
+    classification: ProposalClassification,
+    source_label: str,
+    due_date: date | None,
+    date_basis: str,
+) -> FindingFacts:
+    primary = proposal["sources"][0]
+    return FindingFacts(
+        bid_id=bid_id,
+        proposal_id=proposal["proposal_id"],
+        title=proposal["title"],
+        description=classification.description or proposal["title"],
+        quote=primary.get("quote") or primary["excerpt"][:400],
+        source_label=source_label,
+        timing_text=proposal.get("due_date_text"),
+        due_date=due_date,
+        due_note=date_basis,
+        condition_text=proposal["condition_text"],
+        required=classification.requirement_status is not RequirementStatus.OPTIONAL,
+        commercial_topic=classification.commercial_topic,
+    )
+
+
 def _map_criticality(value: str) -> DeliverableCriticality | None:
     return {
         "REQUIRED": DeliverableCriticality.MANDATORY,
@@ -785,10 +980,51 @@ def _description(proposal: dict[str, Any], source_name: str | None, date_basis: 
     else:
         source_label = f"document version {primary['document_version_id']}"
     evidence = primary.get("quote") or primary["excerpt"][:400]
+    summary = f"{proposal['description']}\n" if proposal.get("description") else ""
     return (
-        f"Proposed from {primary['locator_type']} {primary['locator']} of {source_label}: "
+        f"{summary}Proposed from {primary['locator_type']} {primary['locator']} of {source_label}: "
         f"{evidence}\n{DUE_DATE_BASIS_MARKER} {date_basis}."
     )
+
+
+_CONFIDENCE_RANK = {Confidence.HIGH: 2, Confidence.MEDIUM: 1, Confidence.LOW: 0}
+
+
+def _candidate_rank(candidate: ProposedCandidate) -> int:
+    """Among candidates naming one obligation, the most confident classification represents it."""
+    if candidate.classification is None:
+        return 0
+    return _CONFIDENCE_RANK[candidate.classification.confidence]
+
+
+def split_known_duplicates(
+    proposals: list[DeliverableProposal], known: Mapping[str, str]
+) -> tuple[list[DeliverableProposal], list[tuple[str, tuple[SourceCitation, ...]]]]:
+    """Separate findings new to the Bid from re-findings of an existing finding.
+
+    ``known`` maps dedup keys already recorded for the Bid to their proposal ids. A re-finding is
+    not stored twice: its sources are returned to be appended to the existing finding, which
+    keeps every document that supports the obligation. A bid-stage finding also matches one
+    recorded before lifecycle classification, which used the title+category key.
+    """
+    new: list[DeliverableProposal] = []
+    appends: list[tuple[str, tuple[SourceCitation, ...]]] = []
+    for proposal in proposals:
+        existing = known.get(proposal.dedup_key)
+        classification = proposal.classification
+        if (
+            existing is None
+            and classification is not None
+            and classification.lifecycle is DiscoveryLifecycle.BID_RETURNABLE
+        ):
+            existing = known.get(
+                normalize_dedup_key(proposal.bid_id, proposal.title, proposal.category)
+            )
+        if existing is None:
+            new.append(proposal)
+        else:
+            appends.append((existing, proposal.sources))
+    return new, appends
 
 
 _BASIS_RANK = {
@@ -817,12 +1053,14 @@ def _consolidate(
     """
     grouped: dict[str, list[ProposedCandidate]] = {}
     for candidate in candidates:
-        key = normalize_dedup_key(bid_id, candidate.title, candidate.category)
+        key = normalize_dedup_key(
+            bid_id, candidate.title, candidate.category, candidate.classification
+        )
         grouped.setdefault(key, []).append(candidate)
 
     proposals: list[DeliverableProposal] = []
     for dedup_key, group in grouped.items():
-        first = group[0]
+        first = max(group, key=_candidate_rank)
         sources = []
         dates = []
         for candidate in group:
@@ -871,6 +1109,7 @@ def _consolidate(
                     (c.requested_recipient for c in group if c.requested_recipient), None
                 ),
                 proposed_owner=next((c.proposed_owner for c in group if c.proposed_owner), None),
+                classification=first.classification,
                 sources=tuple(sources),
                 dedup_key=dedup_key,
                 created_at=created_at,

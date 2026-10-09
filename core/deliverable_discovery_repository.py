@@ -16,7 +16,16 @@ from core.deliverable_discovery import (
     DiscoveryRun,
     ExtractionUnit,
     ProposalReviewEvent,
+    SourceCitation,
     SourcePromotion,
+)
+from core.deliverable_discovery_classification import (
+    append_citations_transaction,
+    attach_classification,
+    ensure_classification_tables,
+    insert_proposal_classification,
+    reclassify_proposals,
+    record_destination,
 )
 from core.deliverable_discovery_evidence import (
     attach_evidence,
@@ -31,6 +40,7 @@ from core.deliverable_discovery_outcomes import (
 )
 from core.deliverable_discovery_promotion import promote_source as promote_source_transaction
 from core.deliverables import Deliverable, DeliverableLink
+from core.requirement_lifecycle import AppliesAt, DestinationKind, DiscoveryLifecycle, ItemKind
 
 DISCOVERY_MIGRATION_ID = "ops_13a_deliverable_discovery_v1"
 RECEIVED_FILE_MIGRATION_ID = "ops_13a_deliverable_discovery_received_files_v2"
@@ -254,6 +264,7 @@ class DeliverableDiscoveryRepository:
                 migrate_deliverable_discovery_jobs(conn, datetime.now(UTC).isoformat())
                 migrate_deliverable_discovery_not_attempted(conn, datetime.now(UTC).isoformat())
                 ensure_evidence_tables(conn)
+                ensure_classification_tables(conn)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -275,6 +286,18 @@ class DeliverableDiscoveryRepository:
                 row["dedup_key"]
                 for row in conn.execute(
                     "SELECT dedup_key FROM deliverable_discovery_proposals WHERE bid_id=?",
+                    (bid_id,),
+                ).fetchall()
+            }
+
+    def existing_dedup_index(self, bid_id: str) -> dict[str, str]:
+        """Map every persisted dedup key to its immutable proposal identifier."""
+        with self._conn() as conn:
+            return {
+                str(row["dedup_key"]): str(row["proposal_id"])
+                for row in conn.execute(
+                    "SELECT dedup_key,proposal_id FROM deliverable_discovery_proposals "
+                    "WHERE bid_id=?",
                     (bid_id,),
                 ).fetchall()
             }
@@ -448,6 +471,7 @@ class DeliverableDiscoveryRepository:
                             ),
                         )
                     insert_proposal_evidence(conn, proposal)
+                    insert_proposal_classification(conn, proposal)
                 if run_outcome is not None:
                     conn.execute(
                         "INSERT INTO deliverable_discovery_run_outcomes VALUES "
@@ -542,6 +566,7 @@ class DeliverableDiscoveryRepository:
                 ]
                 row["review_events"] = self._review_events(conn, row["proposal_id"])
                 attach_evidence(conn, row)
+                attach_classification(conn, row)
             return rows
 
     def get_proposal(self, proposal_id: str) -> dict[str, Any] | None:
@@ -562,7 +587,38 @@ class DeliverableDiscoveryRepository:
             ]
             data["review_events"] = self._review_events(conn, proposal_id)
             attach_evidence(conn, data)
+            attach_classification(conn, data)
             return data
+
+    def reclassify(
+        self,
+        bid_id: str,
+        proposal_ids: list[str],
+        lifecycle: DiscoveryLifecycle | str,
+        rationale: str,
+        reviewer: str,
+        *,
+        applies_at: AppliesAt | str | None = None,
+        item_kind: ItemKind | str | None = None,
+        commercial_topic: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Append reviewer lifecycle overrides independently for the selected proposals."""
+        return reclassify_proposals(
+            self._conn,
+            self._audit,
+            bid_id,
+            proposal_ids,
+            lifecycle,
+            rationale,
+            reviewer,
+            applies_at=applies_at,
+            item_kind=item_kind,
+            commercial_topic=commercial_topic,
+        )
+
+    def append_citations(self, proposal_id: str, citations: list[SourceCitation]) -> None:
+        """Append new source evidence to a proposal without mutating existing evidence."""
+        append_citations_transaction(self._conn, self._audit, proposal_id, citations)
 
     @staticmethod
     def _review_events(conn: sqlite3.Connection, proposal_id: str) -> list[dict[str, Any]]:
@@ -763,6 +819,16 @@ class DeliverableDiscoveryRepository:
                         event.supersedes_event_id,
                         event.reviewed_at.isoformat(),
                     ),
+                )
+                record_destination(
+                    conn,
+                    proposal_id=event.proposal_id,
+                    event_id=event.event_id,
+                    bid_id=event.bid_id,
+                    destination_kind=DestinationKind.DELIVERABLE,
+                    record_id=item.deliverable_id,
+                    reused=False,
+                    note="Deliverable created",
                 )
                 self._audit(
                     conn,

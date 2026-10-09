@@ -209,3 +209,11 @@ button.button-lg { padding: 12px 20px; font-size: 1rem; font-weight: 750; border
 .bulk-bar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; margin: .6rem 0; }
 .citation q { display: block; margin: .2rem 0; }
 .citation mark { background: #fff3bf; }
+
+.question-strip { display: flex; flex-wrap: wrap; gap: .6rem; list-style: none; padding: 0; margin: .6rem 0; }
+.question-strip a { display: block; padding: .5rem .8rem; border: 1px solid #c9ccd1; border-radius: 6px; text-decoration: none; }
+.question-strip a strong, .question-strip a span { display: block; }
+.question-strip a[aria-current="page"] { border-color: #2b5fb3; background: #eef3fb; }
+.tabs a[aria-current="page"], .review-filter a[aria-current="page"] { font-weight: 700; text-decoration: none; }
+.group-heading th { text-align: left; background: #f3f4f6; }
+.badge { display: inline-block; padding: 0 .4rem; border-radius: 4px; background: #e6eefb; font-size: .85em; }

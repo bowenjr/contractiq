@@ -1,0 +1,143 @@
+<section class="card" id="proposals">
+  <h2>Requirements found in the package</h2>
+  {% macro view_fields() %}<input type="hidden" name="status" value="{{ review.status }}"><input type="hidden" name="document" value="{{ review.document }}"><input type="hidden" name="page" value="{{ review.page }}"><input type="hidden" name="lifecycle" value="{{ review.lifecycle }}"><input type="hidden" name="group" value="{{ review.group }}">{% endmacro %}
+  {% macro qs(status=review.status, lifecycle=review.lifecycle, document=review.document, group=review.group, page=1) %}?lifecycle={{ lifecycle }}&status={{ status }}{% if document %}&document={{ document|urlencode }}{% endif %}&group={{ group }}{% if page > 1 %}&page={{ page }}{% endif %}#proposals{% endmacro %}
+  {% if decide_summary is defined and decide_summary %}<div class="notice" role="status">{{ decide_summary }}</div>{% endif %}
+
+  <ul class="question-strip" aria-label="What is left to decide">
+    {% for q in review_questions %}
+    <li><a href="?lifecycle={{ q.tab }}&amp;status=pending#proposals"{% if review.lifecycle == q.tab %} aria-current="page"{% endif %}><strong>{{ q.question }}</strong><span>{{ q.pending }} to review · {{ q.total }} found</span></a></li>
+    {% endfor %}
+  </ul>
+
+  <nav aria-label="Requirement category" class="review-filter tabs">
+    {% for tab in review_tabs %}
+    <a href="{{ qs(lifecycle=tab.key, status='pending', document='') }}"{% if review.lifecycle == tab.key %} aria-current="page"{% endif %}>{{ tab.label }} ({{ tab.pending }}/{{ tab.total }})</a>{% if not loop.last %} · {% endif %}
+    {% endfor %}
+    · <a href="{{ qs(lifecycle='all', status='pending', document='', group='lifecycle') }}"{% if review.lifecycle == 'all' %} aria-current="page"{% endif %}>All ({{ review.lifecycle_counts['all'].pending }}/{{ review.lifecycle_counts['all'].total }})</a>
+  </nav>
+  <p class="muted">Counts show findings still to review / found. Decisions are saved per finding, so you can move between categories without losing progress.</p>
+
+  <nav aria-label="Review status" class="review-filter">
+    {% for key, label in [('pending','To review'),('accepted','Accepted'),('rejected','Rejected'),('deferred','Deferred'),('all','All')] %}
+    <a href="{{ qs(status=key) }}"{% if review.status == key %} aria-current="page"{% endif %}>{{ label }} ({{ review.counts.get(key, 0) }})</a>{% if not loop.last %} · {% endif %}
+    {% endfor %}
+  </nav>
+  <form method="get" action="#proposals" class="review-filter">
+    <input type="hidden" name="status" value="{{ review.status }}"><input type="hidden" name="lifecycle" value="{{ review.lifecycle }}">
+    <label>Document <select name="document" onchange="this.form.submit()">
+      <option value="">All documents ({{ review.documents|length }})</option>
+      {% for doc in review.documents %}<option value="{{ doc.id }}"{% if doc.id == review.document %} selected{% endif %}>{{ doc.name.split('/')[-1] }} ({{ doc.count }})</option>{% endfor %}
+    </select></label>
+    <label>Group by <select name="group" onchange="this.form.submit()"><option value="document"{% if review.group == 'document' %} selected{% endif %}>Document</option><option value="lifecycle"{% if review.group == 'lifecycle' %} selected{% endif %}>Category, then document</option></select></label>
+    <noscript><button type="submit">Show</button></noscript>
+  </form>
+  <p class="muted">{{ review.matching }} finding(s) shown{% if review.page_count > 1 %} — page {{ review.page }} of {{ review.page_count }}{% endif %}.</p>
+
+  <form id="bulk-review" method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">{{ view_fields() }}</form>
+  {% if review.status in ('pending', 'all') %}
+  <div class="bulk-bar">
+    <label><input type="checkbox" onclick="document.querySelectorAll('input[name=proposal_id][form=bulk-review]').forEach(function(b){b.checked=this.checked}.bind(this))"> Select all on this page</label>
+    <label>Reason (required to reject, defer or move) <input name="rationale" form="bulk-review"></label>
+    <button type="submit" form="bulk-review" name="bulk_action" value="accept">Accept selected</button>
+    <button type="submit" form="bulk-review" name="bulk_action" value="reject">Reject selected</button>
+    <button type="submit" form="bulk-review" name="bulk_action" value="defer">Defer selected</button>
+    <label>Move selected to <select name="target_lifecycle" form="bulk-review">{% for opt in lifecycle_options %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}</select></label>
+    <label>If conditional, applies <select name="applies_at" form="bulk-review"><option value="">—</option><option value="WITH_BID">with the bid</option><option value="POST_AWARD">after award</option></select></label>
+    <button type="submit" form="bulk-review" formaction="/bids/{{ bid.bid_id }}/deliverable-discovery/reclassify">Move selected</button>
+  </div>
+  {% endif %}
+
+  <table>
+    <thead><tr><th></th><th>Requirement</th><th>Source and supporting text</th><th>Timing</th><th>Review</th></tr></thead>
+    {% for heading, group_rows in review.groups %}
+    <tbody>
+      <tr class="group-heading"><th colspan="5">{{ heading }} <span class="muted">({{ group_rows|length }})</span></th></tr>
+    {% for row in group_rows %}
+      <tr>
+        <td>{% if row.current_decision == 'PENDING' %}<input type="checkbox" name="proposal_id" value="{{ row.proposal_id }}" form="bulk-review" aria-label="Select {{ row.title }}">{% endif %}</td>
+        <td><strong>{{ row.title }}</strong>
+          {% if row.legacy %}<div><span class="badge">Not yet classified</span> <span class="muted">{{ row.review_reason }}</span></div>
+          {% else %}<div><span class="badge">{{ lifecycle_names.get(row.lifecycle, row.lifecycle) }}</span> <span class="muted">{{ row.requirement_status|lower|capitalize }} · {{ row.item_kind|replace('_',' ')|lower }} · confidence {{ row.confidence|lower }}{% if row.lifecycle_source == 'reviewer' %} · moved by a reviewer{% endif %}</span></div>
+          {% if row.model_lifecycle and row.model_lifecycle != row.lifecycle and row.lifecycle_source != 'reviewer' %}<div class="muted">The analysis suggested {{ row.model_lifecycle|replace('_',' ')|lower }}; it needs your check.</div>{% endif %}
+          {% if row.description %}<div class="muted">{{ row.description }}</div>{% endif %}
+          {% if row.review_reason %}<div class="muted">Why review: {{ row.review_reason }}</div>{% endif %}
+          {% if row.responsible_party %}<div class="muted">Responsible (as named in the document): {{ row.responsible_party }}</div>{% endif %}
+          {% if row.dependencies %}<div class="muted">Depends on: {{ row.dependencies }}</div>{% endif %}
+          {% endif %}
+          <div class="muted">{{ row.category }}</div>{% if row.condition_text %}<div class="muted">Condition: {{ row.condition_text }}</div>{% endif %}</td>
+        <td>{% for source in row.sources %}
+          {% set doc_name = discovery_file_names.get(source.received_file_id, '') if source.received_file_id else '' %}
+          <div class="citation"><strong>{{ doc_name.split('/')[-1] if doc_name else 'Controlled document' }}</strong> · {{ source.locator_type|title }} {{ source.locator }}{% if loop.first and row.source_section %} · {{ row.source_section }}{% endif %}
+          {% if source.quote and source.quote in source.excerpt %}{% set parts = source.excerpt.partition(source.quote) %}<q>{{ parts[0] }}<mark>{{ parts[1] }}</mark>{{ parts[2] }}</q>
+          {% else %}<q>{{ source.excerpt[:300] }}</q> <span class="muted">(start of the passage — the sentence that creates this obligation was not located)</span>{% endif %}
+          {% if source.document_version_id %}<details><summary>Details</summary><span class="muted">{{ source.document_version_id }}</span></details>{% endif %}</div>
+        {% endfor %}</td>
+        <td>{% if row.due_date_basis == 'STATED' %}{{ row.due_date }} <span class="muted">stated in the document</span>
+          {% elif row.due_date_basis == 'CALCULATED' %}{{ row.due_date }} <span class="muted">calculated from a recorded date by “{{ row.due_date_text }}”</span>
+          {% elif row.due_date_basis in ('PROPOSED', 'UNVERIFIED') and row.proposed_due_date %}<strong>Not confirmed</strong> <span class="muted">analysis suggested {{ row.proposed_due_date }}{% if row.due_date_text %} from “{{ row.due_date_text }}”{% endif %}. Check the source.</span>
+          {% elif row.due_date_text %}<span class="muted">Timing stated as “{{ row.due_date_text }}”</span>
+          {% else %}Not stated{% endif %}</td>
+        <td>
+          {% if row.current_decision == 'PENDING' %}
+          <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">
+            {{ view_fields() }}
+            <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
+            <input type="hidden" name="action" value="accepted">
+            {% if row.due_date_basis in ('PROPOSED', 'UNVERIFIED') and row.proposed_due_date %}<label>Due date (confirm) <input type="date" name="due_date" value="{{ row.proposed_due_date }}"></label>{% endif %}
+            {% if row.needs_criticality %}<label>Required as <select name="criticality"><option value="">Choose…</option><option value="MANDATORY">Mandatory</option><option value="INFORMATIONAL">Informational</option></select></label>{% endif %}
+            {% if row.lifecycle == 'MANUFACTURER_INPUT' and manufacturer_packages|length > 1 %}<label>Manufacturer package <select name="package_id"><option value="">Choose…</option>{% for pkg in manufacturer_packages %}<option value="{{ pkg.package_id }}">{{ pkg.package_code }} — {{ pkg.proposed_manufacturer }}</option>{% endfor %}</select></label>{% endif %}
+            {% set blocked = (not row.unambiguous) if row.legacy else (not row.acceptable) %}
+            <button type="submit" {% if blocked %}disabled title="{{ 'Resolve UNCLEAR criticality before accepting' if row.legacy else row.accept_block_reason }}"{% endif %}>Accept</button>
+            {% if blocked and not row.legacy %}<div class="muted">{{ row.accept_block_reason }}</div>{% endif %}
+          </form>
+          <details><summary>Reject / defer</summary>
+            <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">
+              {{ view_fields() }}
+              <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
+              <label>Decision<select name="action"><option value="rejected">Reject</option><option value="deferred">Defer</option></select></label>
+              <label>Reason (required)<input name="rationale" required></label>
+              <button type="submit">Confirm</button>
+            </form>
+          </details>
+          <details><summary>Move to another category</summary>
+            <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/reclassify">
+              {{ view_fields() }}
+              <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
+              <label>Move to <select name="target_lifecycle">{% for opt in lifecycle_options %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}</select></label>
+              <label>If conditional, applies <select name="applies_at"><option value="">—</option><option value="WITH_BID">with the bid</option><option value="POST_AWARD">after award</option></select></label>
+              <label>Reason (required)<input name="rationale" required></label>
+              <button type="submit">Move</button>
+            </form>
+          </details>
+          {% else %}
+          {{ row.current_decision|title }}
+          {% if row.destination %}<div class="muted">{% if row.destination.reused %}Linked to existing{% else %}Created{% endif %}: {{ row.destination.destination_kind|replace('_',' ')|lower }}{% if row.destination.destination_kind == 'DELIVERABLE' %} <a href="/deliverables/{{ row.destination.record_id }}">open</a>{% endif %}</div>{% endif %}
+          {% if row.current_decision == 'ACCEPTED' %}{% for source in row.sources %}{% if source.received_file_id and source.citation_id not in promoted_citation_ids %}
+          <details><summary>Associate controlled version</summary>
+          <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/promote-source">
+            <input type="hidden" name="deliverable_id" value="{{ row.linked_deliverable_id }}">
+            <input type="hidden" name="operation_id" value="{{ promotion_operation_id }}">
+            <label>Citation <input name="citation_id" value="{{ source.citation_id }}" readonly></label>
+            <label>Document version <input name="document_version_id" required></label>
+            <label>Rationale <input name="rationale" required></label>
+            <button type="submit">Associate controlled version</button>
+          </form></details>
+          {% endif %}{% endfor %}{% endif %}
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+    {% else %}
+    <tbody><tr><td colspan="5">{% if review.counts.get('all', 0) == 0 and review.lifecycle_counts['all'].total == 0 %}No requirements found yet. Run the analysis above.{% elif review.counts.get('all', 0) == 0 %}Nothing in this category.{% else %}No findings match this view.{% endif %}</td></tr></tbody>
+    {% endfor %}
+  </table>
+  {% if review.page_count > 1 %}
+  <nav aria-label="Pages" class="review-filter">
+    {% if review.page > 1 %}<a href="{{ qs(page=review.page - 1) }}">← Previous</a>{% endif %}
+    Page {{ review.page }} of {{ review.page_count }}
+    {% if review.page < review.page_count %}<a href="{{ qs(page=review.page + 1) }}">Next →</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>

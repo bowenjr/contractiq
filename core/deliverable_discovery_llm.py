@@ -7,6 +7,7 @@ how much was rejected. Silence from the LLM (no proposal for a given unit) is ne
 as "not required"; it simply produces no candidate, leaving the underlying extraction unit
 visible in the review queue's evidence trail regardless.
 """
+# ruff: noqa: E501
 
 from __future__ import annotations
 
@@ -21,69 +22,78 @@ import requests
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from core.deliverable_discovery import DiscoveryCriticality
-from core.deliverable_discovery_extraction import RawUnit
+from core.deliverable_discovery_extraction import VDDR_TABLE_KIND, RawUnit
+from core.deliverable_discovery_requirements import legacy_criticality, parse_requirement
+from core.requirement_lifecycle import (
+    AppliesAt,
+    ClassifiedBy,
+    Confidence,
+    DiscoveryLifecycle,
+    ItemKind,
+    ProposalClassification,
+    RequirementStatus,
+)
+from core.vddr_table import interpret_vddr_unit
 
-SYSTEM_PROMPT = """You review a passage from a customer Bid document and identify any deliverable, \
-form, or returnable item the customer's submission requires (e.g. a signed bid form, a \
-technical schedule, a pricing schedule, a certificate). Respond ONLY with JSON matching exactly:
+SYSTEM_PROMPT = """You analyse one passage from a customer RFP/tender package for a company that will quote equipment through a manufacturer. Find every distinct requirement the passage places on the bidder or its manufacturer that is a document, form, schedule, declaration, data input, test, record, deliverable or action. Classify WHEN each is due:
 
-{"candidates": [{"title": str, "category": str, "criticality": "REQUIRED"|"CONDITIONAL"|"UNCLEAR", \
-"condition_text": str|null, "due_date": "YYYY-MM-DD"|null, "requested_format": str|null, \
-"requested_recipient": str|null, "proposed_owner": str|null, "due_date_text": str|null, \
-"source_quote": str|null}]}
+- PRE_BID_ACTION: something the bidder must do, ask, confirm or arrange BEFORE submitting the proposal (acknowledge the RFP, attend a meeting, submit a clarification, register).
+- BID_RETURNABLE: a form, schedule, declaration, document or other item that must be submitted WITH the proposal.
+- MANUFACTURER_INPUT: information or documents the bidder must obtain from the manufacturer/supplier to prepare or validate the quotation (technical data, completed datasheet fields, manufacturer price and delivery, supplier qualifications/exceptions).
+- POST_AWARD: documentation, tests, drawings, records or activities required only after purchase order or contract award (engineering drawings, manufacturing and inspection documents, FAT records, final data books, warranties, bonds).
+- CONDITIONAL: required or optional only under a stated circumstance; fill condition_text and applies_at (WITH_BID or POST_AWARD).
+- NOT_APPLICABLE: template or boilerplate content the passage itself shows does not apply.
+- NEEDS_REVIEW: an obligation exists but the passage does not make the timing clear; say why in review_reason.
+
+requirement_status is REQUIRED, OPTIONAL, CONDITIONAL or UNCLEAR. item_kind is SUBMISSION_DOCUMENT (a form, schedule or document the bidder submits), MANUFACTURER_DOCUMENT (a document authored by the manufacturer), MANUFACTURER_DATA (data or prices the manufacturer supplies), COMMERCIAL_QUALIFICATION (an exception, qualification or clarification of commercial terms such as insurance, bonds, warranty, payment, liability), CLARIFICATION (a question or confirmation to be sent to the customer), ACTIVITY (a meeting, test, inspection or other action) or OTHER. For COMMERCIAL_QUALIFICATION put the closest topic key in category, one of: PRICE_BASIS, BID_VALIDITY, CURRENCY, FX_EXPOSURE, TAXES_DUTIES, FREIGHT_DELIVERY, INCOTERMS, PAYMENT_TERMS, BILLING_MILESTONES, HOLDBACK, BONDS_GUARANTEES, LETTERS_OF_CREDIT, INSURANCE, WARRANTY, LIQUIDATED_DAMAGES, LIMITATION_LIABILITY, INDEMNITY, TERMINATION, SUSPENSION, SCHEDULE, CUSTOMER_DELAY, CHANGE_MANAGEMENT, FORCE_MAJEURE, INTELLECTUAL_PROPERTY, CONFIDENTIALITY, GOVERNING_LAW, DISPUTE_RESOLUTION, ESCALATION, COMMODITY_EXPOSURE, SEPARATELY_CHARGEABLE, EXCLUSIONS, ASSUMPTIONS, QUALIFICATIONS; otherwise category is a short plain label such as Form, Schedule, Certificate, Drawing, Plan, Report, Test or Data.
 
 Rules:
-- "candidates" may be an empty list if the passage names no deliverable.
-- Use "CONDITIONAL" only when the passage states a condition, and always include condition_text.
-- Use "UNCLEAR" when the passage implies an obligation but its requiredness is ambiguous.
-- due_date is null unless the passage prints an explicit calendar date. Never calculate or \
-guess a date.
-- due_date_text is the exact wording the passage uses for a date, time or timing rule \
-(for example "3 Business Days Before RFP Closing Date"), or null.
-- source_quote is the one sentence of the passage that creates the obligation, copied word for \
-word (at most 300 characters), or null. Never paraphrase it.
-- Never invent a deliverable not actually named or clearly implied in the passage text.
-- Do not include any field, explanation, or text outside this JSON object."""
+- A form, schedule or datasheet the bidder must complete is ONE requirement (BID_RETURNABLE); never list its individual rows, fields or questions as separate requirements.
+- When completing such a form needs data that only the manufacturer can supply (technical or datasheet values, equipment price, delivery or lead time, test or quality certificates, supplier qualifications or exceptions), ALSO return one separate MANUFACTURER_INPUT requirement for each related group of that data (for example "Transformer technical datasheet values" or "Manufacturer price and delivery"), never one per field.
+- If a passage has both a bid-stage part and a post-award part, return two separate requirements with the same title.
+- Do not list general descriptions, definitions, customer obligations, technical performance limits or contract rights as requirements.
+- Never invent a requirement, a responsible party, a date or a deadline. responsible_party is only a party the passage names, otherwise null.
+- timing_text is the exact wording the passage uses for a date, time or timing rule (for example "3 Business Days Before RFP Closing Date"), copied word for word, otherwise null. Never write your own timing summary.
+- due_date is null unless the passage prints an explicit calendar date (YYYY-MM-DD). Never calculate or guess a date.
+- source_quote is the one sentence of the passage that creates the obligation, copied word for word (at most 300 characters), or null. Never paraphrase it.
+- Use confidence LOW when you are unsure of the lifecycle; the item will be sent to a person for review.
+- Return at most 10 requirements per passage and keep every text field under 160 characters. If the passage names no requirement return an empty list.
+- Respond ONLY with JSON matching the schema. No explanation outside the JSON object."""
 
+_LIFECYCLES = [item.value for item in DiscoveryLifecycle]
+_NULLABLE_TEXT: dict[str, object] = {"type": ["string", "null"]}
+_REQUIREMENT_FIELDS: dict[str, object] = {
+    "title": {"type": "string"},
+    "description": {"type": "string"},
+    "lifecycle": {"type": "string", "enum": _LIFECYCLES},
+    "requirement_status": {"type": "string", "enum": [item.value for item in RequirementStatus]},
+    "item_kind": {"type": "string", "enum": [item.value for item in ItemKind]},
+    "category": {"type": "string"},
+    "condition_text": _NULLABLE_TEXT,
+    "applies_at": {"type": ["string", "null"], "enum": [item.value for item in AppliesAt] + [None]},
+    "responsible_party": _NULLABLE_TEXT,
+    "timing_text": _NULLABLE_TEXT,
+    "due_date": _NULLABLE_TEXT,
+    "dependencies": _NULLABLE_TEXT,
+    "confidence": {"type": "string", "enum": [item.value for item in Confidence]},
+    "review_reason": _NULLABLE_TEXT,
+    "source_section": _NULLABLE_TEXT,
+    "source_quote": _NULLABLE_TEXT,
+}
 CANDIDATE_RESPONSE_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
-        "candidates": {
+        "requirements": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "category": {"type": "string"},
-                    "criticality": {
-                        "type": "string",
-                        "enum": ["REQUIRED", "CONDITIONAL", "UNCLEAR"],
-                    },
-                    "condition_text": {"type": ["string", "null"]},
-                    "due_date": {"type": ["string", "null"]},
-                    "requested_format": {"type": ["string", "null"]},
-                    "requested_recipient": {"type": ["string", "null"]},
-                    "proposed_owner": {"type": ["string", "null"]},
-                    "due_date_text": {"type": ["string", "null"]},
-                    "source_quote": {"type": ["string", "null"]},
-                },
-                "required": [
-                    "title",
-                    "category",
-                    "criticality",
-                    "condition_text",
-                    "due_date",
-                    "requested_format",
-                    "requested_recipient",
-                    "proposed_owner",
-                    "due_date_text",
-                    "source_quote",
-                ],
+                "properties": _REQUIREMENT_FIELDS,
+                "required": list(_REQUIREMENT_FIELDS),
                 "additionalProperties": False,
             },
         }
     },
-    "required": ["candidates"],
+    "required": ["requirements"],
     "additionalProperties": False,
 }
 
@@ -100,7 +110,7 @@ DISCOVERY_REQUEST_OPTIONS: dict[str, object] = {
     "response_format": {
         "type": "json_schema",
         "json_schema": {
-            "name": "candidates",
+            "name": "requirements",
             "strict": True,
             "schema": CANDIDATE_RESPONSE_SCHEMA,
         },
@@ -157,6 +167,9 @@ class ProposedCandidate(BaseModel):
     proposed_owner: str | None
     due_date_text: str | None = None
     source_quote: str | None = None
+    description: str | None = None
+    classification: ProposalClassification | None = None
+    """Present for Stage 2 replies and rules; ``None`` for a legacy-shaped reply."""
 
 
 class PassageOutcomeKind(StrEnum):
@@ -276,14 +289,24 @@ def _attempt_completion(
                 f"{INVALID_REASON_PREFIX}the model reply was not valid JSON",
             )
 
-    raw_candidates = raw.get("candidates") if isinstance(raw, dict) else None
-    if not isinstance(raw_candidates, list):
+    if _reply_items(raw) is None:
         return (
             None,
             "invalid",
-            f"{INVALID_REASON_PREFIX}model reply did not contain a candidates list",
+            f"{INVALID_REASON_PREFIX}model reply did not contain a requirements list",
         )
     return raw, None, None
+
+
+def _reply_items(raw: object) -> list[object] | None:
+    """The reply's item list: ``requirements`` (Stage 2) or ``candidates`` (legacy shape)."""
+    if not isinstance(raw, dict):
+        return None
+    for key in ("requirements", "candidates"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            return value
+    return None
 
 
 def analyse_units(
@@ -298,8 +321,31 @@ def analyse_units(
     for extraction_id, unit in units:
         if not unit.readable or not unit.text.strip():
             continue
+        if unit.kind == VDDR_TABLE_KIND:
+            ruled = _items_from_rules(extraction_id, unit)
+            if ruled is None:
+                outcomes.append(
+                    PassageOutcome(
+                        extraction_id=extraction_id,
+                        outcome=PassageOutcomeKind.INVALID_OUTPUT,
+                        safe_reason=f"{INVALID_REASON_PREFIX}table rows could not be read",
+                    )
+                )
+                continue
+            candidates.extend(ruled)
+            outcomes.append(
+                PassageOutcome(
+                    extraction_id=extraction_id,
+                    outcome=PassageOutcomeKind.ANALYSED,
+                    candidate_count=len(ruled),
+                )
+            )
+            continue
         try:
-            prompt = f"Passage ({unit.locator_type} {unit.locator}):\n\n{unit.text}"
+            prompt = (
+                f"Document: {unit.document or 'unknown'}\n"
+                f"Passage ({unit.locator_type} {unit.locator}):\n\n{unit.text}"
+            )
             context_label = f"deliverable-discovery:{unit.locator}"
             started_at = time.monotonic()
             raw, problem, reason = _attempt_completion(
@@ -364,14 +410,14 @@ def analyse_units(
             )
             continue
 
-        raw_candidates = raw.get("candidates") if isinstance(raw, dict) else None
-        if not isinstance(raw_candidates, list):
+        raw_items = _reply_items(raw)
+        if raw_items is None:
             outcomes.append(
                 PassageOutcome(
                     extraction_id=extraction_id,
                     outcome=PassageOutcomeKind.INVALID_OUTPUT,
                     safe_reason=(
-                        f"{INVALID_REASON_PREFIX}model reply did not contain a candidates list"
+                        f"{INVALID_REASON_PREFIX}model reply did not contain a requirements list"
                     ),
                 )
             )
@@ -379,34 +425,15 @@ def analyse_units(
 
         accepted = 0
         invalid = 0
-        for item in raw_candidates:
+        for item in raw_items:
             if not isinstance(item, dict):
                 invalid += 1
                 continue
-            try:
-                parsed = RawCandidate.model_validate(item)
-            except ValidationError:
+            candidate = _candidate_from_item(extraction_id, unit.text, item)
+            if candidate is None:
                 invalid += 1
                 continue
-            due_date = _validate_date(parsed.due_date)
-            if parsed.due_date and due_date is None:
-                invalid += 1
-                continue
-            candidates.append(
-                ProposedCandidate(
-                    extraction_id=extraction_id,
-                    title=parsed.title,
-                    category=parsed.category,
-                    criticality=parsed.criticality,
-                    condition_text=parsed.condition_text,
-                    due_date=due_date,
-                    requested_format=parsed.requested_format,
-                    requested_recipient=parsed.requested_recipient,
-                    proposed_owner=parsed.proposed_owner,
-                    due_date_text=parsed.due_date_text,
-                    source_quote=parsed.source_quote,
-                )
-            )
+            candidates.append(candidate)
             accepted += 1
         outcomes.append(
             PassageOutcome(
@@ -417,6 +444,73 @@ def analyse_units(
             )
         )
     return AnalysisResult(candidates=tuple(candidates), outcomes=tuple(outcomes))
+
+
+def _candidate_from_item(
+    extraction_id: str,
+    passage_text: str,
+    item: dict[str, object],
+    classified_by: ClassifiedBy = ClassifiedBy.MODEL,
+) -> ProposedCandidate | None:
+    """A candidate from one reply item, or ``None`` when the item is unusable.
+
+    A Stage 2 item carries ``lifecycle``; anything else is a legacy-shaped item and yields an
+    unclassified candidate that behaves exactly as it did before lifecycle classification.
+    """
+    if "lifecycle" in item:
+        try:
+            raw, classification = parse_requirement(item, passage_text, classified_by)
+        except (ValidationError, ValueError, KeyError):
+            return None
+        return ProposedCandidate(
+            extraction_id=extraction_id,
+            title=raw.title,
+            category=raw.category,
+            criticality=legacy_criticality(raw.requirement_status, raw.condition_text),
+            condition_text=raw.condition_text,
+            due_date=raw.due_date,
+            requested_format=None,
+            requested_recipient=None,
+            proposed_owner=None,
+            due_date_text=raw.timing_text,
+            source_quote=raw.source_quote,
+            description=classification.description or None,
+            classification=classification,
+        )
+    try:
+        parsed = RawCandidate.model_validate(item)
+    except ValidationError:
+        return None
+    due_date = _validate_date(parsed.due_date)
+    if parsed.due_date and due_date is None:
+        return None
+    return ProposedCandidate(
+        extraction_id=extraction_id,
+        title=parsed.title,
+        category=parsed.category,
+        criticality=parsed.criticality,
+        condition_text=parsed.condition_text,
+        due_date=due_date,
+        requested_format=parsed.requested_format,
+        requested_recipient=parsed.requested_recipient,
+        proposed_owner=parsed.proposed_owner,
+        due_date_text=parsed.due_date_text,
+        source_quote=parsed.source_quote,
+    )
+
+
+def _items_from_rules(extraction_id: str, unit: RawUnit) -> list[ProposedCandidate] | None:
+    """Findings read by rules from rendered table rows, or ``None`` if the rows are unreadable."""
+    try:
+        items = interpret_vddr_unit(unit.text)
+    except ValueError:
+        return None
+    candidates = [
+        _candidate_from_item(extraction_id, unit.text, item, ClassifiedBy.RULE) for item in items
+    ]
+    if any(candidate is None for candidate in candidates):
+        return None
+    return [candidate for candidate in candidates if candidate is not None]
 
 
 def propose_candidates(

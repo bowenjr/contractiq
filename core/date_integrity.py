@@ -138,17 +138,25 @@ def classify_due_date(
     return DueDateEvidence(DueDateBasis.UNKNOWN, None, None, rule_text)
 
 
-def locate_quote(passage: str, quote: str | None) -> tuple[int, int] | None:
-    """Return the ``(start, end)`` span of ``quote`` in ``passage``, ignoring case and spacing."""
-    if not quote or not quote.strip():
-        return None
-    needle = _collapse(quote).lower()
-    if len(needle) < 12:
-        return None
+_CELL_LABEL = re.compile(r"(?<![A-Za-z0-9])[A-Z]{1,3}\d{1,6}: ")
+
+
+def _fold(passage: str, drop_cell_labels: bool) -> tuple[str, list[int]]:
+    """Case- and spacing-folded text with each character's index in ``passage``.
+
+    A spreadsheet passage labels every cell (``B78: Provide State``); with ``drop_cell_labels`` the
+    labels are left out, so a quotation of the cell values alone still matches.
+    """
+    skipped: set[int] = set()
+    if drop_cell_labels:
+        for label in _CELL_LABEL.finditer(passage):
+            skipped.update(range(label.start(), label.end()))
     collapsed: list[str] = []
     origin: list[int] = []
     previous_space = True
     for index, char in enumerate(passage):
+        if index in skipped:
+            continue
         if char.isspace():
             if not previous_space:
                 collapsed.append(" ")
@@ -158,11 +166,26 @@ def locate_quote(passage: str, quote: str | None) -> tuple[int, int] | None:
             collapsed.append(char.lower())
             origin.append(index)
             previous_space = False
-    haystack = "".join(collapsed)
-    found = haystack.find(needle)
-    if found < 0:
+    return "".join(collapsed), origin
+
+
+def locate_quote(passage: str, quote: str | None) -> tuple[int, int] | None:
+    """Return the ``(start, end)`` span of ``quote`` in ``passage``, ignoring case and spacing.
+
+    A quotation of spreadsheet cell values matches even though the passage prefixes each cell with
+    its coordinate; the returned span then covers those labels too.
+    """
+    if not quote or not quote.strip():
         return None
-    return origin[found], origin[found + len(needle) - 1] + 1
+    needle = _collapse(quote).lower()
+    if len(needle) < 12:
+        return None
+    for drop_cell_labels in (False, True):
+        haystack, origin = _fold(passage, drop_cell_labels)
+        found = haystack.find(needle)
+        if found >= 0:
+            return origin[found], origin[found + len(needle) - 1] + 1
+    return None
 
 
 def evidence_window(passage: str, span: tuple[int, int], limit: int = 2000) -> str:

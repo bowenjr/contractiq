@@ -8,7 +8,7 @@ import os
 import socket
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
@@ -46,6 +46,7 @@ from core.deliverable_discovery_service import (
     DiscoveryUnavailableError,
     _consolidate,
     _managed_copy_failure,
+    split_known_duplicates,
 )
 
 Clock = Callable[[], datetime]
@@ -332,8 +333,10 @@ class DiscoveryJobRunner:
                     units = (_managed_copy_failure(locator_type, exc),)
                 else:
                     try:
+                        label = self._document_label(str(job["bid_id"]), file_id, filename)
                         units = tuple(
-                            extract_units(
+                            replace(unit, document=label)
+                            for unit in extract_units(
                                 str(evidence["original_filename"]),
                                 str(evidence["detected_media_type"])
                                 if evidence["detected_media_type"] is not None
@@ -354,6 +357,14 @@ class DiscoveryJobRunner:
                 except Exception:
                     pass
         return _PreparedFile(file_id, release_id, filename, True, completed, units)
+
+    def _document_label(self, bid_id: str, file_id: str, filename: str) -> str:
+        """The file's relative path (its folder names the document's role), else its name."""
+        try:
+            row = self.service.bid_package_repository.file(file_id, bid_id)
+            return str(row.get("original_relative_path") or filename)
+        except Exception:
+            return filename
 
     @staticmethod
     def _readable_units(item: _PreparedFile) -> list[tuple[str, RawUnit]]:
@@ -445,8 +456,9 @@ class DiscoveryJobRunner:
             lookup,
             self.service.repository.date_triggers(str(job["bid_id"])),
         )
-        known = self.jobs.existing_dedup_keys(str(job["bid_id"]))
-        proposals = [proposal for proposal in proposals if proposal.dedup_key not in known]
+        proposals, appends = split_known_duplicates(
+            proposals, self.service.repository.existing_dedup_index(str(job["bid_id"]))
+        )
         invalid = sum(
             item.invalid_candidate_count
             + (1 if item.outcome is PassageOutcomeKind.INVALID_OUTPUT else 0)
@@ -467,7 +479,7 @@ class DiscoveryJobRunner:
             started_at=started,
             completed_at=completed,
         )
-        self.jobs.finalize_run(
+        finalized = self.jobs.finalize_run(
             job_id,
             self.owner,
             run,
@@ -477,6 +489,11 @@ class DiscoveryJobRunner:
             file_outcomes,
             cancelled,
         )
+        if finalized:
+            # A re-found obligation keeps every document that supports it. Appending is
+            # idempotent per (file, locator), so a repeat after a restart adds nothing.
+            for existing_id, sources in appends:
+                self.service.repository.append_citations(existing_id, list(sources))
 
     def _endpoint_message(self) -> str:
         authority = "configured host:port"

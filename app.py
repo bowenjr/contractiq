@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import uuid
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
@@ -180,6 +181,7 @@ from core.contract_risk_service import ContractRiskService
 from core.database import Database
 from core.deliverable_discovery import ProposalReviewDecision
 from core.deliverable_discovery_coverage import discovery_coverage
+from core.deliverable_discovery_destinations import DestinationWriter
 from core.deliverable_discovery_jobs import DiscoveryJobRunner, DiscoveryJobService
 from core.deliverable_discovery_presentation import (
     discovery_job_view,
@@ -195,7 +197,11 @@ from core.deliverable_discovery_review import (
     DEFAULT_STATUS as DEFAULT_REVIEW_STATUS,
 )
 from core.deliverable_discovery_review import (
+    DEFAULT_LIFECYCLE,
+    LIFECYCLE_KEYS,
+    LIFECYCLE_TABS,
     build_review_view,
+    lifecycle_key,
 )
 from core.deliverable_discovery_service import (
     DeliverableDiscoveryService,
@@ -701,10 +707,17 @@ def _discovery_intake_facts(
     }
     active = discovery_job_service.get_active_job(bid_id)
     finished = discovery_job_service.latest_finished_job(bid_id)
+    queue_rows = deliverable_discovery_service.list_review_queue(bid_id)
+    # Not-applicable, post-award, conditional and low-confidence findings are reviewed on their own
+    # tabs and do not inflate the prompt to review findings.
     pending = sum(
         1
-        for row in deliverable_discovery_service.list_review_queue(bid_id)
+        for row in queue_rows
         if row["current_decision"] == "PENDING"
+        and (
+            row.get("legacy")
+            or row.get("lifecycle") in {"BID_RETURNABLE", "PRE_BID_ACTION", "MANUFACTURER_INPUT"}
+        )
     )
     unanalysed = len(included_ids)
     passages_unanalysed = 0
@@ -951,6 +964,9 @@ deliverable_discovery_service = DeliverableDiscoveryService(
     deliverable_repository,
     deliverable_service,
     discovery_llm_client,
+)
+deliverable_discovery_service.destinations = DestinationWriter(
+    deliverable_repository, vendor_document_service, ops08_repository, work_item_service
 )
 discovery_job_service = DiscoveryJobService(
     deliverable_discovery_repository,
@@ -5479,12 +5495,16 @@ def _deliverable_discovery_context(
     status: str = DEFAULT_REVIEW_STATUS,
     document: str = "",
     page: int = 1,
+    lifecycle: str = "",
+    group: str = "",
     **extra: object,
 ) -> dict[str, object]:
     bid = bid_repository.get_bid(bid_id)
     if bid is None:
         raise ValueError(f"Bid not found: {bid_id}")
     queue = deliverable_discovery_service.list_review_queue(bid_id)
+    lifecycle = _landing_lifecycle(queue, lifecycle)
+    group = group if group in REVIEW_GROUPS else ("lifecycle" if lifecycle == "all" else "document")
     flags = deliverable_discovery_repository.list_addendum_flags(bid_id)
     promotions = deliverable_discovery_repository.list_promotions(bid_id)
     unreadable_files = deliverable_discovery_repository.list_unreadable_extractions(bid_id)
@@ -5526,10 +5546,28 @@ def _deliverable_discovery_context(
     file_names = {
         str(file_row["file_id"]): str(file_row["original_relative_path"]) for file_row in files
     }
+    review = build_review_view(
+        queue, file_names, status, document, page, lifecycle=lifecycle, group=group
+    )
     return {
         "bid": bid,
         "proposals": queue,
-        "review": build_review_view(queue, file_names, status, document, page),
+        "review": review,
+        "review_tabs": [
+            {
+                "key": key,
+                "label": label,
+                "pending": review.lifecycle_counts[key]["pending"],
+                "total": review.lifecycle_counts[key]["total"],
+            }
+            for key, label, _ in LIFECYCLE_TABS
+        ],
+        "review_questions": _review_questions(review.lifecycle_counts),
+        "lifecycle_options": [
+            {"value": value, "label": label} for _, label, value in LIFECYCLE_TABS
+        ],
+        "lifecycle_names": {value: label for _, label, value in LIFECYCLE_TABS},
+        "manufacturer_packages": vendor_document_service.repository.list_packages(bid_id),
         "flags": flags,
         "promotions": promotions,
         "unreadable_files": unreadable_files,
@@ -5577,6 +5615,37 @@ def _deliverable_discovery_context(
         **_bid_return_context(bid_id, BidWorkspaceSection.PACKAGE_INTAKE),
         **extra,
     }
+
+
+REVIEW_GROUPS = ("document", "lifecycle")
+
+
+def _landing_lifecycle(queue: list[dict[str, Any]], requested: str) -> str:
+    """The lifecycle tab to show. Bid returnables by default; when the Bid has none at all, the
+    first tab that has findings, so the page never opens empty while other findings wait."""
+    if requested in LIFECYCLE_KEYS:
+        return requested
+    present = {lifecycle_key(row) for row in queue}
+    if DEFAULT_LIFECYCLE in present or not present:
+        return DEFAULT_LIFECYCLE
+    return next((key for key in LIFECYCLE_KEYS if key in present), DEFAULT_LIFECYCLE)
+
+
+def _review_questions(counts: Mapping[str, Mapping[str, int]]) -> list[dict[str, object]]:
+    """The five questions a bid manager asks, each with what is left to decide."""
+    needs = {key: counts[key]["pending"] for key in ("review", "cond")}
+    return [
+        {"question": "Include with the bid", "tab": "bid", **counts["bid"]},
+        {"question": "Obtain from the manufacturer", "tab": "mfr", **counts["mfr"]},
+        {"question": "Clarify or arrange before bidding", "tab": "pre", **counts["pre"]},
+        {"question": "Owed after award", "tab": "post", **counts["post"]},
+        {
+            "question": "Still needs review",
+            "tab": "review",
+            "pending": needs["review"] + needs["cond"],
+            "total": counts["review"]["total"] + counts["cond"]["total"],
+        },
+    ]
 
 
 def _discovery_job_for_bid(bid_id: str, job_id: str) -> dict[str, object]:
@@ -5666,7 +5735,7 @@ def _deliverable_discovery_job_context(
 
 
 def _review_view_params(source: Mapping[str, object]) -> dict[str, object]:
-    """The review filter a request carries: status, document and page."""
+    """The review filter a request carries: status, lifecycle tab, document, grouping and page."""
     try:
         page = int(str(source.get("page") or 1))
     except ValueError:
@@ -5675,6 +5744,8 @@ def _review_view_params(source: Mapping[str, object]) -> dict[str, object]:
         "status": str(source.get("status") or DEFAULT_REVIEW_STATUS),
         "document": str(source.get("document") or ""),
         "page": page,
+        "lifecycle": str(source.get("lifecycle") or ""),
+        "group": str(source.get("group") or ""),
     }
 
 
@@ -5858,7 +5929,9 @@ def _parse_review_request(form: Mapping[str, object] | Any) -> list[ProposalDeci
     """
     actions = [str(value) for value in form.getlist("action")]
     bulk_actions = [str(value) for value in form.getlist("bulk_action")]
-    proposal_ids = [str(value).strip() for value in form.getlist("proposal_id") if str(value).strip()]
+    proposal_ids = [
+        str(value).strip() for value in form.getlist("proposal_id") if str(value).strip()
+    ]
     rationale = str(form.get("rationale") or "").strip() or None
     if actions and bulk_actions:
         raise ValueError(
@@ -5883,7 +5956,9 @@ def _parse_review_request(form: Mapping[str, object] | Any) -> list[ProposalDeci
     else:
         raise ValueError("No action was chosen. Choose accept, reject or defer.")
     if not proposal_ids:
-        raise ValueError("No findings are selected. Tick at least one finding, then choose the action.")
+        raise ValueError(
+            "No findings are selected. Tick at least one finding, then choose the action."
+        )
     if decision is not ProposalReviewDecision.ACCEPTED and not rationale:
         raise ValueError(
             f"A reason is required to {decision.value.lower().removesuffix('ed')}"
@@ -5896,16 +5971,101 @@ def _parse_review_request(form: Mapping[str, object] | Any) -> list[ProposalDeci
             try:
                 due = date.fromisoformat(raw_due)
             except ValueError:
-                raise ValueError(f"Due date {raw_due!r} is not a valid date (YYYY-MM-DD).") from None
+                raise ValueError(
+                    f"Due date {raw_due!r} is not a valid date (YYYY-MM-DD)."
+                ) from None
+    criticality: DeliverableCriticality | None = None
+    package_id: str | None = None
+    if decision is ProposalReviewDecision.ACCEPTED and not bulk_actions:
+        raw_criticality = str(form.get("criticality") or "").strip().upper()
+        if raw_criticality:
+            try:
+                criticality = DeliverableCriticality(raw_criticality)
+            except ValueError:
+                raise ValueError(
+                    f"Unknown requirement level {raw_criticality!r}. Choose Mandatory or "
+                    "Informational."
+                ) from None
+        package_id = str(form.get("package_id") or "").strip() or None
     return [
         ProposalDecisionInput(
             proposal_id=pid,
             decision=decision,
             rationale=None if decision is ProposalReviewDecision.ACCEPTED else rationale,
             due_date=due,
+            criticality=criticality,
+            package_id=package_id,
         )
         for pid in proposal_ids
     ]
+
+
+_DESTINATION_WORDS = {
+    "DELIVERABLE": ("Deliverable", "Deliverables"),
+    "VENDOR_DOCUMENT": ("manufacturer requirement", "manufacturer requirements"),
+    "COMMERCIAL_POSITION": ("commercial position update", "commercial position updates"),
+    "WORK_ITEM": ("work item", "work items"),
+}
+
+
+def _destination_summary(results: list[dict[str, Any]]) -> str:
+    """Say where accepted findings went, e.g. '2 Deliverables created, 1 linked to existing.'"""
+    created: Counter[str] = Counter()
+    linked: Counter[str] = Counter()
+    for result in results:
+        kind = result.get("destination")
+        if "error" in result or kind not in _DESTINATION_WORDS:
+            continue
+        (linked if result.get("reused") else created)[str(kind)] += 1
+    parts: list[str] = []
+    for kind, count in created.items():
+        one, many = _DESTINATION_WORDS[kind]
+        parts.append(f"{count} {one if count == 1 else many} created")
+    for kind, count in linked.items():
+        one, many = _DESTINATION_WORDS[kind]
+        parts.append(
+            f"{count} linked to an existing {one}"
+            if count == 1
+            else f"{count} {many} linked to existing ones"
+        )
+    return (", ".join(parts) + ".") if parts else ""
+
+
+@app.post("/bids/{bid_id}/deliverable-discovery/reclassify", response_class=HTMLResponse)
+async def deliverable_discovery_reclassify(request: Request, bid_id: str) -> Response:
+    """Move findings to another lifecycle category, with a reason, as a recorded decision."""
+    form = await request.form()
+    view = _review_view_params(form)
+    proposal_ids = [str(v).strip() for v in form.getlist("proposal_id") if str(v).strip()]
+    lifecycle = str(form.get("target_lifecycle") or "").strip().upper()
+    reason = str(form.get("rationale") or "").strip()
+    applies_at = str(form.get("applies_at") or "").strip().upper() or None
+    error: str | None = None
+    results: list[dict[str, Any]] = []
+    if not proposal_ids:
+        error = "No findings are selected. Tick at least one finding, then choose where to move it."
+    elif len(set(proposal_ids)) != len(proposal_ids):
+        error = "The same finding was selected twice. Reload the page and try again."
+    elif not lifecycle:
+        error = "Choose where to move the selected findings."
+    elif not reason:
+        error = "A reason is required to move findings. Enter one in the reason box."
+    else:
+        results = deliverable_discovery_repository.reclassify(
+            bid_id, proposal_ids, lifecycle, reason, LOCAL_ACTOR, applies_at=applies_at
+        )
+    failures = [r for r in results if "error" in r]
+    summary = (
+        None if error else f"{len(results) - len(failures)} of {len(results)} finding(s) moved."
+    )
+    if not error and failures:
+        error = f"{len(failures)} could not be moved: " + "; ".join(
+            f"{r['proposal_id']}: {r['error']}" for r in failures
+        )
+    context = _deliverable_discovery_context(
+        bid_id, decide_summary=summary, decide_error=error, **view
+    )
+    return render("deliverable_discovery.html", status_code=422 if error else 200, **context)
 
 
 @app.post("/bids/{bid_id}/deliverable-discovery/decide", response_class=HTMLResponse)
@@ -5922,8 +6082,10 @@ async def deliverable_discovery_decide(request: Request, bid_id: str) -> Respons
     done = len(results) - len(failures)
     word = _DECISION_WORDS[decisions[0].decision]
     summary = f"{done} of {len(results)} finding(s) {word}."
-    if decisions[0].decision is ProposalReviewDecision.ACCEPTED and len(results) > 1:
-        summary += " Due dates were applied only where the document states them."
+    if decisions[0].decision is ProposalReviewDecision.ACCEPTED and done:
+        summary += " " + _destination_summary(results)
+        if len(results) > 1:
+            summary += " Due dates were applied only where the document states them."
     context = _deliverable_discovery_context(
         bid_id,
         decide_summary=summary,

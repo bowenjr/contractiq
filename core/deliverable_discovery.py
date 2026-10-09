@@ -15,6 +15,12 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.date_integrity import DueDateBasis
+from core.requirement_lifecycle import (
+    AppliesAt,
+    DestinationKind,
+    DiscoveryLifecycle,
+    ProposalClassification,
+)
 
 
 class LocatorType(StrEnum):
@@ -124,6 +130,7 @@ class DeliverableProposal(BaseModel):
     requested_format: str | None = None
     requested_recipient: str | None = None
     proposed_owner: str | None = None
+    classification: ProposalClassification | None = None
     sources: tuple[SourceCitation, ...] = Field(min_length=1)
     dedup_key: str
     created_at: datetime
@@ -147,15 +154,21 @@ class ProposalReviewEvent(BaseModel):
     reviewer: str = Field(min_length=1)
     rationale: str | None = None
     linked_deliverable_id: str | None = None
+    destination_kind: DestinationKind | None = None
+    destination_record_id: str | None = None
     supersedes_event_id: str | None = None
     reviewed_at: datetime
 
     @model_validator(mode="after")
     def semantic(self) -> Self:
-        if self.decision is ProposalReviewDecision.ACCEPTED and not self.linked_deliverable_id:
-            raise ValueError("accepted decision requires linked_deliverable_id")
-        if self.decision is not ProposalReviewDecision.ACCEPTED and self.linked_deliverable_id:
-            raise ValueError("only an accepted decision may carry linked_deliverable_id")
+        if self.decision is ProposalReviewDecision.ACCEPTED:
+            if self.destination_kind in {None, DestinationKind.DELIVERABLE}:
+                if not self.linked_deliverable_id:
+                    raise ValueError("accepted deliverable decision requires linked_deliverable_id")
+            elif not self.destination_record_id:
+                raise ValueError("accepted non-deliverable decision requires destination_record_id")
+        elif self.linked_deliverable_id or self.destination_kind or self.destination_record_id:
+            raise ValueError("only an accepted decision may carry a destination")
         if (
             self.decision
             in (
@@ -228,7 +241,13 @@ class DiscoveryRun(BaseModel):
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
 
 
-def normalize_dedup_key(bid_id: str, title: str, category: str) -> str:
+def normalize_dedup_key(
+    bid_id: str,
+    title: str,
+    category: str,
+    lifecycle: DiscoveryLifecycle | ProposalClassification | str | None = None,
+    applies_at: AppliesAt | str | None = None,
+) -> str:
     """Consolidation key for duplicate mentions of the same obligation.
 
     Two proposals with the same normalized title+category within a Bid are the same
@@ -237,6 +256,18 @@ def normalize_dedup_key(bid_id: str, title: str, category: str) -> str:
     not duplicated as two proposals.
     """
     normalized_title = _NORMALIZE_RE.sub("-", title.strip().lower()).strip("-")
+    if lifecycle is not None:
+        if isinstance(lifecycle, ProposalClassification):
+            lifecycle_value = lifecycle.lifecycle
+            effective_applies_at = lifecycle.applies_at
+        else:
+            lifecycle_value = DiscoveryLifecycle(lifecycle)
+            effective_applies_at = AppliesAt(applies_at) if applies_at is not None else None
+        bucket = lifecycle_value.value.lower()
+        if lifecycle_value is DiscoveryLifecycle.CONDITIONAL:
+            suffix = effective_applies_at.value.lower() if effective_applies_at else "unset"
+            bucket = f"conditional-{suffix}"
+        return f"{bid_id}:{bucket}:{normalized_title}"
     normalized_category = _NORMALIZE_RE.sub("-", category.strip().lower()).strip("-")
     return f"{bid_id}:{normalized_category}:{normalized_title}"
 
