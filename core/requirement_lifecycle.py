@@ -79,6 +79,48 @@ _OBLIGATION_CUE_RE = re.compile(
     r"obliged|mandatory)\b",
     re.IGNORECASE,
 )
+_PROHIBITIVE_MAY_RE = re.compile(
+    r"(?:\bno\b[^.!?;:]{0,120}\bmay\b|\bmay\s+not\b|"
+    r"\bshall\s+not\b[^.!?;:]{0,120}\bmay\b)",
+    re.IGNORECASE,
+)
+_OTHER_PARTY_MAY_RE = re.compile(
+    r"\b(?:the\s+)?(?P<party>owner|purchaser|buyer|client|company|engineer)\b"
+    r"[^.!?;:]{0,80}\bmay\b",
+    re.IGNORECASE,
+)
+_BIDDER_PARTY_MAY_RE = re.compile(
+    r"\b(?:bidders?|suppliers?|vendors?|contractors?)\b[^.!?;:]{0,80}\bmay\b",
+    re.IGNORECASE,
+)
+_MAY_CONDITION_RE = re.compile(
+    r"\b(?:unless|until|provided\s+that|subject\s+to|only\s+if|only\s+when|"
+    r"in\s+the\s+event)\b",
+    re.IGNORECASE,
+)
+_STANDING_CONDUCT_RE = re.compile(
+    r"(?:\bconfidential(?:ity)?\b|\bnon[ -]?disclos(?:ure|e)\b|"
+    r"\b(?:shall|must)\s+not\b|"
+    r"\bnot\b[^.!?;:]{0,40}\b(?:collude|disclose|enter|publicize|copy|use)\b|"
+    r"\bcompl(?:y|ies)\s+with\b[^.!?;:]{0,80}\b(?:laws?|legal\s+requirements?)\b|"
+    r"\b(?:collusion|anticompetitive)\b|\badhere\s+to\b|"
+    r"\bdeemed\s+to\s+have\b|\bat\s+its\s+own\s+cost\b|"
+    r"\bonly\s+those\s+matters\b[^.!?;:]{0,120}\bwill\s+be\b|"
+    r"\b(?:advise|notify)\b[^.!?;:]{0,120}"
+    r"\b(?:error|discrepancy|ambiguity|incompleteness|omission|issue)\b)",
+    re.IGNORECASE,
+)
+_EXPLICIT_BEFORE_BID_ACTIVITY_RE = re.compile(
+    r"(?:\b(?:prior\s+to|before)\s+submitting\b|"
+    r"\bcomplet(?:e|ed|ing)\s+and\s+return(?:ed|ing)?\b|"
+    r"\bmust\s+be\s+(?:returned|submitted)\b|"
+    r"\bwithin\b[^.!?;:]{0,40}\bbusiness\s+days?\b|"
+    r"\bwith\s+(?:its|the)\s+(?:proposal|bid)\b)",
+    re.IGNORECASE,
+)
+_EXECUTE_DOCUMENT_RE = re.compile(
+    r"\b(?:sign|signs|signed|execute|executes|executed)\b", re.IGNORECASE
+)
 _BIDDER_OWN_INFORMATION_PATTERNS = (
     re.compile(r"\binsurance\b", re.IGNORECASE),
     re.compile(r"\binsurer\b", re.IGNORECASE),
@@ -116,9 +158,17 @@ _OPTION_REVIEW_REASON = (
     'The passage gives the bidder an option ("may"), not an obligation. Reject it, or move '
     "it if it is a real requirement."
 )
+_OTHER_PARTY_RIGHT_REVIEW_REASON = (
+    "The passage grants a right to the {party}, not an option for the bidder. Suggested: "
+    "right held by the {party} — reject, or record separately."
+)
 _BIDDER_INFORMATION_REVIEW_REASON = (
     "This describes the bidder's own information (for example its insurance), not data held "
     "by the manufacturer. Move it to With the bid, or reject it if the form already covers it."
+)
+_STANDING_CONDUCT_REVIEW_REASON = (
+    "Standing conduct rule that governs the bidder; not an activity to complete before bidding. "
+    "Suggested: not a pre-bid action — reject, or keep as reference."
 )
 
 
@@ -269,13 +319,14 @@ def guard_classification(
     *,
     classified_by: ClassifiedBy = ClassifiedBy.MODEL,
 ) -> ProposalClassification:
-    """Apply deterministic G1-G8 guards to a model-produced candidate.
+    """Apply deterministic G1-G9 guards to a model-produced candidate.
 
     G1 verifies the quote, G2 verifies timing text at the candidate-copy boundary, G3 verifies
     the responsible party, G4 validates conditional fields, G5 sends low confidence to review,
     G6 derives a commercial topic, G7 rejects bidder options misclassified as obligations, and
-    G8 rejects bidder-owned information misclassified as manufacturer input.  A guard never
-    drops a finding or mutates the supplied mapping.
+    G8 rejects bidder-owned information misclassified as manufacturer input, and G9 rejects
+    standing conduct rules misclassified as pre-bid actions.  A guard never drops a finding or
+    mutates the supplied mapping.
     """
     model_lifecycle = DiscoveryLifecycle(raw["lifecycle"])
     lifecycle = model_lifecycle
@@ -311,15 +362,23 @@ def guard_classification(
         review_reason = review_reason or "Low-confidence classification requires review"
 
     source_quote = str(raw.get("source_quote") or "")
+    other_party_match = _OTHER_PARTY_MAY_RE.search(source_quote)
+    has_condition = bool(_MAY_CONDITION_RE.search(source_quote))
+    bidder_party_match = _BIDDER_PARTY_MAY_RE.search(source_quote)
     if (
         quote_located
         and model_lifecycle in _OPTION_GUARDED_LIFECYCLES
         and _PERMISSIVE_MAY_RE.search(source_quote)
         and not _OBLIGATION_CUE_RE.search(source_quote)
+        and not _PROHIBITIVE_MAY_RE.search(source_quote)
+        and not (has_condition and not bidder_party_match)
     ):
-        review_reason = (
-            review_reason if lifecycle is DiscoveryLifecycle.NEEDS_REVIEW else _OPTION_REVIEW_REASON
-        )
+        if lifecycle is not DiscoveryLifecycle.NEEDS_REVIEW:
+            if other_party_match:
+                party = other_party_match.group("party").title()
+                review_reason = _OTHER_PARTY_RIGHT_REVIEW_REASON.format(party=party)
+            else:
+                review_reason = _OPTION_REVIEW_REASON
         lifecycle = DiscoveryLifecycle.NEEDS_REVIEW
 
     combined_text = " ".join(
@@ -335,6 +394,20 @@ def guard_classification(
             review_reason
             if lifecycle is DiscoveryLifecycle.NEEDS_REVIEW
             else _BIDDER_INFORMATION_REVIEW_REASON
+        )
+        lifecycle = DiscoveryLifecycle.NEEDS_REVIEW
+
+    if (
+        quote_located
+        and model_lifecycle is DiscoveryLifecycle.PRE_BID_ACTION
+        and _STANDING_CONDUCT_RE.search(source_quote)
+        and not _EXPLICIT_BEFORE_BID_ACTIVITY_RE.search(source_quote)
+        and not _EXECUTE_DOCUMENT_RE.search(combined_text)
+    ):
+        review_reason = (
+            review_reason
+            if lifecycle is DiscoveryLifecycle.NEEDS_REVIEW
+            else _STANDING_CONDUCT_REVIEW_REASON
         )
         lifecycle = DiscoveryLifecycle.NEEDS_REVIEW
 

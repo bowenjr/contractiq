@@ -39,7 +39,7 @@ from core.vddr_table import interpret_vddr_unit
 
 SYSTEM_PROMPT = """You analyse one passage from a customer RFP/tender package for a company that will quote equipment through a manufacturer. Find every distinct requirement the passage places on the bidder or its manufacturer that is a document, form, schedule, declaration, data input, test, record, deliverable or action. Classify WHEN each is due:
 
-- PRE_BID_ACTION: something the bidder must do, ask, confirm or arrange BEFORE submitting the proposal (acknowledge the RFP, attend a meeting, submit a clarification, register).
+- PRE_BID_ACTION: something the bidder must do, ask, confirm or arrange BEFORE submitting the proposal (acknowledge the RFP, attend a meeting, submit a clarification, register). A standing rule of conduct, a right or a permission is not a pre-bid action.
 - BID_RETURNABLE: a form, schedule, declaration, document or other item that must be submitted WITH the proposal.
 - MANUFACTURER_INPUT: information or documents the bidder must obtain from the manufacturer/supplier to prepare or validate the quotation (technical data, completed datasheet fields, manufacturer price and delivery, supplier qualifications/exceptions). Information about the bidder itself (its insurance, bonds, financial standing, references, company or signatory details) is not manufacturer input; it belongs in the form the bidder submits.
 - POST_AWARD: documentation, tests, drawings, records or activities required only after purchase order or contract award (engineering drawings, manufacturing and inspection documents, FAT records, final data books, warranties, bonds).
