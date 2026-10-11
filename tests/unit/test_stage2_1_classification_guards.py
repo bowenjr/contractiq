@@ -204,11 +204,12 @@ def test_existing_unlocated_quote_reason_wins_over_g9() -> None:
     )
 
 
-def test_discovery_prompt_excludes_standing_rules_rights_and_permissions() -> None:
-    assert (
-        "A standing rule of conduct, a right or a permission is not a pre-bid action."
-        in SYSTEM_PROMPT
-    )
+def test_discovery_prompt_keeps_standing_rules_for_review_instead_of_dropping_them() -> None:
+    """A conduct rule is retained as NEEDS_REVIEW; the first wording made the model omit it."""
+    assert "is not a pre-bid action" in SYSTEM_PROMPT
+    assert "Do not drop a standing rule" in SYSTEM_PROMPT
+    assert "lifecycle NEEDS_REVIEW" in SYSTEM_PROMPT
+    assert STANDING_CONDUCT_REASON in SYSTEM_PROMPT
 
 
 def test_signing_a_confidentiality_agreement_stays_a_pre_bid_action() -> None:
