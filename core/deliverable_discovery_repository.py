@@ -4,6 +4,7 @@ docs/tasks/OPS-13A-bid-deliverables-discovery.md for the additive migration plan
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, date, datetime
 from typing import Any, cast
@@ -27,13 +28,25 @@ from core.deliverable_discovery_classification import (
     reclassify_proposals,
     record_destination,
 )
+from core.deliverable_discovery_collisions import (
+    CollisionSource,
+    DiscoveryCollision,
+    ExistingObligation,
+    ObligationFacts,
+    base_dedup_key,
+)
 from core.deliverable_discovery_evidence import (
     attach_evidence,
     ensure_evidence_tables,
     insert_proposal_evidence,
 )
 from core.deliverable_discovery_job_repository import migrate_deliverable_discovery_jobs
-from core.deliverable_discovery_migrations import migrate_deliverable_discovery_not_attempted
+from core.deliverable_discovery_migrations import (
+    COLLISIONS_TABLE,
+    migrate_deliverable_discovery_collisions,
+    migrate_deliverable_discovery_not_attempted,
+    record_collision,
+)
 from core.deliverable_discovery_outcomes import (
     DiscoveryFileOutcome,
     DiscoveryRunOutcome,
@@ -263,6 +276,7 @@ class DeliverableDiscoveryRepository:
                 )
                 migrate_deliverable_discovery_jobs(conn, datetime.now(UTC).isoformat())
                 migrate_deliverable_discovery_not_attempted(conn, datetime.now(UTC).isoformat())
+                migrate_deliverable_discovery_collisions(conn, datetime.now(UTC).isoformat())
                 ensure_evidence_tables(conn)
                 ensure_classification_tables(conn)
                 conn.commit()
@@ -301,6 +315,90 @@ class DeliverableDiscoveryRepository:
                     (bid_id,),
                 ).fetchall()
             }
+
+    def existing_collision_index(self, bid_id: str) -> dict[str, tuple[ExistingObligation, ...]]:
+        """Group immutable stored findings by their unsuffixed title/lifecycle key."""
+        grouped: dict[str, list[ExistingObligation]] = {}
+        with self._conn() as conn:
+            proposals = conn.execute(
+                """SELECT proposal_id,dedup_key,condition_text,due_date
+                FROM deliverable_discovery_proposals WHERE bid_id=?
+                ORDER BY created_at,proposal_id""",
+                (bid_id,),
+            ).fetchall()
+            for proposal in proposals:
+                proposal_id = str(proposal["proposal_id"])
+                classification = conn.execute(
+                    """SELECT description,responsible_party,source_section
+                    FROM deliverable_discovery_proposal_classification WHERE proposal_id=?""",
+                    (proposal_id,),
+                ).fetchone()
+                date_evidence = conn.execute(
+                    """SELECT basis,rule_text FROM deliverable_discovery_proposal_dates
+                    WHERE proposal_id=?""",
+                    (proposal_id,),
+                ).fetchone()
+                source_rows = conn.execute(
+                    """SELECT source.document_version_id,source.received_file_id,
+                    source.locator,quote.quote
+                    FROM deliverable_discovery_proposal_sources_v2 source
+                    LEFT JOIN deliverable_discovery_citation_quotes quote
+                        ON quote.citation_id=source.citation_id
+                    WHERE source.proposal_id=? ORDER BY source.citation_id""",
+                    (proposal_id,),
+                ).fetchall()
+                facts = ObligationFacts(
+                    description=(
+                        str(classification["description"])
+                        if classification is not None and classification["description"] is not None
+                        else None
+                    ),
+                    due_date=(
+                        date.fromisoformat(str(proposal["due_date"]))
+                        if proposal["due_date"] is not None
+                        else None
+                    ),
+                    due_date_basis=(
+                        str(date_evidence["basis"]) if date_evidence is not None else None
+                    ),
+                    timing_text=(
+                        str(date_evidence["rule_text"])
+                        if date_evidence is not None and date_evidence["rule_text"] is not None
+                        else None
+                    ),
+                    responsible_party=(
+                        str(classification["responsible_party"])
+                        if classification is not None
+                        and classification["responsible_party"] is not None
+                        else None
+                    ),
+                    condition_text=(
+                        str(proposal["condition_text"])
+                        if proposal["condition_text"] is not None
+                        else None
+                    ),
+                    source_section=(
+                        str(classification["source_section"])
+                        if classification is not None
+                        and classification["source_section"] is not None
+                        else None
+                    ),
+                    sources=tuple(
+                        CollisionSource(
+                            file_id=str(
+                                source["document_version_id"] or source["received_file_id"]
+                            ),
+                            locator=str(source["locator"]),
+                            quote=str(source["quote"]) if source["quote"] is not None else None,
+                        )
+                        for source in source_rows
+                    ),
+                )
+                dedup_key = str(proposal["dedup_key"])
+                grouped.setdefault(base_dedup_key(dedup_key), []).append(
+                    ExistingObligation(proposal_id, dedup_key, facts)
+                )
+        return {key: tuple(items) for key, items in grouped.items()}
 
     def existing_run(self, bid_id: str, operation_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
@@ -384,6 +482,7 @@ class DeliverableDiscoveryRepository:
         actor: str,
         run_outcome: DiscoveryRunOutcome | None = None,
         file_outcomes: list[DiscoveryFileOutcome] | None = None,
+        collisions: list[DiscoveryCollision] | None = None,
     ) -> None:
         """Persist run, extraction, proposal and optional outcome facts atomically."""
         with self._conn() as conn:
@@ -472,6 +571,22 @@ class DeliverableDiscoveryRepository:
                         )
                     insert_proposal_evidence(conn, proposal)
                     insert_proposal_classification(conn, proposal)
+                for collision in collisions or []:
+                    record_collision(conn, collision, run.completed_at)
+                    self._audit(
+                        conn,
+                        run.bid_id,
+                        actor,
+                        "deliverable_discovery_collision_recorded",
+                        json.dumps(
+                            {
+                                "proposal_id": collision.proposal_id,
+                                "other_proposal_id": collision.other_proposal_id,
+                                "reasons": collision.reasons,
+                            },
+                            sort_keys=True,
+                        ),
+                    )
                 if run_outcome is not None:
                     conn.execute(
                         "INSERT INTO deliverable_discovery_run_outcomes VALUES "
@@ -619,6 +734,21 @@ class DeliverableDiscoveryRepository:
     def append_citations(self, proposal_id: str, citations: list[SourceCitation]) -> None:
         """Append new source evidence to a proposal without mutating existing evidence."""
         append_citations_transaction(self._conn, self._audit, proposal_id, citations)
+
+    def list_collisions(self, bid_id: str) -> list[dict[str, Any]]:
+        """Return immutable collision evidence for tests and later review presentation."""
+        with self._conn() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    f"""SELECT collision.* FROM {COLLISIONS_TABLE} collision
+                    JOIN deliverable_discovery_proposals proposal
+                        ON proposal.proposal_id=collision.proposal_id
+                    WHERE proposal.bid_id=? ORDER BY collision.created_at,
+                        collision.proposal_id,collision.other_proposal_id""",
+                    (bid_id,),
+                ).fetchall()
+            ]
 
     @staticmethod
     def _review_events(conn: sqlite3.Connection, proposal_id: str) -> list[dict[str, Any]]:

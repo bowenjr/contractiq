@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from typing import Any
@@ -40,6 +40,15 @@ from core.deliverable_discovery import (
     SourceCitation,
     SourcePromotion,
     normalize_dedup_key,
+)
+from core.deliverable_discovery_collisions import (
+    DiscoveryCollision,
+    ExistingObligation,
+    base_dedup_key,
+    collision_dedup_key,
+    collisions_between,
+    compare_obligations,
+    facts_from_proposal,
 )
 from core.deliverable_discovery_destinations import (
     AcceptedRecord,
@@ -326,9 +335,13 @@ class DeliverableDiscoveryService:
             extraction_lookup,
             self.repository.date_triggers(bid_id),
         )
-        proposals, appends = split_known_duplicates(
-            proposals, self.repository.existing_dedup_index(bid_id)
+        split = split_known_duplicates(
+            proposals,
+            self.repository.existing_dedup_index(bid_id),
+            self.repository.existing_collision_index(bid_id),
         )
+        proposals, appends = split
+        collisions = [*collisions_between(proposals), *split.collisions]
 
         completed_at = datetime.now(UTC)
         run = DiscoveryRun(
@@ -356,6 +369,7 @@ class DeliverableDiscoveryService:
             actor,
             run_outcome=run_outcome,
             file_outcomes=file_outcomes,
+            collisions=collisions,
         )
         for existing_id, sources in appends:
             self.repository.append_citations(existing_id, list(sources))
@@ -1022,9 +1036,31 @@ def _accept_consequence(classification: ProposalClassification) -> str:
     return _ACCEPT_CONSEQUENCE[kind]
 
 
+@dataclass(frozen=True)
+class DuplicateSplit:
+    """Cross-run merge result; iterable as the historical ``(new, appends)`` pair."""
+
+    new: list[DeliverableProposal]
+    appends: list[tuple[str, tuple[SourceCitation, ...]]]
+    collisions: list[DiscoveryCollision]
+
+    def __iter__(
+        self,
+    ) -> Iterator[list[DeliverableProposal] | list[tuple[str, tuple[SourceCitation, ...]]]]:
+        yield self.new
+        yield self.appends
+
+    def __getitem__(
+        self, index: int
+    ) -> list[DeliverableProposal] | list[tuple[str, tuple[SourceCitation, ...]]]:
+        return (self.new, self.appends)[index]
+
+
 def split_known_duplicates(
-    proposals: list[DeliverableProposal], known: Mapping[str, str]
-) -> tuple[list[DeliverableProposal], list[tuple[str, tuple[SourceCitation, ...]]]]:
+    proposals: list[DeliverableProposal],
+    known: Mapping[str, str],
+    existing_by_base: Mapping[str, tuple[ExistingObligation, ...]] | None = None,
+) -> DuplicateSplit:
     """Separate findings new to the Bid from re-findings of an existing finding.
 
     ``known`` maps dedup keys already recorded for the Bid to their proposal ids. A re-finding is
@@ -1034,22 +1070,52 @@ def split_known_duplicates(
     """
     new: list[DeliverableProposal] = []
     appends: list[tuple[str, tuple[SourceCitation, ...]]] = []
+    collisions: list[DiscoveryCollision] = []
     for proposal in proposals:
-        existing = known.get(proposal.dedup_key)
+        base_key = base_dedup_key(proposal.dedup_key)
         classification = proposal.classification
+        lookup_keys = [base_key]
         if (
-            existing is None
-            and classification is not None
+            classification is not None
             and classification.lifecycle is DiscoveryLifecycle.BID_RETURNABLE
         ):
-            existing = known.get(
+            lookup_keys.append(
                 normalize_dedup_key(proposal.bid_id, proposal.title, proposal.category)
             )
-        if existing is None:
+
+        stored = [item for key in lookup_keys for item in (existing_by_base or {}).get(key, ())]
+        proposal_facts = facts_from_proposal(proposal)
+        comparisons = [(item, compare_obligations(proposal_facts, item.facts)) for item in stored]
+        equivalent = next((item for item, result in comparisons if result.equivalent), None)
+        if equivalent is not None:
+            appends.append((equivalent.proposal_id, proposal.sources))
+            continue
+
+        if stored:
+            if proposal.dedup_key == base_key or proposal.dedup_key in known:
+                proposal = proposal.model_copy(
+                    update={"dedup_key": collision_dedup_key(base_key, proposal_facts)}
+                )
+            collisions.extend(
+                DiscoveryCollision.canonical(
+                    proposal.proposal_id, item.proposal_id, comparison.reasons
+                )
+                for item, comparison in comparisons
+            )
             new.append(proposal)
-        else:
+            continue
+
+        # Compatibility for callers that only have the historical key -> id index.  Production
+        # discovery always supplies ``existing_by_base`` and therefore always compares facts.
+        existing = next(
+            (known[key] for key in [proposal.dedup_key, *lookup_keys] if key in known),
+            None,
+        )
+        if existing is not None:
             appends.append((existing, proposal.sources))
-    return new, appends
+        else:
+            new.append(proposal)
+    return DuplicateSplit(new, appends, collisions)
 
 
 _BASIS_RANK = {
@@ -1068,13 +1134,13 @@ def _consolidate(
     extraction_lookup: dict[str, ExtractionUnit],
     triggers: Mapping[str, date] | None = None,
 ) -> list[DeliverableProposal]:
-    """Merge candidates that name the same obligation (same normalized title+category) into one
-    proposal with multiple source citations, instead of one proposal per mention.
+    """Merge only materially equivalent candidates sharing a title/lifecycle key.
 
     Each citation carries the sentence the model quoted, but only when that sentence is found word
     for word in the passage; its excerpt is then the text around it rather than the top of the
     page. Each due date is classified against the passage (see ``core.date_integrity``): only a
     date that is stated or calculated becomes ``due_date``; the model's own guess stays a proposal.
+    A later non-equivalent candidate gets a source-fingerprint suffix so both findings can persist.
     """
     grouped: dict[str, list[ProposedCandidate]] = {}
     for candidate in candidates:
@@ -1083,10 +1149,11 @@ def _consolidate(
         )
         grouped.setdefault(key, []).append(candidate)
 
-    proposals: list[DeliverableProposal] = []
-    for dedup_key, group in grouped.items():
+    def build_proposal(
+        dedup_key: str, group: list[ProposedCandidate]
+    ) -> DeliverableProposal | None:
         first = max(group, key=_candidate_rank)
-        sources = []
+        sources: list[SourceCitation] = []
         dates = []
         cited: set[tuple[str, str, str]] = set()
         for candidate in group:
@@ -1096,7 +1163,8 @@ def _consolidate(
             passage = unit.text_excerpt
             span = locate_quote(passage, candidate.source_quote)
             # One citation per (file, locator), the rule ``append_citations`` applies across runs.
-            citation_key = (unit.received_file_id, unit.locator_type, unit.locator)
+            source_id = str(unit.document_version_id or unit.received_file_id)
+            citation_key = (source_id, unit.locator_type.value, unit.locator)
             if citation_key not in cited:
                 cited.add(citation_key)
                 sources.append(
@@ -1118,31 +1186,63 @@ def _consolidate(
                 )
             )
         if not sources:
-            continue
+            return None
         due = min(dates, key=lambda item: _BASIS_RANK[item.basis])
-        proposals.append(
-            DeliverableProposal(
-                bid_id=bid_id,
-                run_id=run_id,
-                title=first.title,
-                category=first.category,
-                criticality=first.criticality,
-                condition_text=first.condition_text,
-                due_date=due.effective,
-                due_date_basis=due.basis,
-                proposed_due_date=due.proposed,
-                due_date_text=next((item.rule_text for item in dates if item.rule_text), None),
-                requested_format=next(
-                    (c.requested_format for c in group if c.requested_format), None
-                ),
-                requested_recipient=next(
-                    (c.requested_recipient for c in group if c.requested_recipient), None
-                ),
-                proposed_owner=next((c.proposed_owner for c in group if c.proposed_owner), None),
-                classification=first.classification,
-                sources=tuple(sources),
-                dedup_key=dedup_key,
-                created_at=created_at,
-            )
+        return DeliverableProposal(
+            bid_id=bid_id,
+            run_id=run_id,
+            title=first.title,
+            category=first.category,
+            criticality=first.criticality,
+            condition_text=first.condition_text,
+            due_date=due.effective,
+            due_date_basis=due.basis,
+            proposed_due_date=due.proposed,
+            due_date_text=next((item.rule_text for item in dates if item.rule_text), None),
+            requested_format=next((c.requested_format for c in group if c.requested_format), None),
+            requested_recipient=next(
+                (c.requested_recipient for c in group if c.requested_recipient), None
+            ),
+            proposed_owner=next((c.proposed_owner for c in group if c.proposed_owner), None),
+            classification=first.classification,
+            sources=tuple(sources),
+            dedup_key=dedup_key,
+            created_at=created_at,
         )
+
+    proposals: list[DeliverableProposal] = []
+    for dedup_key, group in grouped.items():
+        clusters: list[list[ProposedCandidate]] = []
+        cluster_proposals: list[DeliverableProposal] = []
+        for candidate in group:
+            candidate_proposal = build_proposal(dedup_key, [candidate])
+            if candidate_proposal is None:
+                continue
+            match_index = next(
+                (
+                    index
+                    for index, existing in enumerate(cluster_proposals)
+                    if compare_obligations(
+                        facts_from_proposal(existing), facts_from_proposal(candidate_proposal)
+                    ).equivalent
+                ),
+                None,
+            )
+            if match_index is None:
+                clusters.append([candidate])
+                cluster_proposals.append(candidate_proposal)
+            else:
+                clusters[match_index].append(candidate)
+                rebuilt = build_proposal(dedup_key, clusters[match_index])
+                if rebuilt is not None:
+                    cluster_proposals[match_index] = rebuilt
+
+        for index, proposal in enumerate(cluster_proposals):
+            if index:
+                proposal = proposal.model_copy(
+                    update={
+                        "dedup_key": collision_dedup_key(dedup_key, facts_from_proposal(proposal))
+                    }
+                )
+            proposals.append(proposal)
     return proposals

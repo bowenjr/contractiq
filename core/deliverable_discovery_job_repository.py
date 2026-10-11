@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
@@ -11,8 +12,13 @@ from uuid import uuid4
 from core.database import Database
 from core.deliverable_discovery import DeliverableProposal, DiscoveryRun, ExtractionUnit
 from core.deliverable_discovery_classification import insert_proposal_classification
+from core.deliverable_discovery_collisions import DiscoveryCollision
 from core.deliverable_discovery_evidence import insert_proposal_evidence
-from core.deliverable_discovery_migrations import migrate_deliverable_discovery_not_attempted
+from core.deliverable_discovery_migrations import (
+    migrate_deliverable_discovery_collisions,
+    migrate_deliverable_discovery_not_attempted,
+    record_collision,
+)
 from core.deliverable_discovery_outcomes import DiscoveryFileOutcome, DiscoveryRunOutcome
 
 JOB_MIGRATION_ID = "ops_13a_deliverable_discovery_jobs_v5"
@@ -124,6 +130,7 @@ class DeliverableDiscoveryJobRepository:
             migrate_deliverable_discovery_not_attempted(
                 conn, datetime.now().astimezone().isoformat()
             )
+            migrate_deliverable_discovery_collisions(conn, datetime.now().astimezone().isoformat())
             conn.commit()
 
     def _conn(self) -> sqlite3.Connection:
@@ -526,6 +533,7 @@ class DeliverableDiscoveryJobRepository:
         run_outcome: DiscoveryRunOutcome,
         file_outcomes: list[DiscoveryFileOutcome],
         cancelled: bool,
+        collisions: list[DiscoveryCollision] | None = None,
     ) -> bool:
         """Write immutable run facts and terminal job state in one transaction."""
         with self._conn() as conn:
@@ -535,7 +543,15 @@ class DeliverableDiscoveryJobRepository:
                 return False
             if job["lease_owner"] != owner or job["state"] not in ("RUNNING", "CANCEL_REQUESTED"):
                 return False
-            self._insert_run(conn, run, extractions, proposals, run_outcome, file_outcomes)
+            self._insert_run(
+                conn,
+                run,
+                extractions,
+                proposals,
+                run_outcome,
+                file_outcomes,
+                collisions or [],
+            )
             # A cancel can land after the runner last looked; the locked row is the authority.
             cancelled = cancelled or job["state"] == "CANCEL_REQUESTED"
             terminal = "CANCELLED" if cancelled else run_outcome.outcome.value
@@ -581,6 +597,7 @@ class DeliverableDiscoveryJobRepository:
         proposals: list[DeliverableProposal],
         outcome: DiscoveryRunOutcome,
         file_outcomes: list[DiscoveryFileOutcome],
+        collisions: list[DiscoveryCollision],
     ) -> None:
         conn.execute(
             "INSERT INTO deliverable_discovery_runs VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -649,6 +666,27 @@ class DeliverableDiscoveryJobRepository:
                 )
             insert_proposal_evidence(conn, proposal)
             insert_proposal_classification(conn, proposal)
+        for collision in collisions:
+            record_collision(conn, collision, run.completed_at)
+            conn.execute(
+                """INSERT INTO audit_log(entry_id,bid_id,actor,action,detail,timestamp)
+                VALUES(?,?,?,?,?,?)""",
+                (
+                    f"AUD-{uuid4().hex}",
+                    run.bid_id,
+                    run.actor,
+                    "deliverable_discovery_collision_recorded",
+                    json.dumps(
+                        {
+                            "proposal_id": collision.proposal_id,
+                            "other_proposal_id": collision.other_proposal_id,
+                            "reasons": collision.reasons,
+                        },
+                        sort_keys=True,
+                    ),
+                    run.completed_at.isoformat(),
+                ),
+            )
         conn.execute(
             "INSERT INTO deliverable_discovery_run_outcomes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (

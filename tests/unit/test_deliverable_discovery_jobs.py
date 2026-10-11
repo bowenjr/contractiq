@@ -68,7 +68,7 @@ def test_successful_process_persists_evidence_run_and_proposals(tmp_path: Path) 
         )
         assert conn.execute("SELECT count(*) FROM deliverable_discovery_runs").fetchone()[0] == 1
         assert (
-            conn.execute("SELECT count(*) FROM deliverable_discovery_proposals").fetchone()[0] == 1
+            conn.execute("SELECT count(*) FROM deliverable_discovery_proposals").fetchone()[0] == 2
         )
         source = conn.execute("SELECT * FROM deliverable_discovery_proposal_sources_v2").fetchone()
         assert source["received_file_id"] and source["locator_type"] == "PAGE"

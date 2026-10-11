@@ -248,12 +248,12 @@ def normalize_dedup_key(
     lifecycle: DiscoveryLifecycle | ProposalClassification | str | None = None,
     applies_at: AppliesAt | str | None = None,
 ) -> str:
-    """Consolidation key for duplicate mentions of the same obligation.
+    """Stable base key for possible duplicate mentions of an obligation.
 
-    Two proposals with the same normalized title+category within a Bid are the same
-    obligation seen more than once (e.g. mentioned in both the instructions and the
-    specification) and must be merged into one proposal with multiple source citations,
-    not duplicated as two proposals.
+    This historical title+bucket format is intentionally unchanged for stored proposals.  A key
+    match only selects candidates for the material-fact comparison; it no longer establishes
+    equivalence by itself.  Later non-equivalent findings receive a source-derived collision
+    suffix without rewriting any existing key.
     """
     normalized_title = _NORMALIZE_RE.sub("-", title.strip().lower()).strip("-")
     if lifecycle is not None:

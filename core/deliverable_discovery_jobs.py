@@ -22,6 +22,7 @@ from core.deliverable_discovery import (
     LocatorType,
     RunStatus,
 )
+from core.deliverable_discovery_collisions import collisions_between
 from core.deliverable_discovery_extraction import (
     RawUnit,
     UnsupportedMediaTypeError,
@@ -456,9 +457,13 @@ class DiscoveryJobRunner:
             lookup,
             self.service.repository.date_triggers(str(job["bid_id"])),
         )
-        proposals, appends = split_known_duplicates(
-            proposals, self.service.repository.existing_dedup_index(str(job["bid_id"]))
+        split = split_known_duplicates(
+            proposals,
+            self.service.repository.existing_dedup_index(str(job["bid_id"])),
+            self.service.repository.existing_collision_index(str(job["bid_id"])),
         )
+        proposals, appends = split
+        collisions = [*collisions_between(proposals), *split.collisions]
         invalid = sum(
             item.invalid_candidate_count
             + (1 if item.outcome is PassageOutcomeKind.INVALID_OUTPUT else 0)
@@ -488,6 +493,7 @@ class DiscoveryJobRunner:
             run_outcome,
             file_outcomes,
             cancelled,
+            collisions,
         )
         if finalized:
             # A re-found obligation keeps every document that supports it. Appending is
