@@ -49,6 +49,7 @@ from core.deliverable_discovery_migrations import (
     migrate_deliverable_discovery_not_attempted,
     record_collision,
 )
+from core.deliverable_discovery_origins import ensure_origin_tables, insert_origin
 from core.deliverable_discovery_outcomes import (
     DiscoveryFileOutcome,
     DiscoveryRunOutcome,
@@ -281,6 +282,7 @@ class DeliverableDiscoveryRepository:
                 migrate_deliverable_discovery_collisions(conn, datetime.now(UTC).isoformat())
                 ensure_evidence_tables(conn)
                 ensure_classification_tables(conn)
+                ensure_origin_tables(conn)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -954,6 +956,18 @@ class DeliverableDiscoveryRepository:
                         event.supersedes_event_id,
                         event.reviewed_at.isoformat(),
                     ),
+                )
+                # The Deliverable is created in this very transaction, so its origin is written
+                # complete (record_id set) with no claim gap. A second accept of the finding
+                # already failed the stale-decision check above.
+                insert_origin(
+                    conn,
+                    self._audit,
+                    proposal_id=event.proposal_id,
+                    bid_id=event.bid_id,
+                    kind=DestinationKind.DELIVERABLE,
+                    actor=actor,
+                    record_id=item.deliverable_id,
                 )
                 record_destination(
                     conn,

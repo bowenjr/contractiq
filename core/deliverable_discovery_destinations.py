@@ -25,6 +25,8 @@ from typing import Any
 
 from core.deliverable_discovery import ProposalReviewDecision, ProposalReviewEvent
 from core.deliverable_discovery_classification import AuditWriter, record_destination
+from core.deliverable_discovery_origins import active_origin
+from core.deliverable_discovery_reconcile import marker_in_commercial_history
 from core.deliverable_repository import DeliverableRepository
 from core.deliverables import DeliverableLink, LifecyclePhase
 from core.ops08 import Ops08Repository, PositionRevision
@@ -74,6 +76,7 @@ class AcceptedRecord:
     record_id: str
     reused: bool
     note: str
+    detail: str | None = None
 
 
 class DestinationWriter:
@@ -216,7 +219,9 @@ class DestinationWriter:
         detail = self.ops08.detail(position_id)
         marker = origin_marker(facts.proposal_id)
         existing = str(detail.get("supporting_evidence") or "")
-        if marker in existing:
+        with self.ops08._conn() as conn:
+            in_history = marker_in_commercial_history(conn, position_id, marker)
+        if marker in existing or in_history:
             return AcceptedRecord(
                 DestinationKind.COMMERCIAL_POSITION,
                 position_id,
@@ -233,6 +238,7 @@ class DestinationWriter:
             position_id,
             False,
             f"Recorded as evidence on the {topic} commercial position",
+            f"position version {int(detail['current_version']) + 1}",
         )
 
     @staticmethod
@@ -329,6 +335,7 @@ def accept_into_record(
             ).fetchone()
             if current is not None and current["decision"] == "ACCEPTED":
                 raise ValueError("proposal already accepted")
+            _check_origin(conn, event.proposal_id, record)
             if event.supersedes_event_id != (str(current["event_id"]) if current else None):
                 raise ValueError("review event supersedes stale current decision")
             conn.execute(
@@ -368,6 +375,27 @@ def accept_into_record(
         except Exception:
             conn.rollback()
             raise
+
+
+def _check_origin(conn: sqlite3.Connection, proposal_id: str, record: AcceptedRecord) -> None:
+    """A record this finding created must have its origin; a reused record must not."""
+    origin = active_origin(conn, proposal_id)
+    if record.reused:
+        if origin is not None:
+            raise ValueError(
+                "This finding already created a record of its own. Run the discovery "
+                "reconciliation before accepting it into an existing record."
+            )
+        return
+    if (
+        origin is None
+        or origin.record_id != record.record_id
+        or origin.destination_kind != record.kind
+    ):
+        raise ValueError(
+            "The record for this finding has no recorded origin. Accept the finding again; if "
+            "the problem repeats, run the discovery reconciliation."
+        )
 
 
 def _link_source(conn: sqlite3.Connection, link: DeliverableLink) -> None:

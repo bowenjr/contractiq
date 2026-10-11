@@ -68,6 +68,12 @@ from core.deliverable_discovery_llm import (
     ProposedCandidate,
     analyse_units,
 )
+from core.deliverable_discovery_origins import (
+    Origin,
+    claim_origin,
+    release_origin,
+    set_origin_record,
+)
 from core.deliverable_discovery_outcomes import (
     DiscoveryOutcome,
     FileAnalysisEvidence,
@@ -556,13 +562,28 @@ class DeliverableDiscoveryService:
                 due_date,
                 date_basis,
             )
-            record = self.destinations.register(
-                kind,
-                facts,
-                reviewer,
-                decision_input.package_id,
-                reuse_by_title=not has_collision,
+            # Claim the right to create this finding's record before any register write: two
+            # simultaneous or repeated accepts can then never create two records (Stage 2.1 D).
+            origin = claim_origin(
+                self.repository._conn,
+                self.repository._audit,
+                proposal_id=decision_input.proposal_id,
+                bid_id=bid_id,
+                kind=kind,
+                actor=reviewer,
             )
+            try:
+                record = self.destinations.register(
+                    kind,
+                    facts,
+                    reviewer,
+                    decision_input.package_id,
+                    reuse_by_title=not has_collision,
+                )
+            except BaseException:
+                self._release_unwritten_claim(origin, reviewer)
+                raise
+            self._settle_origin(origin, record, reviewer)
             source_link = None
         event = ProposalReviewEvent(
             proposal_id=decision_input.proposal_id,
@@ -585,6 +606,44 @@ class DeliverableDiscoveryService:
             "record_id": record.record_id,
             "reused": record.reused,
         }
+
+    def _release_unwritten_claim(self, origin: Origin, actor: str) -> None:
+        """After an in-process failure, free a claim that wrote no record so a retry can proceed.
+
+        A claim whose record was already attached stays: the retry reuses that record. A request
+        that dies without running this leaves the claim to expire after the lease.
+        """
+        if origin.record_id is not None:
+            return
+        try:
+            release_origin(
+                self.repository._conn,
+                self.repository._audit,
+                origin,
+                actor,
+                "record creation failed in this request",
+            )
+        except ValueError:
+            pass
+
+    def _settle_origin(self, origin: Origin, record: AcceptedRecord, actor: str) -> None:
+        """Attach the created record to its claim, or free the claim for a reused record."""
+        if record.reused:
+            if origin.record_id is not None:
+                raise ValueError(
+                    "This finding already created a record, but the register now points at a "
+                    "different one. Run the discovery reconciliation to inspect it."
+                )
+            self._release_unwritten_claim(origin, actor)
+            return
+        set_origin_record(
+            self.repository._conn,
+            self.repository._audit,
+            origin,
+            record.record_id,
+            actor,
+            record.detail,
+        )
 
     def promote_source_to_controlled_version(
         self,
