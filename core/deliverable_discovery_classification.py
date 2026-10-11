@@ -458,73 +458,81 @@ def append_citations_transaction(
     with conn_factory() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            proposal = conn.execute(
-                "SELECT bid_id FROM deliverable_discovery_proposals WHERE proposal_id=?",
-                (proposal_id,),
-            ).fetchone()
-            if proposal is None:
-                raise ValueError("proposal not found; append citations to an existing proposal")
-            bid_id = str(proposal["bid_id"])
-            appended: list[str] = []
-            for citation in citations:
-                identity_column = (
-                    "document_version_id"
-                    if citation.document_version_id is not None
-                    else "received_file_id"
-                )
-                identity = citation.document_version_id or citation.received_file_id
-                extraction = conn.execute(
-                    f"""SELECT text_excerpt FROM deliverable_discovery_extractions_v2
-                    WHERE bid_id=? AND {identity_column}=? AND locator=? AND status='OK'""",
-                    (bid_id, identity, citation.locator),
-                ).fetchone()
-                if extraction is None:
-                    raise ValueError("citation is not backed by a readable extraction for this Bid")
-                # Evidence comes from the stored passage, never from the caller's text: a quotation
-                # that is not found word for word is dropped, so it is never shown as verified.
-                passage = str(extraction["text_excerpt"])
-                span = locate_quote(passage, citation.quote)
-                verified_quote = passage[span[0] : span[1]] if span else None
-                verified_excerpt = evidence_window(passage, span) if span else passage[:2000]
-                duplicate = conn.execute(
-                    f"""SELECT 1 FROM deliverable_discovery_proposal_sources_v2
-                    WHERE proposal_id=? AND {identity_column}=? AND locator=?""",
-                    (proposal_id, identity, citation.locator),
-                ).fetchone()
-                if duplicate is not None:
-                    continue
-                conn.execute(
-                    """INSERT INTO deliverable_discovery_proposal_sources_v2(
-                    citation_id,proposal_id,document_version_id,received_file_id,
-                    locator_type,locator,excerpt) VALUES (?,?,?,?,?,?,?)""",
-                    (
-                        citation.citation_id,
-                        proposal_id,
-                        citation.document_version_id,
-                        citation.received_file_id,
-                        citation.locator_type.value,
-                        citation.locator,
-                        verified_excerpt,
-                    ),
-                )
-                if verified_quote:
-                    conn.execute(
-                        f"INSERT INTO {QUOTES_TABLE}(citation_id,proposal_id,quote) VALUES (?,?,?)",
-                        (citation.citation_id, proposal_id, verified_quote),
-                    )
-                appended.append(citation.citation_id)
-            if appended:
-                _link_sources_to_deliverable(conn, bid_id, proposal_id, appended)
-                audit(
-                    conn,
-                    bid_id,
-                    "system",
-                    "deliverable_discovery_citation_appended",
-                    json.dumps(
-                        {"proposal_id": proposal_id, "citation_ids": appended}, sort_keys=True
-                    ),
-                )
+            append_citations_in_transaction(conn, audit, proposal_id, citations)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
+
+
+def append_citations_in_transaction(
+    conn: sqlite3.Connection,
+    audit: AuditWriter,
+    proposal_id: str,
+    citations: Iterable[SourceCitation],
+) -> None:
+    """Append citations using the caller's open transaction."""
+    proposal = conn.execute(
+        "SELECT bid_id FROM deliverable_discovery_proposals WHERE proposal_id=?",
+        (proposal_id,),
+    ).fetchone()
+    if proposal is None:
+        raise ValueError("proposal not found; append citations to an existing proposal")
+    bid_id = str(proposal["bid_id"])
+    appended: list[str] = []
+    for citation in citations:
+        identity_column = (
+            "document_version_id"
+            if citation.document_version_id is not None
+            else "received_file_id"
+        )
+        identity = citation.document_version_id or citation.received_file_id
+        extraction = conn.execute(
+            f"""SELECT text_excerpt FROM deliverable_discovery_extractions_v2
+            WHERE bid_id=? AND {identity_column}=? AND locator=? AND status='OK'""",
+            (bid_id, identity, citation.locator),
+        ).fetchone()
+        if extraction is None:
+            raise ValueError("citation is not backed by a readable extraction for this Bid")
+        # Evidence comes from the stored passage, never from the caller's text: a quotation
+        # that is not found word for word is dropped, so it is never shown as verified.
+        passage = str(extraction["text_excerpt"])
+        span = locate_quote(passage, citation.quote)
+        verified_quote = passage[span[0] : span[1]] if span else None
+        verified_excerpt = evidence_window(passage, span) if span else passage[:2000]
+        duplicate = conn.execute(
+            f"""SELECT 1 FROM deliverable_discovery_proposal_sources_v2
+            WHERE proposal_id=? AND {identity_column}=? AND locator=?""",
+            (proposal_id, identity, citation.locator),
+        ).fetchone()
+        if duplicate is not None:
+            continue
+        conn.execute(
+            """INSERT INTO deliverable_discovery_proposal_sources_v2(
+            citation_id,proposal_id,document_version_id,received_file_id,
+            locator_type,locator,excerpt) VALUES (?,?,?,?,?,?,?)""",
+            (
+                citation.citation_id,
+                proposal_id,
+                citation.document_version_id,
+                citation.received_file_id,
+                citation.locator_type.value,
+                citation.locator,
+                verified_excerpt,
+            ),
+        )
+        if verified_quote:
+            conn.execute(
+                f"INSERT INTO {QUOTES_TABLE}(citation_id,proposal_id,quote) VALUES (?,?,?)",
+                (citation.citation_id, proposal_id, verified_quote),
+            )
+        appended.append(citation.citation_id)
+    if appended:
+        _link_sources_to_deliverable(conn, bid_id, proposal_id, appended)
+        audit(
+            conn,
+            bid_id,
+            "system",
+            "deliverable_discovery_citation_appended",
+            json.dumps({"proposal_id": proposal_id, "citation_ids": appended}, sort_keys=True),
+        )

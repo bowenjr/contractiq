@@ -484,7 +484,7 @@ class DiscoveryJobRunner:
             started_at=started,
             completed_at=completed,
         )
-        finalized = self.jobs.finalize_run(
+        self.jobs.finalize_run(
             job_id,
             self.owner,
             run,
@@ -493,13 +493,9 @@ class DiscoveryJobRunner:
             run_outcome,
             file_outcomes,
             cancelled,
-            collisions,
+            collisions=collisions,
+            appends=appends,
         )
-        if finalized:
-            # A re-found obligation keeps every document that supports it. Appending is
-            # idempotent per (file, locator), so a repeat after a restart adds nothing.
-            for existing_id, sources in appends:
-                self.service.repository.append_citations(existing_id, list(sources))
 
     def _endpoint_message(self) -> str:
         authority = "configured host:port"

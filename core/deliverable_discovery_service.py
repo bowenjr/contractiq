@@ -370,9 +370,8 @@ class DeliverableDiscoveryService:
             run_outcome=run_outcome,
             file_outcomes=file_outcomes,
             collisions=collisions,
+            appends=appends,
         )
-        for existing_id, sources in appends:
-            self.repository.append_citations(existing_id, list(sources))
         return self.repository.existing_run(bid_id, operation_id) or run.model_dump(mode="json")
 
     # -- review queue --------------------------------------------------------------------

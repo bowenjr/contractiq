@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import uuid4
 
 from core.database import Database
-from core.deliverable_discovery import DeliverableProposal, DiscoveryRun, ExtractionUnit
-from core.deliverable_discovery_classification import insert_proposal_classification
+from core.deliverable_discovery import (
+    DeliverableProposal,
+    DiscoveryRun,
+    ExtractionUnit,
+    SourceCitation,
+)
+from core.deliverable_discovery_classification import (
+    append_citations_in_transaction,
+    insert_proposal_classification,
+)
 from core.deliverable_discovery_collisions import DiscoveryCollision
 from core.deliverable_discovery_evidence import insert_proposal_evidence
 from core.deliverable_discovery_migrations import (
@@ -534,6 +542,7 @@ class DeliverableDiscoveryJobRepository:
         file_outcomes: list[DiscoveryFileOutcome],
         cancelled: bool,
         collisions: list[DiscoveryCollision] | None = None,
+        appends: Sequence[tuple[str, Iterable[SourceCitation]]] | None = None,
     ) -> bool:
         """Write immutable run facts and terminal job state in one transaction."""
         with self._conn() as conn:
@@ -552,6 +561,8 @@ class DeliverableDiscoveryJobRepository:
                 file_outcomes,
                 collisions or [],
             )
+            for existing_id, citations in appends or ():
+                append_citations_in_transaction(conn, self._audit, existing_id, citations)
             # A cancel can land after the runner last looked; the locked row is the authority.
             cancelled = cancelled or job["state"] == "CANCEL_REQUESTED"
             terminal = "CANCELLED" if cancelled else run_outcome.outcome.value
@@ -588,6 +599,21 @@ class DeliverableDiscoveryJobRepository:
             )
             conn.commit()
             return True
+
+    @staticmethod
+    def _audit(conn: sqlite3.Connection, bid_id: str, actor: str, action: str, detail: str) -> None:
+        conn.execute(
+            """INSERT INTO audit_log(entry_id,bid_id,actor,action,detail,timestamp)
+            VALUES(?,?,?,?,?,?)""",
+            (
+                f"AUD-{uuid4().hex}",
+                bid_id,
+                actor,
+                action,
+                detail,
+                datetime.now().astimezone().isoformat(),
+            ),
+        )
 
     @staticmethod
     def _insert_run(

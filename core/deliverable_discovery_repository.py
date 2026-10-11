@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -21,6 +22,7 @@ from core.deliverable_discovery import (
     SourcePromotion,
 )
 from core.deliverable_discovery_classification import (
+    append_citations_in_transaction,
     append_citations_transaction,
     attach_classification,
     ensure_classification_tables,
@@ -483,6 +485,7 @@ class DeliverableDiscoveryRepository:
         run_outcome: DiscoveryRunOutcome | None = None,
         file_outcomes: list[DiscoveryFileOutcome] | None = None,
         collisions: list[DiscoveryCollision] | None = None,
+        appends: Sequence[tuple[str, Iterable[SourceCitation]]] | None = None,
     ) -> None:
         """Persist run, extraction, proposal and optional outcome facts atomically."""
         with self._conn() as conn:
@@ -571,6 +574,8 @@ class DeliverableDiscoveryRepository:
                         )
                     insert_proposal_evidence(conn, proposal)
                     insert_proposal_classification(conn, proposal)
+                for existing_id, citations in appends or ():
+                    append_citations_in_transaction(conn, self._audit, existing_id, citations)
                 for collision in collisions or []:
                     record_collision(conn, collision, run.completed_at)
                     self._audit(
