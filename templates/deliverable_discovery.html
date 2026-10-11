@@ -8,7 +8,6 @@
 <div class="page-heading"><div><p class="eyebrow">Pre-award Bid submissions</p><h1>Find required Bid submissions</h1><p class="muted">Proposed deliverables extracted from the files you Included for analysis; a confirmed Bid Basis is not required. Accepted rows become authoritative deliverables in the existing register; rejected or deferred rows remain review evidence only and never affect readiness.</p></div></div>
 
 {% if run_error %}<div class="error" role="alert">{{ run_error }}</div>{% endif %}
-{% if decide_error %}<div class="error" role="alert">{{ decide_error }}</div>{% endif %}
 {% if promotion_error %}<div class="error" role="alert">{{ promotion_error }}</div>{% endif %}
 {% if promotion_result %}<p>Source promoted to controlled version {{ promotion_result.document_version_id }}.</p>{% endif %}
 

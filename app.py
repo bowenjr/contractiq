@@ -5633,18 +5633,12 @@ def _landing_lifecycle(queue: list[dict[str, Any]], requested: str) -> str:
 
 def _review_questions(counts: Mapping[str, Mapping[str, int]]) -> list[dict[str, object]]:
     """The five questions a bid manager asks, each with what is left to decide."""
-    needs = {key: counts[key]["pending"] for key in ("review", "cond")}
     return [
         {"question": "Include with the bid", "tab": "bid", **counts["bid"]},
         {"question": "Obtain from the manufacturer", "tab": "mfr", **counts["mfr"]},
         {"question": "Clarify or arrange before bidding", "tab": "pre", **counts["pre"]},
         {"question": "Owed after award", "tab": "post", **counts["post"]},
-        {
-            "question": "Still needs review",
-            "tab": "review",
-            "pending": needs["review"] + needs["cond"],
-            "total": counts["review"]["total"] + counts["cond"]["total"],
-        },
+        {"question": "Still needs review", "tab": "attention", **counts["attention"]},
     ]
 
 
@@ -5961,7 +5955,8 @@ def _parse_review_request(form: Mapping[str, object] | Any) -> list[ProposalDeci
         )
     if decision is not ProposalReviewDecision.ACCEPTED and not rationale:
         raise ValueError(
-            f"A reason is required to {decision.value.lower().removesuffix('ed')}"
+            "A reason is required to "
+            f"{'reject' if decision is ProposalReviewDecision.REJECTED else 'defer'}"
             " findings. Enter one in the reason box."
         )
     due: date | None = None
@@ -6031,6 +6026,12 @@ def _destination_summary(results: list[dict[str, Any]]) -> str:
     return (", ".join(parts) + ".") if parts else ""
 
 
+def _lifecycle_from_tab_or_value(value: str) -> str:
+    """A lifecycle enum value from either that value or its tab key (``bid``, ``post`` ...)."""
+    by_key = {key: lifecycle for key, _, lifecycle in LIFECYCLE_TABS}
+    return by_key.get(value.strip().lower(), value.strip().upper())
+
+
 @app.post("/bids/{bid_id}/deliverable-discovery/reclassify", response_class=HTMLResponse)
 async def deliverable_discovery_reclassify(request: Request, bid_id: str) -> Response:
     """Move findings to another lifecycle category, with a reason, as a recorded decision."""
@@ -6051,9 +6052,20 @@ async def deliverable_discovery_reclassify(request: Request, bid_id: str) -> Res
     elif not reason:
         error = "A reason is required to move findings. Enter one in the reason box."
     else:
-        results = deliverable_discovery_repository.reclassify(
-            bid_id, proposal_ids, lifecycle, reason, LOCAL_ACTOR, applies_at=applies_at
-        )
+        try:
+            results = deliverable_discovery_repository.reclassify(
+                bid_id,
+                proposal_ids,
+                _lifecycle_from_tab_or_value(lifecycle),
+                reason,
+                LOCAL_ACTOR,
+                applies_at=applies_at,
+            )
+        except ValueError as exc:
+            error = (
+                f"The findings were not moved: {exc}. Choose a category and, for a conditional "
+                "item, whether it applies with the bid or after award."
+            )
     failures = [r for r in results if "error" in r]
     summary = (
         None if error else f"{len(results) - len(failures)} of {len(results)} finding(s) moved."
@@ -6076,7 +6088,7 @@ async def deliverable_discovery_decide(request: Request, bid_id: str) -> Respons
         decisions = _parse_review_request(form)
         results = deliverable_discovery_service.decide(bid_id, decisions, LOCAL_ACTOR)
     except ValueError as exc:
-        context = _deliverable_discovery_context(bid_id, run_error=str(exc), **view)
+        context = _deliverable_discovery_context(bid_id, decide_error=str(exc), **view)
         return render("deliverable_discovery.html", status_code=422, **context)
     failures = [r for r in results if "error" in r]
     done = len(results) - len(failures)

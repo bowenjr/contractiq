@@ -12,6 +12,7 @@ visible in the review queue's evidence trail regardless.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,6 +33,7 @@ from core.requirement_lifecycle import (
     ItemKind,
     ProposalClassification,
     RequirementStatus,
+    _contains,
 )
 from core.vddr_table import interpret_vddr_unit
 
@@ -39,7 +41,7 @@ SYSTEM_PROMPT = """You analyse one passage from a customer RFP/tender package fo
 
 - PRE_BID_ACTION: something the bidder must do, ask, confirm or arrange BEFORE submitting the proposal (acknowledge the RFP, attend a meeting, submit a clarification, register).
 - BID_RETURNABLE: a form, schedule, declaration, document or other item that must be submitted WITH the proposal.
-- MANUFACTURER_INPUT: information or documents the bidder must obtain from the manufacturer/supplier to prepare or validate the quotation (technical data, completed datasheet fields, manufacturer price and delivery, supplier qualifications/exceptions).
+- MANUFACTURER_INPUT: information or documents the bidder must obtain from the manufacturer/supplier to prepare or validate the quotation (technical data, completed datasheet fields, manufacturer price and delivery, supplier qualifications/exceptions). Information about the bidder itself (its insurance, bonds, financial standing, references, company or signatory details) is not manufacturer input; it belongs in the form the bidder submits.
 - POST_AWARD: documentation, tests, drawings, records or activities required only after purchase order or contract award (engineering drawings, manufacturing and inspection documents, FAT records, final data books, warranties, bonds).
 - CONDITIONAL: required or optional only under a stated circumstance; fill condition_text and applies_at (WITH_BID or POST_AWARD).
 - NOT_APPLICABLE: template or boilerplate content the passage itself shows does not apply.
@@ -51,7 +53,7 @@ Rules:
 - A form, schedule or datasheet the bidder must complete is ONE requirement (BID_RETURNABLE); never list its individual rows, fields or questions as separate requirements.
 - When completing such a form needs data that only the manufacturer can supply (technical or datasheet values, equipment price, delivery or lead time, test or quality certificates, supplier qualifications or exceptions), ALSO return one separate MANUFACTURER_INPUT requirement for each related group of that data (for example "Transformer technical datasheet values" or "Manufacturer price and delivery"), never one per field.
 - If a passage has both a bid-stage part and a post-award part, return two separate requirements with the same title.
-- Do not list general descriptions, definitions, customer obligations, technical performance limits or contract rights as requirements.
+- Do not list general descriptions, definitions, customer obligations, technical performance limits or contract rights as requirements. A right or option the passage gives the bidder (for example "may withdraw" or "may submit a new proposal") is not a requirement; list only what the passage obliges the bidder to do.
 - Never invent a requirement, a responsible party, a date or a deadline. responsible_party is only a party the passage names, otherwise null.
 - timing_text is the exact wording the passage uses for a date, time or timing rule (for example "3 Business Days Before RFP Closing Date"), copied word for word, otherwise null. Never write your own timing summary.
 - due_date is null unless the passage prints an explicit calendar date (YYYY-MM-DD). Never calculate or guess a date.
@@ -116,6 +118,7 @@ DISCOVERY_REQUEST_OPTIONS: dict[str, object] = {
         },
     },
 }
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 
 
 class LLMClientProtocol(Protocol):
@@ -251,7 +254,7 @@ def _attempt_completion(
                 f"{TRUNCATED_REASON_PREFIX}the model reply reached the "
                 f"{allowance}-token output limit before the answer was complete",
             )
-        text = reply.content
+        text = _THINK_BLOCK_RE.sub("", reply.content)
         start = text.find("{")
         end = text.rfind("}")
         try:
@@ -273,7 +276,7 @@ def _attempt_completion(
             "prompt": prompt,
             "system_prompt": system_prompt,
             "temperature": 0.05,
-            "max_tokens": 1024,
+            "max_tokens": allowance,
             "context_label": context_label,
         }
         if timeout is not None:
@@ -472,7 +475,7 @@ def _candidate_from_item(
             requested_format=None,
             requested_recipient=None,
             proposed_owner=None,
-            due_date_text=raw.timing_text,
+            due_date_text=(raw.timing_text if _contains(passage_text, raw.timing_text) else None),
             source_quote=raw.source_quote,
             description=classification.description or None,
             classification=classification,

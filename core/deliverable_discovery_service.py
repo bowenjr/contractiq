@@ -373,9 +373,11 @@ class DeliverableDiscoveryService:
                 row["criticality"] == "CONDITIONAL" and bool(row["condition_text"])
             )
             row["needs_criticality"] = False
+            row["accept_goes_to"] = ""
             if row["classification"] is None:
                 row["acceptable"] = True
                 row["accept_block_reason"] = ""
+                row["accept_goes_to"] = "Creates a deliverable due with the bid"
             else:
                 classification = ProposalClassification.model_validate(row["classification"])
                 # A reviewer can settle an unclear "how firmly required" while accepting, so it
@@ -386,6 +388,7 @@ class DeliverableDiscoveryService:
                 row["needs_criticality"] = acceptable and needs_criticality(
                     classification, row["condition_text"]
                 )
+                row["accept_goes_to"] = _accept_consequence(classification)
         return rows
 
     def decide(
@@ -997,6 +1000,28 @@ def _candidate_rank(candidate: ProposedCandidate) -> int:
     return _CONFIDENCE_RANK[candidate.classification.confidence]
 
 
+_ACCEPT_CONSEQUENCE = {
+    DestinationKind.VENDOR_DOCUMENT: "Adds a requirement to the manufacturer document register",
+    DestinationKind.COMMERCIAL_POSITION: "Adds this as evidence on a commercial position",
+    DestinationKind.WORK_ITEM: "Creates an action in My Work",
+}
+
+
+def _accept_consequence(classification: ProposalClassification) -> str:
+    """What Accept will do, in plain words, shown beside the button."""
+    kind = destination_for(classification)
+    if kind is None:
+        return ""
+    if kind is DestinationKind.DELIVERABLE:
+        phase = deliverable_phase(classification)
+        return (
+            "Creates a deliverable due after award"
+            if phase is LifecyclePhase.POST_AWARD
+            else "Creates a deliverable due with the bid"
+        )
+    return _ACCEPT_CONSEQUENCE[kind]
+
+
 def split_known_duplicates(
     proposals: list[DeliverableProposal], known: Mapping[str, str]
 ) -> tuple[list[DeliverableProposal], list[tuple[str, tuple[SourceCitation, ...]]]]:
@@ -1063,22 +1088,27 @@ def _consolidate(
         first = max(group, key=_candidate_rank)
         sources = []
         dates = []
+        cited: set[tuple[str, str, str]] = set()
         for candidate in group:
             unit = extraction_lookup.get(candidate.extraction_id)
             if unit is None:
                 continue
             passage = unit.text_excerpt
             span = locate_quote(passage, candidate.source_quote)
-            sources.append(
-                SourceCitation(
-                    document_version_id=unit.document_version_id,
-                    received_file_id=unit.received_file_id,
-                    locator_type=unit.locator_type,
-                    locator=unit.locator,
-                    excerpt=evidence_window(passage, span) if span else passage[:2000],
-                    quote=passage[span[0] : span[1]] if span else None,
+            # One citation per (file, locator), the rule ``append_citations`` applies across runs.
+            citation_key = (unit.received_file_id, unit.locator_type, unit.locator)
+            if citation_key not in cited:
+                cited.add(citation_key)
+                sources.append(
+                    SourceCitation(
+                        document_version_id=unit.document_version_id,
+                        received_file_id=unit.received_file_id,
+                        locator_type=unit.locator_type,
+                        locator=unit.locator,
+                        excerpt=evidence_window(passage, span) if span else passage[:2000],
+                        quote=passage[span[0] : span[1]] if span else None,
+                    )
                 )
-            )
             dates.append(
                 classify_due_date(
                     passage,

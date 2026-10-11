@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from core.date_integrity import evidence_window, locate_quote
 from core.deliverable_discovery import (
     DeliverableProposal,
     ProposalReviewDecision,
@@ -272,6 +273,11 @@ def reclassify_proposals(
                         raise ValueError("proposal not found in this Bid")
                     effective_row: dict[str, Any] = {"proposal_id": proposal_id}
                     attach_classification(conn, effective_row)
+                    if effective_row.get("legacy"):
+                        raise ValueError(
+                            "This finding was recorded before lifecycle classification and "
+                            "cannot be moved. Accept it as a deliverable, or reject it."
+                        )
                     effective_item_kind = (
                         item_kind_value.value
                         if item_kind_value is not None
@@ -468,12 +474,18 @@ def append_citations_transaction(
                 )
                 identity = citation.document_version_id or citation.received_file_id
                 extraction = conn.execute(
-                    f"""SELECT 1 FROM deliverable_discovery_extractions_v2
+                    f"""SELECT text_excerpt FROM deliverable_discovery_extractions_v2
                     WHERE bid_id=? AND {identity_column}=? AND locator=? AND status='OK'""",
                     (bid_id, identity, citation.locator),
                 ).fetchone()
                 if extraction is None:
                     raise ValueError("citation is not backed by a readable extraction for this Bid")
+                # Evidence comes from the stored passage, never from the caller's text: a quotation
+                # that is not found word for word is dropped, so it is never shown as verified.
+                passage = str(extraction["text_excerpt"])
+                span = locate_quote(passage, citation.quote)
+                verified_quote = passage[span[0] : span[1]] if span else None
+                verified_excerpt = evidence_window(passage, span) if span else passage[:2000]
                 duplicate = conn.execute(
                     f"""SELECT 1 FROM deliverable_discovery_proposal_sources_v2
                     WHERE proposal_id=? AND {identity_column}=? AND locator=?""",
@@ -492,13 +504,13 @@ def append_citations_transaction(
                         citation.received_file_id,
                         citation.locator_type.value,
                         citation.locator,
-                        citation.excerpt,
+                        verified_excerpt,
                     ),
                 )
-                if citation.quote:
+                if verified_quote:
                     conn.execute(
                         f"INSERT INTO {QUOTES_TABLE}(citation_id,proposal_id,quote) VALUES (?,?,?)",
-                        (citation.citation_id, proposal_id, citation.quote),
+                        (citation.citation_id, proposal_id, verified_quote),
                     )
                 appended.append(citation.citation_id)
             if appended:

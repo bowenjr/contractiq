@@ -358,3 +358,18 @@ the validated prompt; no `git commit`.
 * `append_citations` adds a `SOURCE_RECEIVED_FILE` link to an already accepted Deliverable in the same
   transaction; other registers keep their original source.
 * Export/import of the Work-ChatGPT package is unchanged (legacy shape, no lifecycle).
+
+## 7. Acceptance changes (CIQ-STAGE2-ACCEPTANCE)
+
+* The "verbatim, do not reword" prompt rule applied to the build. Acceptance deliberately added two sentences to
+  `docs/tasks/CIQ-STAGE2-prompt.txt` and `SYSTEM_PROMPT` (kept identical): the MANUFACTURER_INPUT bullet now says the
+  bidder's own information (insurance, bonds, financial standing, references, company or signatory details) is not
+  manufacturer input, and the "Do not list" rule now says a right or option the passage gives the bidder is not a
+  requirement. Reason: a bid-withdrawal right was returned as a pre-bid action and Schedule C insurance details as
+  manufacturer input.
+* Guards G7 and G8 in `guard_classification` back those two sentences deterministically. They only change a finding's
+  lifecycle to NEEDS_REVIEW (the model's view is kept in `model_lifecycle`, the finding is retained, G1/G4/G5 reasons
+  win when they already applied).
+* Other corrections: G2 timing guard applied to the candidate; legacy-client `max_tokens` follows the retry allowance;
+  complete `<think>` blocks are stripped before parsing; VDDR header names are canonicalised and a row longer than
+  the quote limit keeps a bounded verified quote; same-run citations are de-duplicated by (file, locator).

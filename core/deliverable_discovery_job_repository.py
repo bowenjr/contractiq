@@ -536,6 +536,8 @@ class DeliverableDiscoveryJobRepository:
             if job["lease_owner"] != owner or job["state"] not in ("RUNNING", "CANCEL_REQUESTED"):
                 return False
             self._insert_run(conn, run, extractions, proposals, run_outcome, file_outcomes)
+            # A cancel can land after the runner last looked; the locked row is the authority.
+            cancelled = cancelled or job["state"] == "CANCEL_REQUESTED"
             terminal = "CANCELLED" if cancelled else run_outcome.outcome.value
             updated = conn.execute(
                 """UPDATE deliverable_discovery_jobs

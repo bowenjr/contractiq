@@ -40,6 +40,23 @@ def find_vddr_header(rows: Sequence[Sequence[object]]) -> int | None:
     return None
 
 
+_KNOWN_NAMES = {
+    name.casefold(): name
+    for name in (
+        "DESCRIPTION",
+        "Required?",
+        "TENDER QTY",
+        "COMMENTS",
+        *(f"{group} {unit}" for group in _POST_AWARD_GROUPS for unit in ("QTY", "DUE")),
+    )
+}
+
+
+def _canonical_name(name: str) -> str:
+    """The spelling the interpreter reads, so a header written ``Tender Qty`` still works."""
+    return _KNOWN_NAMES.get(name.casefold(), name)
+
+
 def expand_header(header: Sequence[object]) -> list[str]:
     """Header names; a ``REVIEW QTY DUE`` cell plus a blank one becomes QTY and DUE columns."""
     names: list[str] = []
@@ -59,6 +76,7 @@ def expand_header(header: Sequence[object]) -> list[str]:
         else:
             names.append(f"COL{index + 1}")
         index += 1
+    names = [_canonical_name(name) for name in names]
     seen: dict[str, int] = {}
     unique: list[str] = []
     for name in names:
@@ -153,7 +171,7 @@ def interpret_row_line(line: str) -> RowReading:
     for part in parts[1:]:
         key, separator, value = part.partition("=")
         if separator:
-            fields[key] = value
+            fields[_canonical_name(key)] = value
     post_award = any(
         _positive(fields.get(f"{group} QTY")) > 0 or bool(fields.get(f"{group} DUE"))
         for group in _POST_AWARD_GROUPS
@@ -167,6 +185,22 @@ def interpret_row_line(line: str) -> RowReading:
         timing=fields.get("TIMING", ""),
         fields=fields,
     )
+
+
+MAX_QUOTE_CHARS = 1900
+
+
+def _bounded_quote(line: str) -> str:
+    """The rendered row, or its first words when it is too long to store as a quotation.
+
+    The cut is a literal prefix of the row (cut at a word boundary), so it is still found word for
+    word in the persisted passage; the interpretation above always reads the whole row.
+    """
+    if len(line) <= MAX_QUOTE_CHARS:
+        return line
+    cut = line[:MAX_QUOTE_CHARS]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > MAX_QUOTE_CHARS // 2 else cut).rstrip(" |")
 
 
 def _finding(
@@ -195,7 +229,7 @@ def _finding(
         "confidence": "HIGH",
         "review_reason": reason,
         "source_section": f"{SECTION_NAME}, item {reading.code}",
-        "source_quote": line,
+        "source_quote": _bounded_quote(line),
     }
 
 

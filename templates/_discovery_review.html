@@ -2,6 +2,7 @@
   <h2>Requirements found in the package</h2>
   {% macro view_fields() %}<input type="hidden" name="status" value="{{ review.status }}"><input type="hidden" name="document" value="{{ review.document }}"><input type="hidden" name="page" value="{{ review.page }}"><input type="hidden" name="lifecycle" value="{{ review.lifecycle }}"><input type="hidden" name="group" value="{{ review.group }}">{% endmacro %}
   {% macro qs(status=review.status, lifecycle=review.lifecycle, document=review.document, group=review.group, page=1) %}?lifecycle={{ lifecycle }}&status={{ status }}{% if document %}&document={{ document|urlencode }}{% endif %}&group={{ group }}{% if page > 1 %}&page={{ page }}{% endif %}#proposals{% endmacro %}
+  {% if decide_error is defined and decide_error %}<div class="error" role="alert">{{ decide_error }}</div>{% endif %}
   {% if decide_summary is defined and decide_summary %}<div class="notice" role="status">{{ decide_summary }}</div>{% endif %}
 
   <ul class="question-strip" aria-label="What is left to decide">
@@ -34,7 +35,7 @@
   </form>
   <p class="muted">{{ review.matching }} finding(s) shown{% if review.page_count > 1 %} — page {{ review.page }} of {{ review.page_count }}{% endif %}.</p>
 
-  <form id="bulk-review" method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">{{ view_fields() }}</form>
+  <form id="bulk-review" method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide#proposals">{{ view_fields() }}</form>
   {% if review.status in ('pending', 'all') %}
   <div class="bulk-bar">
     <label><input type="checkbox" onclick="document.querySelectorAll('input[name=proposal_id][form=bulk-review]').forEach(function(b){b.checked=this.checked}.bind(this))"> Select all on this page</label>
@@ -44,7 +45,7 @@
     <button type="submit" form="bulk-review" name="bulk_action" value="defer">Defer selected</button>
     <label>Move selected to <select name="target_lifecycle" form="bulk-review">{% for opt in lifecycle_options %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}</select></label>
     <label>If conditional, applies <select name="applies_at" form="bulk-review"><option value="">—</option><option value="WITH_BID">with the bid</option><option value="POST_AWARD">after award</option></select></label>
-    <button type="submit" form="bulk-review" formaction="/bids/{{ bid.bid_id }}/deliverable-discovery/reclassify">Move selected</button>
+    <button type="submit" form="bulk-review" formaction="/bids/{{ bid.bid_id }}/deliverable-discovery/reclassify#proposals">Move selected</button>
   </div>
   {% endif %}
 
@@ -80,7 +81,7 @@
           {% else %}Not stated{% endif %}</td>
         <td>
           {% if row.current_decision == 'PENDING' %}
-          <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">
+          <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide#proposals">
             {{ view_fields() }}
             <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
             <input type="hidden" name="action" value="accepted">
@@ -89,10 +90,10 @@
             {% if row.lifecycle == 'MANUFACTURER_INPUT' and manufacturer_packages|length > 1 %}<label>Manufacturer package <select name="package_id"><option value="">Choose…</option>{% for pkg in manufacturer_packages %}<option value="{{ pkg.package_id }}">{{ pkg.package_code }} — {{ pkg.proposed_manufacturer }}</option>{% endfor %}</select></label>{% endif %}
             {% set blocked = (not row.unambiguous) if row.legacy else (not row.acceptable) %}
             <button type="submit" {% if blocked %}disabled title="{{ 'Resolve UNCLEAR criticality before accepting' if row.legacy else row.accept_block_reason }}"{% endif %}>Accept</button>
-            {% if blocked and not row.legacy %}<div class="muted">{{ row.accept_block_reason }}</div>{% endif %}
+            {% if blocked and not row.legacy %}<div class="muted">{{ row.accept_block_reason }}</div>{% elif row.accept_goes_to %}<div class="muted">{{ row.accept_goes_to }}</div>{% endif %}
           </form>
           <details><summary>Reject / defer</summary>
-            <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide">
+            <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/decide#proposals">
               {{ view_fields() }}
               <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
               <label>Decision<select name="action"><option value="rejected">Reject</option><option value="deferred">Defer</option></select></label>
@@ -100,8 +101,9 @@
               <button type="submit">Confirm</button>
             </form>
           </details>
+          {% if not row.legacy %}
           <details><summary>Move to another category</summary>
-            <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/reclassify">
+            <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/reclassify#proposals">
               {{ view_fields() }}
               <input type="hidden" name="proposal_id" value="{{ row.proposal_id }}">
               <label>Move to <select name="target_lifecycle">{% for opt in lifecycle_options %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}</select></label>
@@ -110,10 +112,11 @@
               <button type="submit">Move</button>
             </form>
           </details>
+          {% endif %}
           {% else %}
           {{ row.current_decision|title }}
-          {% if row.destination %}<div class="muted">{% if row.destination.reused %}Linked to existing{% else %}Created{% endif %}: {{ row.destination.destination_kind|replace('_',' ')|lower }}{% if row.destination.destination_kind == 'DELIVERABLE' %} <a href="/deliverables/{{ row.destination.record_id }}">open</a>{% endif %}</div>{% endif %}
-          {% if row.current_decision == 'ACCEPTED' %}{% for source in row.sources %}{% if source.received_file_id and source.citation_id not in promoted_citation_ids %}
+          {% if row.destination %}{% set kind = row.destination.destination_kind %}<div class="muted">{% if row.destination.reused %}Linked to existing{% else %}Created{% endif %}: {{ {'DELIVERABLE': 'deliverable', 'VENDOR_DOCUMENT': 'manufacturer requirement', 'COMMERCIAL_POSITION': 'evidence on a commercial position', 'WORK_ITEM': 'work item'}.get(kind, kind|replace('_',' ')|lower) }} — <a href="{% if kind == 'DELIVERABLE' %}/deliverables/{{ row.destination.record_id }}{% elif kind == 'WORK_ITEM' %}/my-work/{{ row.destination.record_id }}{% elif kind == 'VENDOR_DOCUMENT' %}/vendor-documents/register{% else %}/commercial/{{ row.destination.record_id }}{% endif %}">open it</a></div>{% endif %}
+          {% if row.current_decision == 'ACCEPTED' and row.linked_deliverable_id %}{% for source in row.sources %}{% if source.received_file_id and source.citation_id not in promoted_citation_ids %}
           <details><summary>Associate controlled version</summary>
           <form method="post" action="/bids/{{ bid.bid_id }}/deliverable-discovery/promote-source">
             <input type="hidden" name="deliverable_id" value="{{ row.linked_deliverable_id }}">

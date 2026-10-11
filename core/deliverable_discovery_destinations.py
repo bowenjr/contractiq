@@ -234,7 +234,9 @@ class DestinationWriter:
     def _work_item(self, facts: FindingFacts, reviewer: str) -> AcceptedRecord:
         marker = origin_marker(facts.proposal_id)
         wanted = normalized_title(facts.title)
-        for item in self.work_items.repository.list(facts.bid_id, active_only=True):
+        # The origin marker is searched in every state: a work item completed or cancelled after
+        # a split-write failure is still the record this finding created.
+        for item in self.work_items.repository.list(facts.bid_id, active_only=False):
             if marker in (item.details or ""):
                 return AcceptedRecord(
                     DestinationKind.WORK_ITEM, item.work_item_id, False, "Work item"

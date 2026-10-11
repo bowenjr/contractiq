@@ -7,6 +7,7 @@ the persistence layer can record it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Self
@@ -69,6 +70,56 @@ class ClassifiedBy(StrEnum):
 
 
 _STANDARD_TOPIC_KEYS = frozenset(topic[0] for topic in STANDARD_TOPICS)
+_PERMISSIVE_MAY_RE = re.compile(
+    r"\bmay\b(?!\s+(?:not\b|be\s+(?:required|asked|requested)\b))",
+    re.IGNORECASE,
+)
+_OBLIGATION_CUE_RE = re.compile(
+    r"\b(?:must|shall|required|requires|require|is\s+to|are\s+to|need\s+to|needs\s+to|"
+    r"obliged|mandatory)\b",
+    re.IGNORECASE,
+)
+_BIDDER_OWN_INFORMATION_PATTERNS = (
+    re.compile(r"\binsurance\b", re.IGNORECASE),
+    re.compile(r"\binsurer\b", re.IGNORECASE),
+    re.compile(r"\binsured\b", re.IGNORECASE),
+    re.compile(r"\bpolicy\s+(?:no\.?|number)\b", re.IGNORECASE),
+    re.compile(r"\bsuret(?:y|ies)\b", re.IGNORECASE),
+    re.compile(r"\bbonds?\b", re.IGNORECASE),
+    re.compile(r"\bfinancial\s+statements?\b", re.IGNORECASE),
+    re.compile(r"\bbank\s+references?\b", re.IGNORECASE),
+    re.compile(r"\bcredit\s+references?\b", re.IGNORECASE),
+    re.compile(r"\bwcb\b", re.IGNORECASE),
+    re.compile(r"\bworkers?['’]?\s+compensation\b", re.IGNORECASE),
+    re.compile(r"\bcorporate\s+registration\b", re.IGNORECASE),
+    re.compile(r"\bbusiness\s+licen[cs]e\b", re.IGNORECASE),
+    re.compile(r"\bcompany\s+profile\b", re.IGNORECASE),
+    re.compile(r"\bsignator(?:y|ies)\b", re.IGNORECASE),
+    re.compile(r"\bofficer\s+certificates?\b", re.IGNORECASE),
+)
+_MANUFACTURER_CUE_RE = re.compile(
+    r"\bmanufacturer\b|\bmanufacturer['’]s\b|\boem\b",
+    re.IGNORECASE,
+)
+
+_OPTION_GUARDED_LIFECYCLES = frozenset(
+    {
+        DiscoveryLifecycle.PRE_BID_ACTION,
+        DiscoveryLifecycle.BID_RETURNABLE,
+        DiscoveryLifecycle.MANUFACTURER_INPUT,
+        DiscoveryLifecycle.POST_AWARD,
+        DiscoveryLifecycle.CONDITIONAL,
+    }
+)
+
+_OPTION_REVIEW_REASON = (
+    'The passage gives the bidder an option ("may"), not an obligation. Reject it, or move '
+    "it if it is a real requirement."
+)
+_BIDDER_INFORMATION_REVIEW_REASON = (
+    "This describes the bidder's own information (for example its insurance), not data held "
+    "by the manufacturer. Move it to With the bid, or reject it if the form already covers it."
+)
 
 
 class ProposalClassification(BaseModel):
@@ -218,12 +269,13 @@ def guard_classification(
     *,
     classified_by: ClassifiedBy = ClassifiedBy.MODEL,
 ) -> ProposalClassification:
-    """Apply deterministic G1-G6 guards to a model-produced candidate.
+    """Apply deterministic G1-G8 guards to a model-produced candidate.
 
-    ``timing_text`` is intentionally not part of :class:`ProposalClassification`; G2 is applied
-    by consumers when they copy that candidate field into date evidence.  This function performs
-    the same occurrence check while constructing all classification fields it owns and never
-    mutates the supplied mapping.
+    G1 verifies the quote, G2 verifies timing text at the candidate-copy boundary, G3 verifies
+    the responsible party, G4 validates conditional fields, G5 sends low confidence to review,
+    G6 derives a commercial topic, G7 rejects bidder options misclassified as obligations, and
+    G8 rejects bidder-owned information misclassified as manufacturer input.  A guard never
+    drops a finding or mutates the supplied mapping.
     """
     model_lifecycle = DiscoveryLifecycle(raw["lifecycle"])
     lifecycle = model_lifecycle
@@ -234,17 +286,11 @@ def guard_classification(
     else:
         review_reason = None
 
-    if locate_quote(passage_text, raw.get("source_quote")) is None:
+    quote_located = locate_quote(passage_text, raw.get("source_quote")) is not None
+    if not quote_located:
         lifecycle = DiscoveryLifecycle.NEEDS_REVIEW
         confidence = Confidence.LOW
         review_reason = "The supporting sentence was not found in the source text"
-
-    # Evaluate G2 here so callers use the same deterministic predicate.  The guarded timing
-    # value remains candidate/date evidence and is therefore not a classification field.
-    _verified_timing_text = (
-        raw.get("timing_text") if _contains(passage_text, raw.get("timing_text")) else None
-    )
-    del _verified_timing_text
 
     responsible_party = raw.get("responsible_party")
     if not _contains(passage_text, responsible_party):
@@ -263,6 +309,34 @@ def guard_classification(
     if confidence is Confidence.LOW:
         lifecycle = DiscoveryLifecycle.NEEDS_REVIEW
         review_reason = review_reason or "Low-confidence classification requires review"
+
+    source_quote = str(raw.get("source_quote") or "")
+    if (
+        quote_located
+        and model_lifecycle in _OPTION_GUARDED_LIFECYCLES
+        and _PERMISSIVE_MAY_RE.search(source_quote)
+        and not _OBLIGATION_CUE_RE.search(source_quote)
+    ):
+        review_reason = (
+            review_reason if lifecycle is DiscoveryLifecycle.NEEDS_REVIEW else _OPTION_REVIEW_REASON
+        )
+        lifecycle = DiscoveryLifecycle.NEEDS_REVIEW
+
+    combined_text = " ".join(
+        str(raw.get(field) or "") for field in ("title", "description", "source_quote")
+    )
+    if (
+        quote_located
+        and model_lifecycle is DiscoveryLifecycle.MANUFACTURER_INPUT
+        and any(pattern.search(combined_text) for pattern in _BIDDER_OWN_INFORMATION_PATTERNS)
+        and not _MANUFACTURER_CUE_RE.search(combined_text)
+    ):
+        review_reason = (
+            review_reason
+            if lifecycle is DiscoveryLifecycle.NEEDS_REVIEW
+            else _BIDDER_INFORMATION_REVIEW_REASON
+        )
+        lifecycle = DiscoveryLifecycle.NEEDS_REVIEW
 
     item_kind = ItemKind(raw["item_kind"])
     commercial_topic = (

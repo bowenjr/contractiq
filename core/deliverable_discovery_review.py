@@ -25,11 +25,14 @@ LIFECYCLE_TABS: tuple[tuple[str, str, str], ...] = (
     ("na", "Not applicable", "NOT_APPLICABLE"),
     ("review", "Needs review", "NEEDS_REVIEW"),
 )
-LIFECYCLE_KEYS = tuple(key for key, _, _ in LIFECYCLE_TABS) + ("all",)
+ATTENTION_KEYS = ("review", "cond")
+LIFECYCLE_KEYS = tuple(key for key, _, _ in LIFECYCLE_TABS) + ("attention", "all")
 DEFAULT_LIFECYCLE = "bid"
 GROUPS = ("document", "lifecycle")
 _KEY_BY_LIFECYCLE = {value: key for key, _, value in LIFECYCLE_TABS}
-_LABEL_BY_KEY = {key: label for key, label, _ in LIFECYCLE_TABS}
+_LABEL_BY_KEY = {key: label for key, label, _ in LIFECYCLE_TABS} | {
+    "attention": "Needs review or conditional"
+}
 _NATURAL = re.compile(r"(\d+)")
 
 
@@ -63,10 +66,21 @@ def document_ids(row: Mapping[str, Any]) -> set[str]:
     } - {""}
 
 
-def source_sort_key(row: Mapping[str, Any], names: Mapping[str, str]) -> tuple[object, ...]:
-    """Order by document name, then page or sheet position, then title."""
+def _primary_source(row: Mapping[str, Any], document: str = "") -> Mapping[str, Any]:
+    """The citation a finding is listed under: the selected document's, else the first."""
     sources = row.get("sources") or [{}]
-    first = sources[0]
+    if document:
+        for source in sources:
+            if document in (source.get("received_file_id"), source.get("document_version_id")):
+                return source
+    return sources[0]
+
+
+def source_sort_key(
+    row: Mapping[str, Any], names: Mapping[str, str], document: str = ""
+) -> tuple[object, ...]:
+    """Order by document name, then page or sheet position, then title."""
+    first = _primary_source(row, document)
     file_id = str(first.get("received_file_id") or first.get("document_version_id") or "")
     return (
         _natural(names.get(file_id, file_id)),
@@ -110,11 +124,17 @@ def build_review_view(
     }
     for row in queue:
         tab = lifecycle_key(row)
-        for key in (tab, "all"):
+        for key in (tab, "all", *(["attention"] if tab in ATTENTION_KEYS else [])):
             lifecycle_counts[key]["total"] += 1
             if str(row["current_decision"]).lower() == "pending":
                 lifecycle_counts[key]["pending"] += 1
-    queue = [row for row in queue if lifecycle == "all" or lifecycle_key(row) == lifecycle]
+    queue = [
+        row
+        for row in queue
+        if lifecycle == "all"
+        or lifecycle_key(row) == lifecycle
+        or (lifecycle == "attention" and lifecycle_key(row) in ATTENTION_KEYS)
+    ]
 
     counts: Counter[str] = Counter()
     for row in queue:
@@ -139,9 +159,11 @@ def build_review_view(
     selected = [row for row in in_status if not document or document in document_ids(row)]
     if group == "lifecycle":
         order = {key: index for index, key in enumerate(LIFECYCLE_KEYS)}
-        selected.sort(key=lambda row: (order[lifecycle_key(row)], source_sort_key(row, names)))
+        selected.sort(
+            key=lambda row: (order[lifecycle_key(row)], source_sort_key(row, names, document))
+        )
     else:
-        selected.sort(key=lambda row: source_sort_key(row, names))
+        selected.sort(key=lambda row: source_sort_key(row, names, document))
 
     page_count = max(1, -(-len(selected) // page_size))
     page = min(max(1, page), page_count)
@@ -158,18 +180,17 @@ def build_review_view(
         lifecycle=lifecycle,
         group=group,
         lifecycle_counts=lifecycle_counts,
-        groups=_groups(window, names, group),
+        groups=_groups(window, names, group, document),
     )
 
 
 def _groups(
-    rows: Sequence[Mapping[str, Any]], names: Mapping[str, str], group: str
+    rows: Sequence[Mapping[str, Any]], names: Mapping[str, str], group: str, document: str = ""
 ) -> tuple[tuple[str, tuple[Mapping[str, Any], ...]], ...]:
     """Consecutive rows under one heading: the document, or the lifecycle then document."""
     grouped: list[tuple[str, list[Mapping[str, Any]]]] = []
     for row in rows:
-        sources = row.get("sources") or [{}]
-        first = sources[0]
+        first = _primary_source(row, document)
         file_id = str(first.get("received_file_id") or first.get("document_version_id") or "")
         document = str(names.get(file_id, file_id) or "Document").split("/")[-1]
         heading = document
