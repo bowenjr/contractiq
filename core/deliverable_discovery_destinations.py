@@ -91,8 +91,17 @@ class DestinationWriter:
         self.ops08 = ops08_repository
         self.work_items = work_item_service
 
-    def existing_deliverable(self, bid_id: str, title: str, phase: LifecyclePhase) -> str | None:
+    def existing_deliverable(
+        self,
+        bid_id: str,
+        title: str,
+        phase: LifecyclePhase,
+        *,
+        reuse_by_title: bool = True,
+    ) -> str | None:
         """An open Deliverable with the same title and phase, so a re-finding links to it."""
+        if not reuse_by_title:
+            return None
         wanted = normalized_title(title)
         for row in self.deliverables.list(bid_id):
             if (
@@ -109,20 +118,26 @@ class DestinationWriter:
         facts: FindingFacts,
         reviewer: str,
         package_id: str | None = None,
+        *,
+        reuse_by_title: bool = True,
     ) -> AcceptedRecord:
         """Create (or find) the vendor-document, commercial-position or work-item record."""
         if kind is DestinationKind.VENDOR_DOCUMENT:
-            return self._vendor_requirement(facts, reviewer, package_id)
+            return self._vendor_requirement(facts, reviewer, package_id, reuse_by_title)
         if kind is DestinationKind.COMMERCIAL_POSITION:
             return self._commercial_position(facts, reviewer)
         if kind is DestinationKind.WORK_ITEM:
-            return self._work_item(facts, reviewer)
+            return self._work_item(facts, reviewer, reuse_by_title)
         raise ValueError(f"{kind.value} records are created by the Deliverable acceptance path")
 
     # -- vendor-document register ---------------------------------------------------------
 
     def _vendor_requirement(
-        self, facts: FindingFacts, reviewer: str, package_id: str | None
+        self,
+        facts: FindingFacts,
+        reviewer: str,
+        package_id: str | None,
+        reuse_by_title: bool,
     ) -> AcceptedRecord:
         repository = self.vendor.repository
         packages = repository.list_packages(facts.bid_id)
@@ -163,14 +178,15 @@ class DestinationWriter:
                 "This Bid has several manufacturer packages. Choose a manufacturer package for "
                 "this requirement, then accept it again."
             )
-        for requirement in repository.list_requirements(chosen.package_id):
-            if normalized_title(requirement.deliverable_title) == wanted:
-                return AcceptedRecord(
-                    DestinationKind.VENDOR_DOCUMENT,
-                    requirement.requirement_id,
-                    True,
-                    f"Already in package {chosen.package_code}",
-                )
+        if reuse_by_title:
+            for requirement in repository.list_requirements(chosen.package_id):
+                if normalized_title(requirement.deliverable_title) == wanted:
+                    return AcceptedRecord(
+                        DestinationKind.VENDOR_DOCUMENT,
+                        requirement.requirement_id,
+                        True,
+                        f"Already in package {chosen.package_code}",
+                    )
         reference = f"{facts.source_label} {origin_marker(facts.proposal_id)}"
         created = self.vendor.create_requirement(
             CustomerRequirementCreate(
@@ -231,7 +247,9 @@ class DestinationWriter:
 
     # -- work items -----------------------------------------------------------------------
 
-    def _work_item(self, facts: FindingFacts, reviewer: str) -> AcceptedRecord:
+    def _work_item(
+        self, facts: FindingFacts, reviewer: str, reuse_by_title: bool
+    ) -> AcceptedRecord:
         marker = origin_marker(facts.proposal_id)
         wanted = normalized_title(facts.title)
         # The origin marker is searched in every state: a work item completed or cancelled after
@@ -241,11 +259,15 @@ class DestinationWriter:
                 return AcceptedRecord(
                     DestinationKind.WORK_ITEM, item.work_item_id, False, "Work item"
                 )
-        for item in self.work_items.repository.list(facts.bid_id, active_only=True):
-            if normalized_title(item.title) == wanted:
-                return AcceptedRecord(
-                    DestinationKind.WORK_ITEM, item.work_item_id, True, "Already an open work item"
-                )
+        if reuse_by_title:
+            for item in self.work_items.repository.list(facts.bid_id, active_only=True):
+                if normalized_title(item.title) == wanted:
+                    return AcceptedRecord(
+                        DestinationKind.WORK_ITEM,
+                        item.work_item_id,
+                        True,
+                        "Already an open work item",
+                    )
         details = "\n".join(
             part
             for part in (

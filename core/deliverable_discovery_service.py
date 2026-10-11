@@ -403,6 +403,31 @@ class DeliverableDiscoveryService:
                     classification, row["condition_text"]
                 )
                 row["accept_goes_to"] = _accept_consequence(classification)
+            row["collisions"] = []
+
+        rows_by_id = {str(row["proposal_id"]): row for row in rows}
+        for collision in self.repository.list_collisions(bid_id):
+            reasons = json.loads(str(collision["reasons_json"]))
+            for proposal_id, other_proposal_id in (
+                (str(collision["proposal_id"]), str(collision["other_proposal_id"])),
+                (str(collision["other_proposal_id"]), str(collision["proposal_id"])),
+            ):
+                row = rows_by_id.get(proposal_id)
+                other = rows_by_id.get(other_proposal_id)
+                if row is None or other is None:
+                    continue
+                primary_source = other["sources"][0]
+                row["collisions"].append(
+                    {
+                        "title": other["title"],
+                        "document": self._source_name(bid_id, other)
+                        or primary_source.get("document_version_id")
+                        or "Controlled document",
+                        "locator": primary_source["locator"],
+                        "reasons": reasons,
+                        "current_decision": other["current_decision"],
+                    }
+                )
         return rows
 
     def decide(
@@ -484,10 +509,19 @@ class DeliverableDiscoveryService:
         supersedes = current["event_id"] if current else None
         due_date, date_basis = self._accepted_due_date(proposal, decision_input, reviewer)
         source_name = self._source_name(bid_id, proposal)
+        has_collision = any(
+            proposal["proposal_id"] in (collision["proposal_id"], collision["other_proposal_id"])
+            for collision in self.repository.list_collisions(bid_id)
+        )
 
         if kind is DestinationKind.DELIVERABLE:
             phase = deliverable_phase(classification)
-            existing_id = self.destinations.existing_deliverable(bid_id, proposal["title"], phase)
+            existing_id = self.destinations.existing_deliverable(
+                bid_id,
+                proposal["title"],
+                phase,
+                reuse_by_title=not has_collision,
+            )
             if existing_id is None:
                 item, link = self._build_deliverable(
                     bid_id, proposal, decision_input, reviewer, classification
@@ -523,7 +557,13 @@ class DeliverableDiscoveryService:
                 due_date,
                 date_basis,
             )
-            record = self.destinations.register(kind, facts, reviewer, decision_input.package_id)
+            record = self.destinations.register(
+                kind,
+                facts,
+                reviewer,
+                decision_input.package_id,
+                reuse_by_title=not has_collision,
+            )
             source_link = None
         event = ProposalReviewEvent(
             proposal_id=decision_input.proposal_id,

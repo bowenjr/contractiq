@@ -66,6 +66,7 @@
           {% if row.responsible_party %}<div class="muted">Responsible (as named in the document): {{ row.responsible_party }}</div>{% endif %}
           {% if row.dependencies %}<div class="muted">Depends on: {{ row.dependencies }}</div>{% endif %}
           {% endif %}
+          {% for collision in row.collisions %}<div class="muted">Possible collision with: {{ collision.title }} ({{ collision.document }}, {{ collision.locator }}) — same title, differs in {{ collision.reasons|join(', ') }}</div>{% endfor %}
           <div class="muted">{{ row.category }}</div>{% if row.condition_text %}<div class="muted">Condition: {{ row.condition_text }}</div>{% endif %}</td>
         <td>{% for source in row.sources %}
           {% set doc_name = discovery_file_names.get(source.received_file_id, '') if source.received_file_id else '' %}
