@@ -313,7 +313,7 @@ def test_each_execution_filter_uses_the_shared_mixed_projection(
         ExecutionFilter.IN_PROGRESS: 2,
         ExecutionFilter.BLOCKED: 2,
         ExecutionFilter.COMPLETE: 1,
-        ExecutionFilter.UNASSIGNED: 6,
+        ExecutionFilter.UNASSIGNED: 4,
         ExecutionFilter.OVERDUE: 1,
         ExecutionFilter.WAITING: 1,
         ExecutionFilter.NOT_REQUIRED: 1,

@@ -67,6 +67,8 @@ class ExecutionFilter(StrEnum):
     OVERDUE = "overdue"
     WAITING = "waiting"
     NOT_REQUIRED = "not_required"
+    CLARIFICATION = "clarification"
+    DECISION = "decision"
 
 
 class ExecutionItemLink(BaseModel):
@@ -230,9 +232,16 @@ class ExecutionProjectionService:
                 ]
         return self._ordered(self._filter(selected, selected_filter))
 
-    def all_items(self, bid_id: str, as_of: date) -> list[ExecutionItem]:
-        """Return all normally visible rows across the four registers."""
-        return self._ordered([item for item, visible in self._project(bid_id, as_of) if visible])
+    def all_items(
+        self,
+        bid_id: str,
+        as_of: date,
+        state: ExecutionFilter | str = ExecutionFilter.ALL,
+    ) -> list[ExecutionItem]:
+        """Return one filtered list across every normally visible register kind."""
+        selected_filter = ExecutionFilter(state)
+        items = [item for item, visible in self._project(bid_id, as_of) if visible]
+        return self._ordered(self._filter(items, selected_filter))
 
     def _project(self, bid_id: str, as_of: date) -> list[tuple[ExecutionItem, bool]]:
         bid = self.bids.get_bid(bid_id)
@@ -600,12 +609,30 @@ class ExecutionProjectionService:
         if state is ExecutionFilter.COMPLETE:
             return [item for item in items if item.status is PrepStatus.COMPLETE]
         if state is ExecutionFilter.UNASSIGNED:
-            return [item for item in items if item.unassigned]
+            return [
+                item
+                for item in items
+                if item.unassigned
+                and item.status not in {PrepStatus.COMPLETE, PrepStatus.NOT_REQUIRED}
+            ]
         if state is ExecutionFilter.OVERDUE:
             return [item for item in items if item.overdue]
         if state is ExecutionFilter.WAITING:
             return [item for item in items if item.waiting_on_prerequisite]
-        return [item for item in items if item.status is PrepStatus.NOT_REQUIRED]
+        if state is ExecutionFilter.NOT_REQUIRED:
+            return [item for item in items if item.status is PrepStatus.NOT_REQUIRED]
+        if state is ExecutionFilter.CLARIFICATION:
+            return [
+                item
+                for item in items
+                if item.kind is ExecutionListKind.COMMERCIAL
+                and item.status_label == "Clarification"
+            ]
+        return [
+            item
+            for item in items
+            if item.kind is ExecutionListKind.COMMERCIAL and item.status_label == "Decision needed"
+        ]
 
     @staticmethod
     def _ordered(items: list[ExecutionItem]) -> list[ExecutionItem]:

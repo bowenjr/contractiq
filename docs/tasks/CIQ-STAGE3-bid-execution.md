@@ -107,7 +107,7 @@ a fix message; a past date is allowed. Customer deadline shown for a returnable 
 `due_basis = FIXED_DATE` (label "stated in the RFP"), else the Bid closing date (label "Bid closing").
 
 Overdue = effective internal due date < `as_of` (a date argument, never a hidden clock) and display status not
-Complete / Not required. Unassigned = no effective responsible. Waiting on a prerequisite = at least one
+Complete / Not required. Unassigned = no effective responsible and display status not Complete / Not required. Waiting on a prerequisite = at least one
 active dependency whose prerequisite display status is not Complete / Not required.
 
 ## Dependencies (S3-2)
