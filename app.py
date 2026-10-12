@@ -188,6 +188,7 @@ from core.contract_risk import (
 from core.contract_risk_repository import ContractRiskRepository
 from core.contract_risk_service import ContractRiskService
 from core.database import Database
+from core.date_integrity import deliverable_date_note
 from core.deliverable_discovery import ProposalReviewDecision
 from core.deliverable_discovery_coverage import discovery_coverage
 from core.deliverable_discovery_destinations import DestinationWriter
@@ -201,16 +202,15 @@ from core.deliverable_discovery_presentation import (
 )
 from core.deliverable_discovery_progress import discovery_source_progress
 from core.deliverable_discovery_repository import DeliverableDiscoveryRepository
-from core.date_integrity import deliverable_date_note
-from core.deliverable_discovery_review import (
-    DEFAULT_STATUS as DEFAULT_REVIEW_STATUS,
-)
 from core.deliverable_discovery_review import (
     DEFAULT_LIFECYCLE,
     LIFECYCLE_KEYS,
     LIFECYCLE_TABS,
     build_review_view,
     lifecycle_key,
+)
+from core.deliverable_discovery_review import (
+    DEFAULT_STATUS as DEFAULT_REVIEW_STATUS,
 )
 from core.deliverable_discovery_service import (
     DeliverableDiscoveryService,
@@ -1323,6 +1323,8 @@ register_bid_execution_routes(
     bid_package_repository=bid_package_repository,
     document_repository=document_repository,
     vendor_document_repository=vendor_document_repository,
+    action_service=bid_execution_action_service,
+    actor=LOCAL_ACTOR,
 )
 
 
@@ -3466,7 +3468,7 @@ async def reassess_bid_classification(bid_id: str, request: Request) -> Response
 
 @app.post("/bids/{bid_id}/customer-closing", response_class=HTMLResponse)
 async def record_customer_closing(request: Request, bid_id: str) -> Response:
-    """Record the customer's closing time and time zone, exactly as the customer's document states."""
+    """Record the closing time and zone exactly as stated in the customer document."""
     form = dict(await request.form())
     closing_time = str(form.get("customer_due_time") or "").strip()
     timezone = str(form.get("customer_due_timezone") or "").strip()

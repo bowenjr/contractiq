@@ -102,6 +102,10 @@ class BidExecutionActionSupport:
         if "note" in fields and changes.note is None:
             raise ValueError("progress note cannot be blank; enter a note or leave it unchanged")
         current = self.execution.get_record(bid_id, kind, subject_id)
+        if "expected_version" in fields:
+            current_version = current.version if current is not None else 0
+            if changes.expected_version != current_version:
+                raise ValueError("This item changed since you opened it. Reload and try again.")
         values: dict[str, object] = {
             "responsible": current.responsible if current else None,
             "contributors": list(current.contributors) if current else [],
@@ -120,7 +124,11 @@ class BidExecutionActionSupport:
             values[name] = [] if name == "contributors" and value is None else value
         candidate = BidExecutionUpdate.model_validate(
             {
-                "expected_version": current.version if current else 0,
+                "expected_version": (
+                    changes.expected_version
+                    if "expected_version" in fields
+                    else (current.version if current else 0)
+                ),
                 **values,
                 "note": changes.note if "note" in fields else None,
             }
@@ -233,6 +241,31 @@ class BidExecutionActionSupport:
             self._next(bid_id, removed.item_kind, removed.item_id),
             changed=True,
         )
+
+    def remove_prerequisite_for_item(
+        self,
+        bid_id: str,
+        item_kind: ExecutionSubjectKind | str,
+        item_id: str,
+        dependency_id: str,
+        actor: str,
+    ) -> ActionResult:
+        """Remove an incoming prerequisite only from the item named by the route."""
+        kind = self._subject_kind(item_kind)
+        dependency = next(
+            (
+                row
+                for row in self.execution.repository.list_dependencies(bid_id)
+                if row.dependency_id == dependency_id and row.removed_at is None
+            ),
+            None,
+        )
+        if dependency is None or dependency.item_kind is not kind or dependency.item_id != item_id:
+            raise ValueError(
+                "prerequisite was not found on this item; reload the item and choose a listed "
+                "prerequisite"
+            )
+        return self.remove_prerequisite(bid_id, dependency_id, actor)
 
     @staticmethod
     def _subject_kind(kind: ExecutionSubjectKind | ExecutionListKind | str) -> ExecutionSubjectKind:

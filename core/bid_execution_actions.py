@@ -78,10 +78,10 @@ class BidExecutionActionService(BidExecutionActionSupport):
         for item in self.work_items.repository.list(bid_id, active_only=True):
             if normalized_title(item.title) == wanted:
                 return self._result(
-                    "Saved - existing action reused.",
+                    "This action already exists - nothing was added.",
                     ExecutionSubjectKind.WORK_ITEM,
                     item.work_item_id,
-                    self._next(bid_id, ExecutionSubjectKind.WORK_ITEM, item.work_item_id),
+                    f"/bids/{bid_id}/execution/items/work-item/{item.work_item_id}",
                     changed=False,
                     reused=True,
                 )
@@ -210,6 +210,13 @@ class BidExecutionActionService(BidExecutionActionSupport):
         if item.bid_id != bid_id:
             raise ValueError("this action belongs to a different Bid; open it from that Bid")
         fields = request.model_fields_set
+        if "expected_version" in fields and request.expected_version != item.version:
+            raise ValueError("This item changed since you opened it. Reload and try again.")
+        record = self.execution.get_record(bid_id, ExecutionSubjectKind.WORK_ITEM, work_item_id)
+        if "overlay_expected_version" in fields:
+            overlay_version = record.version if record is not None else 0
+            if request.overlay_expected_version != overlay_version:
+                raise ValueError("This item changed since you opened it. Reload and try again.")
         if "priority" in fields and request.priority is None:
             raise ValueError("priority cannot be blank; choose a priority")
         if "due_date" in fields:
@@ -250,7 +257,6 @@ class BidExecutionActionService(BidExecutionActionSupport):
             item = self.work_items.edit_work_item(work_item_id, edit, actor)
             changed = True
 
-        record = self.execution.get_record(bid_id, ExecutionSubjectKind.WORK_ITEM, work_item_id)
         responsible = record.responsible if record else None
         contributors = list(record.contributors) if record else []
         if "responsible" in fields:
@@ -268,7 +274,11 @@ class BidExecutionActionService(BidExecutionActionSupport):
                 ExecutionSubjectKind.WORK_ITEM,
                 work_item_id,
                 BidExecutionUpdate(
-                    expected_version=record.version if record else 0,
+                    expected_version=(
+                        request.overlay_expected_version
+                        if "overlay_expected_version" in fields
+                        else (record.version if record else 0)
+                    ),
                     responsible=responsible,
                     contributors=contributors,
                     note=request.note if "note" in fields else None,

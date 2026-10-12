@@ -6,6 +6,9 @@
 <p class="breadcrumbs"><a href="/my-day">My Day</a> → <a href="/bids">Bids</a> → <a href="/bids/{{ bid.bid_id }}">{{ bid.project_name }}</a> → <a href="/bids/{{ bid.bid_id }}/execution">Bid execution</a> → Item</p>
 <header class="execution-heading"><div><p class="eyebrow">{{ item.kind.value|lower|replace('_',' ')|title }}</p><h1>{{ item.title }}</h1><p>{{ item.description }}</p></div><a href="{{ list_url }}">← Back to the list</a></header>
 
+{% if notice %}<div class="notice execution-notice" role="status">{{ notice }}{% if next_item_url %} <a href="{{ next_item_url }}">Next: open the next outstanding {{ next_kind_label }}</a>{% endif %}</div>{% endif %}
+{% if form_error %}<div class="notice warning execution-notice" role="alert"><strong>Could not save.</strong> {{ form_error }}</div>{% endif %}
+
 <section class="card"><div class="execution-detail-grid">
   <div><span>Status</span><strong><span class="execution-badge {% if item.status_label.startswith('Complete') %}complete{% elif item.status_label.startswith('Blocked') %}blocked{% elif item.status_label.startswith('In progress') or item.status_label.startswith('Waiting') %}in-progress{% elif item.status_label.startswith('Not required') %}not-required{% endif %}">{{ item.status_label }}</span></strong>{% if item.waiting_on_prerequisite %}<small><span class="execution-badge waiting">Waiting on a prerequisite</span></small>{% endif %}</div>
   <div><span>Responsible</span><strong>{{ item.responsible or 'Unassigned' }}</strong>{% if item.responsible_origin == 'register' %}<small>(from the register)</small>{% endif %}</div>
@@ -17,21 +20,52 @@
   {% if record and record.blocked_reason %}<div><span>What is blocking this</span><strong>{{ record.blocked_reason }}</strong></div>{% endif %}
 </div></section>
 
+<div class="execution-form-columns">
+<section class="card execution-form-card"><h2>Plan</h2><p class="muted">Assign the people, internal date and priority chosen for this Bid.</p>
+<form method="post" action="{{ item_form_base }}/plan" class="execution-form-grid">
+  <input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="expected_version" value="{{ expected_version }}"><input type="hidden" name="overlay_expected_version" value="{{ overlay_version }}">
+  <label>Responsible person<input name="responsible" value="{{ entered.get('responsible', item.responsible if item.responsible_origin == 'assigned' else '') if active_form == 'plan' else (item.responsible if item.responsible_origin == 'assigned' else '') }}"></label>
+  <label>Contributors <small>Separate names with commas.</small><input name="contributors" value="{{ entered.get('contributors', item.contributors|join(', ')) if active_form == 'plan' else item.contributors|join(', ') }}"></label>
+  <label>Internal due date<input type="date" name="internal_due_date" value="{{ entered.get('internal_due_date', item.internal_due_date or '') if active_form == 'plan' else (item.internal_due_date or '') }}"><small>Leave blank when no internal date has been set.</small></label>
+  <label>Priority<select name="priority" required>{% for priority in priorities %}{% set priority_label = priority.value|lower|title %}<option value="{{ priority_label }}"{% if (entered.get('priority') if active_form == 'plan' else (item.priority.value|lower|title if item.priority else 'Normal')) == priority_label %} selected{% endif %}>{{ priority_label }}</option>{% endfor %}</select></label>
+  <div class="execution-form-actions"><button type="submit">Save plan</button></div>
+</form></section>
+
+<section class="card execution-form-card"><h2>Progress</h2>
+{% if subject_kind.value == 'MANUFACTURER_INPUT' %}
+  <p>Status is controlled by manufacturer-requirement verification.</p>{% if manufacturer_url %}<p><a class="button" href="{{ manufacturer_url }}">Change verification</a></p>{% endif %}
+{% else %}
+<form method="post" action="{{ item_form_base }}/progress" class="execution-form-grid" data-progress-form>
+  <input type="hidden" name="return_to" value="{{ return_to }}"><input type="hidden" name="expected_version" value="{{ expected_version }}">
+  <label>Status<select name="status" data-progress-status required>{% for label in ['Not started','In progress','Blocked','Complete','Not required'] %}<option value="{{ label }}"{% if (entered.get('status') if active_form == 'progress' else item.status.label) == label %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  {% if subject_kind.value == 'RETURNABLE' %}
+  <div class="execution-conditional" data-for-status="Blocked"><label>Blocked reason<textarea name="blocked_reason">{{ entered.get('blocked_reason', record.blocked_reason if record else '') if active_form == 'progress' else (record.blocked_reason if record else '') }}</textarea></label></div>
+  <div class="execution-conditional" data-for-status="Complete"><label>Completion reference<input name="completion_evidence" value="{{ entered.get('completion_evidence', record.completion_evidence if record else '') if active_form == 'progress' else (record.completion_evidence if record else '') }}"></label><label>Controlled document (optional)<select name="evidence_document"><option value="">No controlled document selected</option>{% for document in document_options %}<option value="{{ document.token }}"{% if active_form == 'progress' and entered.get('evidence_document') == document.token %} selected{% endif %}>{{ document.label }}</option>{% endfor %}</select></label></div>
+  <div class="execution-conditional" data-for-status="Not required"><label>Reason note<textarea name="not_required_reason">{{ entered.get('not_required_reason','') if active_form == 'progress' else '' }}</textarea></label></div>
+  {% else %}
+  <div class="execution-conditional" data-for-status="Blocked"><label>Blocker description<textarea name="blocker_description">{{ entered.get('blocker_description', work_item.blocker_description or '') if active_form == 'progress' else (work_item.blocker_description or '') }}</textarea></label><label>Resolution owner<input name="resolution_owner" value="{{ entered.get('resolution_owner', work_item.resolution_owner or '') if active_form == 'progress' else (work_item.resolution_owner or '') }}"></label></div>
+  <div class="execution-conditional" data-for-status="Complete"><label>Completion outcome<textarea name="completion_outcome">{{ entered.get('completion_outcome', work_item.completion_outcome or '') if active_form == 'progress' else (work_item.completion_outcome or '') }}</textarea></label><label>Completion reference<input name="completion_evidence" value="{{ entered.get('completion_evidence', work_item.completion_evidence or '') if active_form == 'progress' else (work_item.completion_evidence or '') }}"></label></div>
+  <div class="execution-conditional" data-for-status="Not required"><label>Cancellation reason<textarea name="cancellation_reason">{{ entered.get('cancellation_reason', work_item.cancellation_reason or '') if active_form == 'progress' else (work_item.cancellation_reason or '') }}</textarea></label></div>
+  {% endif %}
+  <div class="execution-form-actions"><button type="submit">Save progress</button></div>
+</form>
+{% endif %}</section>
+</div>
+
 <div class="execution-detail-columns">
-<section class="card"><h2>Prerequisites</h2><ul class="execution-link-list">{% for linked in item.prerequisites %}<li><a href="{{ linked.item_url }}">{{ linked.title }}</a> <span class="execution-badge">{{ linked.status_label }}</span></li>{% else %}<li class="muted">No prerequisites recorded.</li>{% endfor %}</ul></section>
+<section class="card"><h2>Prerequisites</h2><ul class="execution-link-list">{% for linked in active_prerequisites %}<li><span><a href="{{ linked.item_url }}">{{ linked.title }}</a> <span class="execution-badge">{{ linked.status_label }}</span></span><form method="post" action="{{ item_form_base }}/prerequisites/{{ linked.dependency_id }}/remove"><input type="hidden" name="return_to" value="{{ return_to }}"><button type="submit" class="button secondary">Remove</button></form></li>{% else %}<li class="muted">No prerequisites recorded.</li>{% endfor %}</ul>
+<form method="post" action="{{ item_form_base }}/prerequisites" class="execution-inline-form"><input type="hidden" name="return_to" value="{{ return_to }}"><label>Add a prerequisite<select name="prerequisite" required><option value="">Choose another item</option>{% for option in prerequisite_options %}<option value="{{ option.token }}"{% if active_form == 'prerequisite' and entered.get('prerequisite') == option.token %} selected{% endif %}>{{ option.title }} — {{ option.kind_label }}</option>{% endfor %}</select></label><label>Dependency note (optional)<input name="note" value="{{ entered.get('note','') if active_form == 'prerequisite' else '' }}"></label><button type="submit">Add prerequisite</button></form></section>
 <section class="card"><h2>Dependents</h2><ul class="execution-link-list">{% for linked in item.dependents %}<li><a href="{{ linked.item_url }}">{{ linked.title }}</a> <span class="execution-badge">{{ linked.status_label }}</span></li>{% else %}<li class="muted">No dependent items recorded.</li>{% endfor %}</ul></section>
 </div>
 
-<section class="card"><h2>Progress notes</h2>{% for note in notes %}<article class="execution-note"><p>{{ note.body }}</p><small>{{ note.created_at.strftime('%Y-%m-%d %H:%M') }} · {{ note.created_by }}</small></article>{% else %}<p class="muted">No progress notes recorded.</p>{% endfor %}</section>
+<section class="card"><h2>Progress notes</h2><form method="post" action="{{ item_form_base }}/notes" class="execution-note-form"><input type="hidden" name="return_to" value="{{ return_to }}"><label>Add a progress note<textarea name="body" maxlength="4000" required>{{ entered.get('body','') if active_form == 'note' else '' }}</textarea></label><button type="submit">Add note</button></form>{% for note in notes %}<article class="execution-note"><p>{{ note.body }}</p><small>{{ note.created_at.strftime('%Y-%m-%d %H:%M') }} · {{ note.created_by }}</small></article>{% else %}<p class="muted">No progress notes recorded.</p>{% endfor %}</section>
 
 <section class="card execution-source-panel"><h2>Source</h2>
 {% for source in source_trace.sources %}<article><dl><dt>Document</dt><dd>{{ source.document_name }}</dd><dt>Locator</dt><dd>{{ source.locator or 'Not recorded' }}</dd></dl>{% if source.verified_quote %}<blockquote>{{ source.verified_quote }}</blockquote>{% else %}<p class="muted">No verified quote recorded.</p>{% endif %}</article>{% else %}<p class="muted">No originating source is linked.</p>{% endfor %}
 {% if source_trace.source_url %}<p><a href="{{ source_trace.source_url }}">Open the originating requirement</a></p>{% endif %}
 </section>
 
-<nav class="execution-item-actions" aria-label="Related records">
-{% if my_work_url %}<a class="button" href="{{ my_work_url }}">Open in My Work</a>{% endif %}
-{% if manufacturer_url %}<a class="button" href="{{ manufacturer_url }}">Change verification</a>{% endif %}
-<span class="muted">Editing and assignment controls are available in the next Bid execution update.</span>
-</nav>
-</main></body></html>
+<nav class="execution-item-actions" aria-label="Related records">{% if my_work_url %}<a class="button" href="{{ my_work_url }}">Open in My Work</a>{% endif %}{% if manufacturer_url %}<a class="button" href="{{ manufacturer_url }}">Open manufacturer requirement</a>{% endif %}</nav>
+</main>
+<script>document.querySelectorAll('[data-progress-form]').forEach(function(form){const select=form.querySelector('[data-progress-status]');const update=function(){form.querySelectorAll('[data-for-status]').forEach(function(group){group.hidden=group.dataset.forStatus!==select.value;});};select.addEventListener('change',update);update();});</script>
+</body></html>

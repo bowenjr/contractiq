@@ -9,6 +9,8 @@
   <div><p class="eyebrow">Bid execution</p><h1>{{ dashboard.project_name }}</h1><p>{{ dashboard.customer }} · Bid reference {{ dashboard.bid_reference }}</p></div>
   <a href="/bids/{{ bid.bid_id }}">Bid overview</a>
 </header>
+{% if notice %}<div class="notice execution-notice" role="status">{{ notice }}{% if next_item_url %} <a href="{{ next_item_url }}">Next: open the next outstanding {{ next_kind_label }}</a>{% endif %}</div>{% endif %}
+{% if form_error %}<div class="notice warning execution-notice" role="alert">{{ form_error }}</div>{% endif %}
 
 <section class="execution-facts" aria-label="Bid facts">
   <div><span>Submission deadline</span><strong>{{ dashboard.submission_deadline }}</strong><small>{{ dashboard.submission_deadline_detail }} · {{ deadline_wording }}</small></div>

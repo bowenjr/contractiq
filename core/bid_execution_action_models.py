@@ -46,6 +46,8 @@ class WorkItemActionChanges(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    expected_version: int | None = Field(default=None, ge=1)
+    overlay_expected_version: int | None = Field(default=None, ge=0)
     status: PrepStatus | None = None
     priority: WorkItemPriority | None = None
     due_date: date | None = None
@@ -92,6 +94,7 @@ class ReturnableChanges(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
+    expected_version: int | None = Field(default=None, ge=0)
     responsible: str | None = None
     contributors: list[str] | None = None
     internal_due_date: date | None = None
@@ -137,6 +140,7 @@ class ManufacturerInputChanges(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
+    expected_version: int | None = Field(default=None, ge=0)
     responsible: str | None = None
     contributors: list[str] | None = None
     internal_due_date: date | None = None
