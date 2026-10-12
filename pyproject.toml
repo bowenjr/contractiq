@@ -87,6 +87,9 @@ files = [
     "core/bid_execution_repository.py",
     "core/bid_execution_service.py",
     "core/bid_execution_subjects.py",
+    "core/bid_execution_status.py",
+    "core/bid_execution_trace.py",
+    "core/bid_execution_projection.py",
     "scripts/validate_task_09.py",
 ]
 
@@ -133,6 +136,9 @@ module = [
     "core.bid_execution_repository",
     "core.bid_execution_service",
     "core.bid_execution_subjects",
+    "core.bid_execution_status",
+    "core.bid_execution_trace",
+    "core.bid_execution_projection",
     "core.ops08",
     "core.proposal_exchange",
     "core.proposal_exchange_contract",

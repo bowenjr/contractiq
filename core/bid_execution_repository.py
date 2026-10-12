@@ -329,6 +329,16 @@ class BidExecutionRepository:
             ).fetchone()
         return self._from_row(row) if row is not None else None
 
+    def list_records(self, bid_id: str) -> list[BidExecutionRecord]:
+        """List every current execution overlay for one Bid in one register read."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM bid_execution_records WHERE bid_id=? "
+                "ORDER BY subject_kind,subject_id",
+                (bid_id,),
+            ).fetchall()
+        return [self._from_row(row) for row in rows]
+
     def save_record(
         self,
         desired: BidExecutionRecord,
@@ -472,6 +482,15 @@ class BidExecutionRepository:
                 "SELECT * FROM bid_execution_notes WHERE subject_kind=? AND subject_id=? "
                 "ORDER BY created_at,note_id",
                 (subject_kind.value, subject_id),
+            ).fetchall()
+        return [self._note_from_row(row) for row in rows]
+
+    def list_notes_for_bid(self, bid_id: str) -> list[BidExecutionNote]:
+        """List every progress note for one Bid in one register read."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM bid_execution_notes WHERE bid_id=? ORDER BY created_at,note_id",
+                (bid_id,),
             ).fetchall()
         return [self._note_from_row(row) for row in rows]
 
