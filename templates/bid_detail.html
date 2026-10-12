@@ -71,7 +71,7 @@ a.button-lg:hover{background:var(--brand-hover);color:#fff}
     </details>
     <p class="facts"><b>Pricing baseline:</b> {% if pricing_baseline %}Selected — {{ pricing_baseline.scenario_code }}{% if pricing_baseline.version_number %} version {{ pricing_baseline.version_number }}{% endif %} · {% if pricing_baseline.revenue is not none %}{{ pricing_baseline.currency }} {{ pricing_baseline.revenue }} revenue · {{ pricing_baseline.gross_margin }} margin · {% endif %}<span title="Pricing baseline selection identifier">{{ pricing_baseline.selection_id }}</span>{% else %}None selected{% endif %} · <a href="/bids/{{ bid.bid_id }}/pricing-baseline">{{ 'Review pricing baseline' if pricing_baseline else 'Set pricing baseline' }}</a></p>
   </div>
-  <p class="facts"><a href="/bids">← All Bids</a> · <a href="/my-day">My Day</a></p>
+  <p class="facts"><a href="/bids">← All Bids</a> · <a href="/my-day">My Day</a> · <a href="/bids/{{ bid.bid_id }}/execution">Bid execution</a></p>
 </header>
 
 {% include '_guided_panel.html' %}

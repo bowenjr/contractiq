@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }} · {{ bid.project_name }} · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="page-shell execution-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+<p class="breadcrumbs"><a href="/my-day">My Day</a> → <a href="/bids">Bids</a> → <a href="/bids/{{ bid.bid_id }}">{{ bid.project_name }}</a> → <a href="/bids/{{ bid.bid_id }}/execution">Bid execution</a> → {{ list_label }}</p>
+<header class="execution-heading"><div><p class="eyebrow">{{ state_label }} view</p><h1>{{ title }}</h1></div><a href="/bids/{{ bid.bid_id }}/execution">← Bid execution</a></header>
+
+<nav class="execution-tabs" aria-label="List filters">
+{% for tab in tabs %}<a href="/bids/{{ bid.bid_id }}/execution/{{ list_slug }}?state={{ tab.state }}"{% if tab.state == selected_state %} aria-current="page"{% endif %}>{{ tab.label }} <span class="execution-tab-count">{{ tab.count }}</span></a>{% endfor %}
+</nav>
+
+<div class="execution-table-wrap">
+<table class="execution-table"><thead><tr>
+  <th>Title</th><th>Responsible</th><th>Internal due date</th><th>Customer deadline</th><th>Status</th><th>Priority</th>{% if show_requirement %}<th>Requirement</th>{% endif %}<th>Source</th><th>Last updated</th>
+</tr></thead><tbody>
+{% for item in rows %}<tr class="execution-row">
+  <td><a href="{{ item.item_url }}"><strong>{{ item.title }}</strong></a><small>{{ item.description }}</small></td>
+  <td>{% if item.responsible %}{{ item.responsible }}{% if item.responsible_origin == 'register' %}<small>(from the register)</small>{% endif %}{% else %}<span class="execution-badge unassigned">Unassigned</span>{% endif %}</td>
+  <td>{% if item.internal_due_date %}<span{% if item.overdue %} class="execution-overdue"{% endif %}>{{ item.internal_due_date }}{% if item.overdue %}<small>Overdue</small>{% endif %}</span>{% else %}<span class="muted">Not set</span>{% endif %}</td>
+  <td>{% if item.customer_deadline %}{{ item.customer_deadline }}<small>{{ item.customer_deadline_label }}</small>{% else %}<span class="muted">Not recorded</span>{% endif %}</td>
+  <td><span class="execution-badge {% if item.status_label.startswith('Complete') %}complete{% elif item.status_label.startswith('Blocked') %}blocked{% elif item.status_label.startswith('In progress') or item.status_label.startswith('Waiting') %}in-progress{% elif item.status_label.startswith('Not required') %}not-required{% endif %}">{{ item.status_label }}</span>{% if item.waiting_on_prerequisite %}<span class="execution-badge waiting">Waiting on a prerequisite</span>{% endif %}</td>
+  <td>{{ item.priority.value|lower|replace('_',' ')|title if item.priority else 'Not set' }}</td>
+  {% if show_requirement %}<td><span class="execution-badge {% if item.mandatory %}mandatory{% endif %}">{{ 'Mandatory' if item.mandatory else 'Optional' }}</span></td>{% endif %}
+  <td>{% if item.source_url %}<a href="{{ item.source_url }}">Source</a>{% else %}<span class="muted">Not linked</span>{% endif %}</td>
+  <td>{{ item.last_updated.strftime('%Y-%m-%d') }}</td>
+</tr>{% else %}<tr><td class="empty" colspan="{{ 9 if show_requirement else 8 }}">{{ empty_message }}</td></tr>{% endfor %}
+</tbody></table></div>
+</main></body></html>

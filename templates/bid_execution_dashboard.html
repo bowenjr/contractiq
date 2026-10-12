@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bid execution · {{ bid.project_name }} · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="page-shell execution-shell">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+<p class="breadcrumbs"><a href="/my-day">My Day</a> → <a href="/bids">Bids</a> → <a href="/bids/{{ bid.bid_id }}">{{ bid.project_name }}</a> → Bid execution</p>
+
+<header class="execution-heading">
+  <div><p class="eyebrow">Bid execution</p><h1>{{ dashboard.project_name }}</h1><p>{{ dashboard.customer }} · Bid reference {{ dashboard.bid_reference }}</p></div>
+  <a href="/bids/{{ bid.bid_id }}">Bid overview</a>
+</header>
+
+<section class="execution-facts" aria-label="Bid facts">
+  <div><span>Submission deadline</span><strong>{{ dashboard.submission_deadline }}</strong><small>{{ dashboard.submission_deadline_detail }} · {{ deadline_wording }}</small></div>
+  <div><span>Bid owner</span><strong>{{ dashboard.bid_owner }}</strong></div>
+  <div><span>Status</span><strong>{{ dashboard.bid_status_label }}</strong></div>
+</section>
+
+{% if next_item %}
+<a class="execution-next" href="{{ next_item.item_url }}"><span>Next step</span><strong>Assign {{ next_item.title }}</strong><small>Open the first unassigned mandatory returnable.</small></a>
+{% else %}
+<a class="execution-next" href="/bids/{{ bid.bid_id }}/execution/readiness"><span>Next step</span><strong>Review submission readiness</strong><small>See what still needs attention before review.</small></a>
+{% endif %}
+
+{% if dashboard.empty_state %}<p class="execution-empty card">{{ dashboard.empty_state }}</p>{% endif %}
+
+<section class="execution-tile-section"><h2>Submit to the customer</h2><div class="execution-tiles">
+{% for tile in dashboard.tiles if tile.key in ['returnables_total','returnables_outstanding','returnables_complete','returnables_blocked','returnables_unassigned'] %}
+  <a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>
+{% endfor %}
+</div></section>
+
+<div class="execution-dashboard-groups">
+  <section class="execution-tile-section"><h2>Obtain from manufacturers</h2><div class="execution-tiles compact">
+  {% for tile in dashboard.tiles if tile.key == 'manufacturer_inputs_outstanding' %}<a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>{% endfor %}
+  </div></section>
+  <section class="execution-tile-section"><h2>Do before bidding</h2><div class="execution-tiles compact">
+  {% for tile in dashboard.tiles if tile.key == 'pre_bid_actions_outstanding' %}<a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>{% endfor %}
+  </div></section>
+  <section class="execution-tile-section"><h2>Decide</h2><div class="execution-tiles compact">
+  {% for tile in dashboard.tiles if tile.key in ['unresolved_clarifications','commercial_decisions_needed'] %}<a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>{% endfor %}
+  </div></section>
+  <section class="execution-tile-section"><h2>Needs attention</h2><div class="execution-tiles compact">
+  {% for tile in dashboard.tiles if tile.key in ['overdue','blocked'] %}<a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>{% endfor %}
+  </div></section>
+</div>
+
+<section class="execution-tile-section"><h2>Readiness</h2>
+{% for tile in dashboard.tiles if tile.key == 'readiness' %}<a class="execution-tile readiness {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.verdict or 'Review readiness' }}</strong><span>{{ tile.blocking_count or 0 }} blocking item{% if (tile.blocking_count or 0) != 1 %}s{% endif %}</span></a>{% endfor %}
+</section>
+
+<p class="muted execution-information">{{ dashboard.informational_text[0] }}. {{ dashboard.informational_text[1] }}.</p>
+</main></body></html>

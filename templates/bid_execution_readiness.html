@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Submission readiness · {{ bid.project_name }} · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="page-shell execution-shell execution-detail">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+<p class="breadcrumbs"><a href="/my-day">My Day</a> → <a href="/bids">Bids</a> → <a href="/bids/{{ bid.bid_id }}">{{ bid.project_name }}</a> → <a href="/bids/{{ bid.bid_id }}/execution">Bid execution</a> → Readiness</p>
+<header class="execution-heading"><div><p class="eyebrow">Advisory review</p><h1>Submission readiness</h1></div><a href="/bids/{{ bid.bid_id }}/execution">← Bid execution</a></header>
+<section class="execution-verdict {% if readiness.blocking_count %}blocked{% elif readiness.warning_count %}warning{% else %}ready{% endif %}"><strong>{{ readiness.verdict_label }}</strong><span>{{ readiness.advisory }}</span><small>As of {{ readiness.as_of }}</small></section>
+
+{% for group_label, findings in groups %}<section class="execution-readiness-group"><h2>{{ group_label }} <span>{{ findings|sum(attribute='count') }}</span></h2>
+{% for finding in findings %}<article class="card execution-finding"><div><h3>{{ finding.headline }}</h3><span class="execution-count">{{ finding.count }}</span></div><p>{{ finding.detail }}</p>
+{% if finding.items %}<details><summary>View affected items ({{ finding.items|length }})</summary><ul>{% for title, url in finding.items %}<li><a href="{{ url }}">{{ title }}</a></li>{% endfor %}</ul></details>{% endif %}
+<p><a href="{{ finding.resolve_url }}">{{ finding.resolve_label }}</a></p></article>
+{% else %}<p class="card muted">No {{ group_label|lower }} findings.</p>{% endfor %}
+</section>{% endfor %}
+</main></body></html>

@@ -77,6 +77,15 @@ from core.bid_control_center import (
     workflow_development_blockers,
     workspace_path,
 )
+from core.bid_execution_actions import BidExecutionActionService
+from core.bid_execution_dashboard import ExecutionDashboardService
+from core.bid_execution_projection import ExecutionProjectionService
+from core.bid_execution_readiness import BidExecutionReadinessService
+from core.bid_execution_repository import BidExecutionRepository
+from core.bid_execution_routes import register_bid_execution_routes
+from core.bid_execution_service import BidExecutionService
+from core.bid_execution_subjects import ExecutionSubjectResolver
+from core.bid_execution_trace import BidExecutionTrace
 from core.bid_package_intake import (
     AcknowledgementCreate,
     AcknowledgementEventType,
@@ -555,6 +564,48 @@ bid_handover_service = BidHandoverService(db)
 commercial_repository = CommercialRepository(db)
 commercial_service = CommercialService(commercial_repository)
 ops08_repository = Ops08Repository(db)
+bid_execution_repository = BidExecutionRepository(db)
+bid_execution_subject_resolver = ExecutionSubjectResolver(
+    work_item_repository,
+    deliverable_repository,
+    vendor_document_repository,
+)
+bid_execution_service = BidExecutionService(
+    bid_execution_repository,
+    bid_repository,
+    document_repository,
+    bid_execution_subject_resolver,
+)
+bid_execution_trace = BidExecutionTrace(db)
+execution_projection_service = ExecutionProjectionService(
+    work_item_repository,
+    deliverable_repository,
+    vendor_document_repository,
+    bid_execution_repository,
+    ops08_repository,
+    bid_repository,
+    bid_execution_trace,
+)
+execution_dashboard_service = ExecutionDashboardService(
+    execution_projection_service,
+    bid_repository,
+    deliverable_repository,
+)
+bid_execution_readiness_service = BidExecutionReadinessService(
+    execution_dashboard_service,
+    bid_repository,
+    db,
+)
+execution_dashboard_service.readiness = bid_execution_readiness_service
+bid_execution_action_service = BidExecutionActionService(
+    work_item_service,
+    bid_execution_service,
+    execution_projection_service,
+    bid_repository,
+    ops07_repository=ops07_repository,
+    requirement_repository=requirement_repository,
+    as_of_factory=lambda: _working_date(),
+)
 contract_risk_repository = ContractRiskRepository(db)
 contract_risk_service = ContractRiskService(contract_risk_repository)
 approval_repository = ApprovalRepository(db)
@@ -1256,6 +1307,23 @@ async def index(request: Request) -> HTMLResponse:
 def _working_date() -> date:
     """Return today's calendar date in the configured working timezone."""
     return datetime.now(WORKING_TIMEZONE).date()
+
+
+register_bid_execution_routes(
+    app,
+    render=render,
+    working_date=lambda: _working_date(),
+    bid_repository=bid_repository,
+    execution_service=bid_execution_service,
+    projection_service=execution_projection_service,
+    dashboard_service=execution_dashboard_service,
+    readiness_service=bid_execution_readiness_service,
+    trace=bid_execution_trace,
+    discovery_repository=deliverable_discovery_repository,
+    bid_package_repository=bid_package_repository,
+    document_repository=document_repository,
+    vendor_document_repository=vendor_document_repository,
+)
 
 
 def _parse_as_of(value: str | None) -> date:

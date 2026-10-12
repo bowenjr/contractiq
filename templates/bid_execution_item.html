@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ item.title }} · Bid execution · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="page-shell execution-shell execution-detail">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+<p class="breadcrumbs"><a href="/my-day">My Day</a> → <a href="/bids">Bids</a> → <a href="/bids/{{ bid.bid_id }}">{{ bid.project_name }}</a> → <a href="/bids/{{ bid.bid_id }}/execution">Bid execution</a> → Item</p>
+<header class="execution-heading"><div><p class="eyebrow">{{ item.kind.value|lower|replace('_',' ')|title }}</p><h1>{{ item.title }}</h1><p>{{ item.description }}</p></div><a href="{{ list_url }}">← Back to the list</a></header>
+
+<section class="card"><div class="execution-detail-grid">
+  <div><span>Status</span><strong><span class="execution-badge {% if item.status_label.startswith('Complete') %}complete{% elif item.status_label.startswith('Blocked') %}blocked{% elif item.status_label.startswith('In progress') or item.status_label.startswith('Waiting') %}in-progress{% elif item.status_label.startswith('Not required') %}not-required{% endif %}">{{ item.status_label }}</span></strong>{% if item.waiting_on_prerequisite %}<small><span class="execution-badge waiting">Waiting on a prerequisite</span></small>{% endif %}</div>
+  <div><span>Responsible</span><strong>{{ item.responsible or 'Unassigned' }}</strong>{% if item.responsible_origin == 'register' %}<small>(from the register)</small>{% endif %}</div>
+  <div><span>Contributors</span><strong>{{ item.contributors|join(', ') if item.contributors else 'None recorded' }}</strong></div>
+  <div><span>Internal due date</span><strong{% if item.overdue %} class="execution-overdue"{% endif %}>{{ item.internal_due_date or 'Not set' }}{% if item.overdue %} · Overdue{% endif %}</strong></div>
+  <div><span>Customer deadline</span><strong>{{ item.customer_deadline or 'Not recorded' }}</strong><small>{{ item.customer_deadline_label or '' }}</small></div>
+  <div><span>Priority</span><strong>{{ item.priority.value|lower|replace('_',' ')|title if item.priority else 'Not set' }}</strong></div>
+  <div><span>Evidence or completion reference</span><strong>{{ evidence_label or 'None recorded' }}</strong></div>
+  {% if record and record.blocked_reason %}<div><span>What is blocking this</span><strong>{{ record.blocked_reason }}</strong></div>{% endif %}
+</div></section>
+
+<div class="execution-detail-columns">
+<section class="card"><h2>Prerequisites</h2><ul class="execution-link-list">{% for linked in item.prerequisites %}<li><a href="{{ linked.item_url }}">{{ linked.title }}</a> <span class="execution-badge">{{ linked.status_label }}</span></li>{% else %}<li class="muted">No prerequisites recorded.</li>{% endfor %}</ul></section>
+<section class="card"><h2>Dependents</h2><ul class="execution-link-list">{% for linked in item.dependents %}<li><a href="{{ linked.item_url }}">{{ linked.title }}</a> <span class="execution-badge">{{ linked.status_label }}</span></li>{% else %}<li class="muted">No dependent items recorded.</li>{% endfor %}</ul></section>
+</div>
+
+<section class="card"><h2>Progress notes</h2>{% for note in notes %}<article class="execution-note"><p>{{ note.body }}</p><small>{{ note.created_at.strftime('%Y-%m-%d %H:%M') }} · {{ note.created_by }}</small></article>{% else %}<p class="muted">No progress notes recorded.</p>{% endfor %}</section>
+
+<section class="card execution-source-panel"><h2>Source</h2>
+{% for source in source_trace.sources %}<article><dl><dt>Document</dt><dd>{{ source.document_name }}</dd><dt>Locator</dt><dd>{{ source.locator or 'Not recorded' }}</dd></dl>{% if source.verified_quote %}<blockquote>{{ source.verified_quote }}</blockquote>{% else %}<p class="muted">No verified quote recorded.</p>{% endif %}</article>{% else %}<p class="muted">No originating source is linked.</p>{% endfor %}
+{% if source_trace.source_url %}<p><a href="{{ source_trace.source_url }}">Open the originating requirement</a></p>{% endif %}
+</section>
+
+<nav class="execution-item-actions" aria-label="Related records">
+{% if my_work_url %}<a class="button" href="{{ my_work_url }}">Open in My Work</a>{% endif %}
+{% if manufacturer_url %}<a class="button" href="{{ manufacturer_url }}">Change verification</a>{% endif %}
+<span class="muted">Editing and assignment controls are available in the next Bid execution update.</span>
+</nav>
+</main></body></html>

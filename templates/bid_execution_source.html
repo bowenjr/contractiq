@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Requirement source · {{ bid.project_name }} · ContractIQ</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="page-shell execution-shell execution-detail">
+{% set current_nav = 'bids' %}{% include '_primary_navigation.html' %}
+<p class="breadcrumbs"><a href="/my-day">My Day</a> → <a href="/bids">Bids</a> → <a href="/bids/{{ bid.bid_id }}">{{ bid.project_name }}</a> → <a href="/bids/{{ bid.bid_id }}/execution">Bid execution</a> → Requirement source</p>
+<header class="execution-heading"><div><p class="eyebrow">Originating requirement</p><h1>{{ finding.title }}</h1></div><a href="/bids/{{ bid.bid_id }}/execution">← Bid execution</a></header>
+<section class="card"><dl><dt>Classification</dt><dd>{{ classification_label }}</dd><dt>Review decision</dt><dd>{{ review_decision }}</dd></dl></section>
+<section class="card execution-source-panel"><h2>Verified source</h2>
+{% for source in sources %}<article><dl><dt>Document</dt><dd>{{ source.document }}</dd><dt>Locator</dt><dd>{{ source.locator or 'Not recorded' }}</dd></dl>{% if source.quote %}<blockquote>{{ source.quote }}</blockquote>{% else %}<p class="muted">No verified quote recorded.</p>{% endif %}</article>{% else %}<p class="muted">No source citation is recorded.</p>{% endfor %}
+</section>
+<p><a class="button" href="/bids/{{ bid.bid_id }}/deliverable-discovery">Open in deliverables discovery review</a></p>
+</main></body></html>

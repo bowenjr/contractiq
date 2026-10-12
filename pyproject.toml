@@ -96,6 +96,7 @@ files = [
     "core/bid_execution_action_models.py",
     "core/bid_execution_action_support.py",
     "core/bid_execution_actions.py",
+    "core/bid_execution_routes.py",
     "scripts/validate_task_09.py",
 ]
 
@@ -151,6 +152,7 @@ module = [
     "core.bid_execution_action_models",
     "core.bid_execution_action_support",
     "core.bid_execution_actions",
+    "core.bid_execution_routes",
     "core.ops08",
     "core.proposal_exchange",
     "core.proposal_exchange_contract",
