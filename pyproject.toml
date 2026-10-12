@@ -83,6 +83,9 @@ files = [
     "core/bid_control_center.py",
     "core/deliverable_discovery.py",
     "core/deliverable_discovery_llm.py",
+    "core/bid_execution.py",
+    "core/bid_execution_repository.py",
+    "core/bid_execution_service.py",
     "scripts/validate_task_09.py",
 ]
 
@@ -132,6 +135,9 @@ module = [
     "core.bid_control_center",
     "core.deliverable_discovery",
     "core.deliverable_discovery_llm",
+    "core.bid_execution",
+    "core.bid_execution_repository",
+    "core.bid_execution_service",
     "scripts.validate_task_09",
 ]
 ignore_errors = false
