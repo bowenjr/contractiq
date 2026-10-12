@@ -191,3 +191,27 @@ class BidExecutionNote(BaseModel):
             and self.subject_kind is record.subject_kind
             and self.subject_id == record.subject_id
         )
+
+
+class BidExecutionDependency(BaseModel):
+    """An immutable dependency edge whose removal is recorded, never deleted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dependency_id: str
+    bid_id: str
+    item_kind: ExecutionSubjectKind
+    item_id: str
+    prerequisite_kind: ExecutionSubjectKind
+    prerequisite_id: str
+    note: str | None = Field(default=None, max_length=4000)
+    created_at: datetime
+    created_by: str
+    removed_at: datetime | None = None
+    removed_by: str | None = None
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        """Store a blank optional dependency note as absent."""
+        return _optional_text(value)

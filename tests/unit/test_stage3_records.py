@@ -11,6 +11,7 @@ import pytest
 from core.bid_execution import ExecutionSubjectKind, PrepStatus
 from core.bid_execution_repository import BidExecutionRepository
 from core.bid_execution_service import BidExecutionService
+from core.bid_execution_subjects import ExecutionSubjectResolver
 from core.bid_repository import BidRepository
 from core.database import Database
 from core.deliverable_repository import DeliverableRepository
@@ -23,6 +24,9 @@ from core.deliverables import (
 )
 from core.document_repository import DocumentRepository
 from core.schemas import Bid, Provenance
+from core.vendor_document_repository import VendorDocumentRepository
+from core.work_item_repository import WorkItemRepository
+from core.work_item_service import WorkItemService
 
 NOW = datetime(2026, 7, 10, 14, 30, tzinfo=UTC)
 
@@ -34,16 +38,51 @@ def _service(
     numbers: Iterator[int] = iter(range(1, 100))
     repository = BidExecutionRepository(db)
     documents = DocumentRepository(db)
+    work_items = WorkItemRepository(db)
+    deliverables = DeliverableRepository(db)
+    vendor_documents = VendorDocumentRepository(db)
     return (
         BidExecutionService(
             repository,
             bid_repository,
             documents,
+            ExecutionSubjectResolver(work_items, deliverables, vendor_documents),
             now_factory=lambda: NOW,
             id_factory=lambda: UUID(int=next(numbers)),
         ),
         repository,
     )
+
+
+def _returnable(db: Database, bid: Bid, deliverable_id: str, title: str = "Bid form") -> None:
+    DeliverableRepository(db).create(
+        Deliverable(
+            deliverable_id=deliverable_id,
+            bid_id=bid.bid_id,
+            title=title,
+            description="Required Bid returnable",
+            category="Submission",
+            criticality=DeliverableCriticality.MANDATORY,
+            lifecycle_phase=LifecyclePhase.WITH_BID,
+            direction=DeliverableDirection.INTERNAL,
+            workflow_state=DeliverableState.ACTIVE,
+            provenance=Provenance.from_human("jason"),
+            created_at=NOW,
+            updated_at=NOW,
+            created_by="jason",
+        ),
+        "jason",
+    )
+
+
+def _work_item(db: Database, bids: BidRepository, bid: Bid, title: str = "Review package") -> str:
+    service = WorkItemService(
+        WorkItemRepository(db),
+        bids,
+        now_factory=lambda: NOW,
+        id_factory=lambda: UUID(int=900),
+    )
+    return service.create_work_item({"bid_id": bid.bid_id, "title": title}, "jason").work_item_id
 
 
 def _audit_count(db: Database, action: str = "bid_execution_record_saved") -> int:
@@ -102,6 +141,7 @@ def test_optimistic_version_conflict_requires_reload(
     tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
 ) -> None:
     bid_repo.create_bid(valid_bid)
+    _returnable(tmp_db, valid_bid, "DEL-1")
     service, _ = _service(tmp_db, bid_repo)
     created = service.set_record(
         valid_bid.bid_id,
@@ -138,6 +178,7 @@ def test_audit_failure_rolls_back_the_record_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bid_repo.create_bid(valid_bid)
+    _returnable(tmp_db, valid_bid, "DEL-ROLLBACK")
     service, repository = _service(tmp_db, bid_repo)
 
     def fail_audit(*_args: object, **_kwargs: object) -> None:
@@ -161,6 +202,7 @@ def test_notes_are_append_only_and_each_append_is_audited(
     tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
 ) -> None:
     bid_repo.create_bid(valid_bid)
+    _returnable(tmp_db, valid_bid, "DEL-NOTES")
     service, _ = _service(tmp_db, bid_repo)
     first = service.add_note(valid_bid.bid_id, "RETURNABLE", "DEL-NOTES", "First update", "jason")
     second = service.add_note(valid_bid.bid_id, "RETURNABLE", "DEL-NOTES", "Correction", "jason")
@@ -186,6 +228,8 @@ def test_hard_delete_is_blocked_for_records_and_dependencies(
     tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
 ) -> None:
     bid_repo.create_bid(valid_bid)
+    _returnable(tmp_db, valid_bid, "DEL-DELETE")
+    work_item_id = _work_item(tmp_db, bid_repo, valid_bid)
     service, _ = _service(tmp_db, bid_repo)
     record = service.set_record(
         valid_bid.bid_id,
@@ -203,7 +247,7 @@ def test_hard_delete_is_blocked_for_records_and_dependencies(
                 "RETURNABLE",
                 "DEL-DELETE",
                 "WORK_ITEM",
-                "WI-1",
+                work_item_id,
                 None,
                 NOW.isoformat(),
                 "jason",
@@ -224,6 +268,7 @@ def test_unchanged_resave_is_a_no_op(
     tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
 ) -> None:
     bid_repo.create_bid(valid_bid)
+    _returnable(tmp_db, valid_bid, "DEL-NOOP")
     service, _ = _service(tmp_db, bid_repo)
     data = {
         "expected_version": 0,
@@ -248,6 +293,7 @@ def test_due_date_after_customer_deadline_is_refused_with_fix(
     tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
 ) -> None:
     bid_repo.create_bid(valid_bid)
+    _returnable(tmp_db, valid_bid, "DEL-LATE")
     service, repository = _service(tmp_db, bid_repo)
 
     with pytest.raises(ValueError, match="choose a date on or before the customer deadline"):
@@ -266,6 +312,7 @@ def test_returnable_status_requirements_and_evidence_existence(
     tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
 ) -> None:
     bid_repo.create_bid(valid_bid)
+    _returnable(tmp_db, valid_bid, "DEL-STATUS")
     service, _ = _service(tmp_db, bid_repo)
     base = (valid_bid.bid_id, ExecutionSubjectKind.RETURNABLE, "DEL-STATUS")
 
@@ -339,3 +386,54 @@ def test_overlay_does_not_infer_owner_date_or_status_from_register(
     assert record.contributors == ["Engineering"]
     assert ExecutionSubjectKind.RETURNABLE.label == "Returnable"
     assert PrepStatus.NOT_STARTED.label == "Not started"
+
+
+def test_missing_subject_refuses_overlay_and_note_access(
+    tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
+) -> None:
+    bid_repo.create_bid(valid_bid)
+    service, repository = _service(tmp_db, bid_repo)
+
+    with pytest.raises(ValueError, match="was not found; choose an existing returnable"):
+        service.set_record(
+            valid_bid.bid_id,
+            "RETURNABLE",
+            "DEL-MISSING",
+            {"expected_version": 0, "responsible": "Bid Manager"},
+            "jason",
+        )
+    with pytest.raises(ValueError, match="was not found; choose an existing returnable"):
+        service.add_note(valid_bid.bid_id, "RETURNABLE", "DEL-MISSING", "Update", "jason")
+    with pytest.raises(ValueError, match="was not found; choose an existing returnable"):
+        service.list_notes(valid_bid.bid_id, "RETURNABLE", "DEL-MISSING")
+
+    assert repository.get_record(ExecutionSubjectKind.RETURNABLE, "DEL-MISSING") is None
+    assert _audit_count(tmp_db) == 0
+
+
+def test_cross_bid_subject_refuses_overlay_and_note_access(
+    tmp_db: Database, bid_repo: BidRepository, valid_bid: Bid
+) -> None:
+    other_bid = valid_bid.model_copy(
+        update={"bid_id": "B-2026-0002", "project_name": "Other Project"}
+    )
+    bid_repo.create_bid(valid_bid)
+    bid_repo.create_bid(other_bid)
+    _returnable(tmp_db, other_bid, "DEL-OTHER-BID")
+    service, repository = _service(tmp_db, bid_repo)
+
+    with pytest.raises(ValueError, match="belongs to a different Bid"):
+        service.set_record(
+            valid_bid.bid_id,
+            "RETURNABLE",
+            "DEL-OTHER-BID",
+            {"expected_version": 0, "responsible": "Bid Manager"},
+            "jason",
+        )
+    with pytest.raises(ValueError, match="belongs to a different Bid"):
+        service.add_note(valid_bid.bid_id, "RETURNABLE", "DEL-OTHER-BID", "Update", "jason")
+    with pytest.raises(ValueError, match="belongs to a different Bid"):
+        service.list_notes(valid_bid.bid_id, "RETURNABLE", "DEL-OTHER-BID")
+
+    assert repository.get_record(ExecutionSubjectKind.RETURNABLE, "DEL-OTHER-BID") is None
+    assert _audit_count(tmp_db) == 0

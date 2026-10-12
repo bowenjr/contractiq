@@ -7,13 +7,15 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from core.bid_execution import (
+    BidExecutionDependency,
     BidExecutionNote,
     BidExecutionRecord,
     BidExecutionUpdate,
     ExecutionSubjectKind,
     PrepStatus,
 )
-from core.bid_execution_repository import BidExecutionRepository
+from core.bid_execution_repository import BidExecutionRepository, DependencyCycleError
+from core.bid_execution_subjects import ExecutionSubjectFacts, ExecutionSubjectResolver
 from core.bid_repository import BidRepository
 from core.document_repository import DocumentRepository
 
@@ -28,6 +30,7 @@ class BidExecutionService:
         repository: BidExecutionRepository,
         bid_repository: BidRepository,
         document_repository: DocumentRepository,
+        subject_resolver: ExecutionSubjectResolver,
         *,
         now_factory: Callable[[], datetime] | None = None,
         id_factory: Callable[[], UUID] | None = None,
@@ -35,6 +38,7 @@ class BidExecutionService:
         self.repository = repository
         self.bid_repository = bid_repository
         self.document_repository = document_repository
+        self.subject_resolver = subject_resolver
         self._now_factory = now_factory or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or uuid4
 
@@ -190,6 +194,7 @@ class BidExecutionService:
         bid = self.bid_repository.get_bid(bid_id)
         if bid is None:
             raise ValueError("Bid not found; return to the Bid list and choose an existing Bid")
+        self.subject_resolver.resolve(bid_id, kind, normalized_subject_id)
         self._validate_kind_fields(kind, request)
         if (
             kind is not ExecutionSubjectKind.WORK_ITEM
@@ -274,11 +279,14 @@ class BidExecutionService:
         if self.bid_repository.get_bid(bid_id) is None:
             raise ValueError("Bid not found; return to the Bid list and choose an existing Bid")
         normalized_actor = self._actor(actor)
+        kind = self._kind(subject_kind)
+        normalized_subject_id = self._subject_id(subject_id)
+        self.subject_resolver.resolve(bid_id, kind, normalized_subject_id)
         note = BidExecutionNote(
             note_id=self._new_id("BEN"),
             bid_id=bid_id,
-            subject_kind=self._kind(subject_kind),
-            subject_id=self._subject_id(subject_id),
+            subject_kind=kind,
+            subject_id=normalized_subject_id,
             body=body,
             created_at=self._now(),
             created_by=normalized_actor,
@@ -291,15 +299,10 @@ class BidExecutionService:
         subject_kind: ExecutionSubjectKind | str,
         subject_id: str,
     ) -> list[BidExecutionNote]:
-        """Return notes for a subject and reject cross-Bid overlay access."""
+        """Return notes only for an existing subject in the requested Bid."""
         kind = self._kind(subject_kind)
         normalized_subject_id = self._subject_id(subject_id)
-        record = self.repository.get_record(kind, normalized_subject_id)
-        if record is not None and record.bid_id != bid_id:
-            raise ValueError(
-                "this execution item belongs to a different Bid; open it from the correct "
-                "Bid workspace"
-            )
+        self.subject_resolver.resolve(bid_id, kind, normalized_subject_id)
         notes = self.repository.list_notes(kind, normalized_subject_id)
         if any(note.bid_id != bid_id for note in notes):
             raise ValueError(
@@ -307,3 +310,96 @@ class BidExecutionService:
                 "Bid workspace"
             )
         return notes
+
+    @staticmethod
+    def _cycle_message(
+        item: ExecutionSubjectFacts,
+        prerequisite: ExecutionSubjectFacts,
+        path: tuple[tuple[ExecutionSubjectKind, str], ...],
+        resolver: ExecutionSubjectResolver,
+    ) -> str:
+        titles = [prerequisite.title]
+        for kind, subject_id in path[1:-1]:
+            titles.append(resolver.resolve(item.bid_id, kind, subject_id).title)
+        titles.append(item.title)
+        chain = ", which already depends on ".join(titles)
+        return (
+            f"{item.title} would depend on {chain}; remove an existing dependency in this "
+            "loop before adding it"
+        )
+
+    def add_dependency(
+        self,
+        bid_id: str,
+        item_kind: ExecutionSubjectKind | str,
+        item_id: str,
+        prerequisite_kind: ExecutionSubjectKind | str,
+        prerequisite_id: str,
+        note: str | None,
+        actor: str,
+    ) -> BidExecutionDependency:
+        """Add an audited same-Bid dependency while preventing duplicate or cyclic edges."""
+        if self.bid_repository.get_bid(bid_id) is None:
+            raise ValueError("Bid not found; return to the Bid list and choose an existing Bid")
+        normalized_actor = self._actor(actor)
+        normalized_item_kind = self._kind(item_kind)
+        normalized_prerequisite_kind = self._kind(prerequisite_kind)
+        normalized_item_id = self._subject_id(item_id)
+        normalized_prerequisite_id = self._subject_id(prerequisite_id)
+        item = self.subject_resolver.resolve(bid_id, normalized_item_kind, normalized_item_id)
+        prerequisite = self.subject_resolver.resolve(
+            bid_id, normalized_prerequisite_kind, normalized_prerequisite_id
+        )
+        if item.kind is prerequisite.kind and item.subject_id == prerequisite.subject_id:
+            raise ValueError(
+                f"{item.title} cannot depend on itself; choose a different prerequisite"
+            )
+        dependency = BidExecutionDependency(
+            dependency_id=self._new_id("BED"),
+            bid_id=bid_id,
+            item_kind=item.kind,
+            item_id=item.subject_id,
+            prerequisite_kind=prerequisite.kind,
+            prerequisite_id=prerequisite.subject_id,
+            note=note,
+            created_at=self._now(),
+            created_by=normalized_actor,
+        )
+        try:
+            return self.repository.add_dependency(dependency)
+        except DependencyCycleError as exc:
+            raise ValueError(
+                self._cycle_message(item, prerequisite, exc.path, self.subject_resolver)
+            ) from exc
+
+    def remove_dependency(
+        self,
+        bid_id: str,
+        dependency_id: str,
+        actor: str,
+    ) -> BidExecutionDependency:
+        """Remove one dependency once after revalidating both authoritative subjects."""
+        normalized_actor = self._actor(actor)
+        dependency = next(
+            (
+                value
+                for value in self.repository.list_dependencies(bid_id)
+                if value.dependency_id == dependency_id
+            ),
+            None,
+        )
+        if dependency is None:
+            raise ValueError(
+                "dependency was not found in this Bid; refresh the item and choose an existing "
+                "dependency"
+            )
+        self.subject_resolver.resolve(bid_id, dependency.item_kind, dependency.item_id)
+        self.subject_resolver.resolve(
+            bid_id, dependency.prerequisite_kind, dependency.prerequisite_id
+        )
+        return self.repository.remove_dependency(
+            bid_id,
+            dependency_id,
+            normalized_actor,
+            removed_at=self._now(),
+        )

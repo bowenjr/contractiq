@@ -4,12 +4,31 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import deque
 from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
 
-from core.bid_execution import BidExecutionNote, BidExecutionRecord, ExecutionSubjectKind
+from core.bid_execution import (
+    BidExecutionDependency,
+    BidExecutionNote,
+    BidExecutionRecord,
+    ExecutionSubjectKind,
+)
 from core.database import Database
+
+SubjectKey = tuple[ExecutionSubjectKind, str]
+
+
+class DependencyCycleError(ValueError):
+    """Carry the authoritative subject path that would close a dependency loop."""
+
+    def __init__(self, path: tuple[SubjectKey, ...]) -> None:
+        self.path = path
+        super().__init__(
+            "this dependency would create a circular chain; remove an existing dependency "
+            "in the loop before adding it"
+        )
 
 
 class BidExecutionRepository:
@@ -193,6 +212,25 @@ class BidExecutionRepository:
         )
 
     @staticmethod
+    def _dependency_from_row(row: sqlite3.Row) -> BidExecutionDependency:
+        removed_at = row["removed_at"]
+        return BidExecutionDependency(
+            dependency_id=str(row["dependency_id"]),
+            bid_id=str(row["bid_id"]),
+            item_kind=ExecutionSubjectKind(str(row["item_kind"])),
+            item_id=str(row["item_id"]),
+            prerequisite_kind=ExecutionSubjectKind(str(row["prerequisite_kind"])),
+            prerequisite_id=str(row["prerequisite_id"]),
+            note=str(row["note"]) if row["note"] is not None else None,
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_by=str(row["created_by"]),
+            removed_at=(
+                datetime.fromisoformat(str(removed_at)) if removed_at is not None else None
+            ),
+            removed_by=(str(row["removed_by"]) if row["removed_by"] is not None else None),
+        )
+
+    @staticmethod
     def _record_values(record: BidExecutionRecord) -> tuple[object, ...]:
         return (
             record.execution_id,
@@ -224,6 +262,48 @@ class BidExecutionRepository:
             note.created_at.isoformat(),
             note.created_by,
         )
+
+    @staticmethod
+    def _dependency_values(dependency: BidExecutionDependency) -> tuple[object, ...]:
+        return (
+            dependency.dependency_id,
+            dependency.bid_id,
+            dependency.item_kind.value,
+            dependency.item_id,
+            dependency.prerequisite_kind.value,
+            dependency.prerequisite_id,
+            dependency.note,
+            dependency.created_at.isoformat(),
+            dependency.created_by,
+            dependency.removed_at.isoformat() if dependency.removed_at else None,
+            dependency.removed_by,
+        )
+
+    @staticmethod
+    def _path_between(
+        rows: list[sqlite3.Row], start: SubjectKey, target: SubjectKey
+    ) -> tuple[SubjectKey, ...] | None:
+        adjacency: dict[SubjectKey, list[SubjectKey]] = {}
+        for row in rows:
+            item = (ExecutionSubjectKind(str(row["item_kind"])), str(row["item_id"]))
+            prerequisite = (
+                ExecutionSubjectKind(str(row["prerequisite_kind"])),
+                str(row["prerequisite_id"]),
+            )
+            adjacency.setdefault(item, []).append(prerequisite)
+        queue: deque[tuple[SubjectKey, tuple[SubjectKey, ...]]] = deque([(start, (start,))])
+        visited: set[SubjectKey] = set()
+        while queue:
+            current, path = queue.popleft()
+            if current == target:
+                return path
+            if current in visited:
+                continue
+            visited.add(current)
+            for next_subject in adjacency.get(current, []):
+                if next_subject not in visited:
+                    queue.append((next_subject, (*path, next_subject)))
+        return None
 
     @staticmethod
     def _mutable_values(record: BidExecutionRecord) -> tuple[object, ...]:
@@ -394,3 +474,143 @@ class BidExecutionRepository:
                 (subject_kind.value, subject_id),
             ).fetchall()
         return [self._note_from_row(row) for row in rows]
+
+    def add_dependency(self, dependency: BidExecutionDependency) -> BidExecutionDependency:
+        """Add an active edge after an atomic duplicate and cycle check."""
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                duplicate = conn.execute(
+                    "SELECT 1 FROM bid_execution_dependencies WHERE item_kind=? AND item_id=? "
+                    "AND prerequisite_kind=? AND prerequisite_id=? AND removed_at IS NULL",
+                    (
+                        dependency.item_kind.value,
+                        dependency.item_id,
+                        dependency.prerequisite_kind.value,
+                        dependency.prerequisite_id,
+                    ),
+                ).fetchone()
+                if duplicate is not None:
+                    raise ValueError(
+                        "this active dependency already exists; remove the existing link before "
+                        "adding it again"
+                    )
+                rows = conn.execute(
+                    "SELECT item_kind,item_id,prerequisite_kind,prerequisite_id "
+                    "FROM bid_execution_dependencies WHERE bid_id=? AND removed_at IS NULL "
+                    "ORDER BY created_at,dependency_id",
+                    (dependency.bid_id,),
+                ).fetchall()
+                path = self._path_between(
+                    rows,
+                    (dependency.prerequisite_kind, dependency.prerequisite_id),
+                    (dependency.item_kind, dependency.item_id),
+                )
+                if path is not None:
+                    raise DependencyCycleError(path)
+                conn.execute(
+                    "INSERT INTO bid_execution_dependencies VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    self._dependency_values(dependency),
+                )
+                self._audit(
+                    conn,
+                    dependency.bid_id,
+                    dependency.created_by,
+                    "bid_execution_dependency_added",
+                    json.dumps(dependency.model_dump(mode="json"), sort_keys=True),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return dependency
+
+    def remove_dependency(
+        self,
+        bid_id: str,
+        dependency_id: str,
+        actor: str,
+        *,
+        removed_at: datetime | None = None,
+    ) -> BidExecutionDependency:
+        """Mark one active edge removed exactly once with atomic audit evidence."""
+        when = removed_at or datetime.now(UTC)
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM bid_execution_dependencies WHERE dependency_id=?",
+                    (dependency_id,),
+                ).fetchone()
+                if row is None or str(row["bid_id"]) != bid_id:
+                    raise ValueError(
+                        "dependency was not found in this Bid; refresh the item and choose an "
+                        "existing dependency"
+                    )
+                if row["removed_at"] is not None:
+                    raise ValueError(
+                        "dependency was already removed; refresh the item before making another "
+                        "change"
+                    )
+                cursor = conn.execute(
+                    "UPDATE bid_execution_dependencies SET removed_at=?,removed_by=? "
+                    "WHERE dependency_id=? AND removed_at IS NULL",
+                    (when.isoformat(), actor, dependency_id),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        "dependency changed while it was being removed; refresh the item and "
+                        "try again"
+                    )
+                updated_row = conn.execute(
+                    "SELECT * FROM bid_execution_dependencies WHERE dependency_id=?",
+                    (dependency_id,),
+                ).fetchone()
+                if updated_row is None:
+                    raise RuntimeError("removed dependency could not be reloaded")
+                removed = self._dependency_from_row(updated_row)
+                self._audit(
+                    conn,
+                    bid_id,
+                    actor,
+                    "bid_execution_dependency_removed",
+                    json.dumps(removed.model_dump(mode="json"), sort_keys=True),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return removed
+
+    def list_dependencies(self, bid_id: str) -> list[BidExecutionDependency]:
+        """List active and removed dependency history for one Bid."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM bid_execution_dependencies WHERE bid_id=? "
+                "ORDER BY created_at,dependency_id",
+                (bid_id,),
+            ).fetchall()
+        return [self._dependency_from_row(row) for row in rows]
+
+    def list_active_dependencies_for_subject(
+        self,
+        bid_id: str,
+        subject_kind: ExecutionSubjectKind,
+        subject_id: str,
+    ) -> list[BidExecutionDependency]:
+        """List active incoming and outgoing edges adjacent to one subject."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM bid_execution_dependencies WHERE bid_id=? "
+                "AND removed_at IS NULL AND ((item_kind=? AND item_id=?) OR "
+                "(prerequisite_kind=? AND prerequisite_id=?)) "
+                "ORDER BY created_at,dependency_id",
+                (
+                    bid_id,
+                    subject_kind.value,
+                    subject_id,
+                    subject_kind.value,
+                    subject_id,
+                ),
+            ).fetchall()
+        return [self._dependency_from_row(row) for row in rows]
