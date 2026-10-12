@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict
@@ -19,6 +20,17 @@ from core.bid_repository import BidRepository
 from core.deliverable_repository import DeliverableRepository
 from core.deliverables import DeliverableCriticality, LifecyclePhase
 from core.schemas import Bid
+
+
+class _ReadinessResult(Protocol):
+    verdict_label: str
+    blocking_count: int
+
+
+class _ReadinessEvaluator(Protocol):
+    def evaluate(self, bid_id: str, as_of: date) -> _ReadinessResult:
+        """Return advisory execution readiness for one Bid."""
+        ...
 
 
 class ExecutionListSlug(StrEnum):
@@ -190,6 +202,7 @@ def project_bid_execution_dashboard(
     non_blocking_returnable_count: int,
     has_registered_items: bool,
     as_of: date,
+    readiness: _ReadinessResult | None = None,
 ) -> BidExecutionDashboard:
     """Build a dashboard only from already-loaded authoritative projection facts."""
     tiles = tuple(
@@ -205,9 +218,11 @@ def project_bid_execution_dashboard(
         ExecutionDashboardTile(
             key="readiness",
             label="Submission readiness",
-            count=0,
+            count=readiness.blocking_count if readiness is not None else 0,
             url=f"/bids/{bid.bid_id}/execution/readiness",
-            tone="neutral",
+            tone="critical" if readiness is not None and readiness.blocking_count else "neutral",
+            verdict=readiness.verdict_label if readiness is not None else None,
+            blocking_count=readiness.blocking_count if readiness is not None else None,
         ),
     )
     deadline_detail = _deadline_detail(bid)
@@ -249,10 +264,12 @@ class ExecutionDashboardService:
         projection: ExecutionProjectionService,
         bid_repository: BidRepository,
         deliverable_repository: DeliverableRepository | None = None,
+        readiness_service: _ReadinessEvaluator | None = None,
     ) -> None:
         self.projection = projection
         self.bids = bid_repository
         self.deliverables = deliverable_repository or projection.deliverables
+        self.readiness = readiness_service
 
     def filtered_list(
         self,
@@ -310,6 +327,9 @@ class ExecutionDashboardService:
             non_blocking_returnable_count=non_blocking_count,
             has_registered_items=bool(all_items or nonrequired_manufacturer_items or deliverables),
             as_of=as_of,
+            readiness=(
+                self.readiness.evaluate(bid_id, as_of) if self.readiness is not None else None
+            ),
         )
 
 

@@ -101,6 +101,8 @@ class ExecutionItem(BaseModel):
     status_label: str
     priority: WorkItemPriority | None = None
     mandatory: bool = False
+    required: bool = True
+    has_customer_term: bool = False
     critical: bool = False
     overdue: bool = False
     unassigned: bool = True
@@ -133,6 +135,8 @@ class _Draft:
     status_label: str
     priority: WorkItemPriority | None
     mandatory: bool
+    required: bool
+    has_customer_term: bool
     evidence: str | None
     last_updated: datetime
     item_url: str
@@ -381,6 +385,8 @@ class ExecutionProjectionService:
             label,
             item.priority,
             False,
+            True,
+            False,
             item.completion_evidence or item.completion_outcome,
             _latest(item.updated_at, overlay.updated_at if overlay else None, notes.get(key)),
             f"/bids/{item.bid_id}/execution/items/work-item/{quote(item.work_item_id)}",
@@ -408,6 +414,13 @@ class ExecutionProjectionService:
         mandatory = (
             DeliverableCriticality(str(row["criticality"])) is DeliverableCriticality.MANDATORY
         )
+        lifecycle = LifecyclePhase(str(row["lifecycle_phase"]))
+        required = (
+            lifecycle in {LifecyclePhase.WITH_BID, LifecyclePhase.BOTH}
+            and bool(row["condition_active"])
+            and DeliverableCriticality(str(row["criticality"]))
+            is not DeliverableCriticality.INFORMATIONAL
+        )
         fixed = DueBasis(str(row["due_basis"])) is DueBasis.FIXED_DATE
         trace = traces[key]
         label = effective.status.label
@@ -429,6 +442,8 @@ class ExecutionProjectionService:
             label,
             overlay.priority if overlay else None,
             mandatory,
+            required,
+            False,
             overlay.completion_evidence if overlay else None,
             _latest(
                 _as_datetime(row["updated_at"]),
@@ -439,8 +454,7 @@ class ExecutionProjectionService:
             trace.origin,
             _source_label(trace),
             trace.source_url,
-            LifecyclePhase(str(row["lifecycle_phase"]))
-            in {LifecyclePhase.WITH_BID, LifecyclePhase.BOTH},
+            lifecycle in {LifecyclePhase.WITH_BID, LifecyclePhase.BOTH},
         )
 
     @staticmethod
@@ -475,6 +489,8 @@ class ExecutionProjectionService:
             status.label,
             overlay.priority if overlay else None,
             False,
+            item.required and item.applicable,
+            False,
             item.evidence_reference,
             _latest(item.updated_at, overlay.updated_at if overlay else None, notes.get(key)),
             f"/bids/{bid_id}/execution/items/manufacturer-input/{quote(item.requirement_id)}",
@@ -492,6 +508,10 @@ class ExecutionProjectionService:
             disposition is PositionDisposition.CLARIFICATION_REQUIRED
             and negotiation is not NegotiationState.RESOLVED
         )
+        resolved_clarification = (
+            disposition is PositionDisposition.CLARIFICATION_REQUIRED
+            and negotiation is NegotiationState.RESOLVED
+        )
         decision = (
             disposition is PositionDisposition.NOT_REVIEWED
             and bool(_optional_text(row["customer_position"]))
@@ -500,15 +520,27 @@ class ExecutionProjectionService:
             and bool(_optional_text(row["required_approver"]))
             and not bool(_optional_text(row["current_outcome"]))
         )
-        if not clarification and not decision:
+        if not clarification and not resolved_clarification and not decision:
             return []
         subject_id = str(row["position_id"])
         marker = _DISCOVERY_MARKER.search(str(row["supporting_evidence"] or ""))
         origin: Literal["From RFP finding", "Added manually"] = (
             "From RFP finding" if marker else "Added manually"
         )
-        status = PrepStatus.BLOCKED if clarification else PrepStatus.NOT_STARTED
-        state_label = "Clarification" if clarification else "Decision needed"
+        status = (
+            PrepStatus.BLOCKED
+            if clarification
+            else PrepStatus.COMPLETE
+            if resolved_clarification
+            else PrepStatus.NOT_STARTED
+        )
+        state_label = (
+            "Clarification"
+            if clarification
+            else "Clarification resolved"
+            if resolved_clarification
+            else "Decision needed"
+        )
         owner = _optional_text(row["owner"])
         due = _as_date(row["due_date"])
         return [
@@ -529,6 +561,8 @@ class ExecutionProjectionService:
                 state_label,
                 None,
                 False,
+                True,
+                bool(_optional_text(row["customer_position"])),
                 _optional_text(row["current_outcome"])
                 or _optional_text(row["supporting_evidence"]),
                 _as_datetime(row["created_at"]),
@@ -574,6 +608,8 @@ class ExecutionProjectionService:
             status_label=draft.status_label,
             priority=draft.priority,
             mandatory=draft.mandatory,
+            required=draft.required,
+            has_customer_term=draft.has_customer_term,
             critical=is_critical(draft.priority, mandatory=draft.mandatory),
             overdue=is_overdue(draft.internal_due_date, draft.status, as_of),
             unassigned=draft.responsible is None,
