@@ -17,7 +17,7 @@
   <label>Contributors <small>Separate names with commas.</small><input name="contributors" value="{{ entered.get('contributors','') if active_form == 'add-action' else '' }}"></label>
   <label>Internal due date (optional)<input type="date" name="due_date" value="{{ entered.get('due_date','') if active_form == 'add-action' else '' }}"></label>
   <label>Priority<select name="priority" required>{% for priority in priorities %}{% set label = priority.value|lower|title %}<option value="{{ label }}"{% if (entered.get('priority','Normal') if active_form == 'add-action' else 'Normal') == label %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-  <label>Prerequisite (optional)<select name="prerequisite"><option value="">No prerequisite</option>{% for option in prerequisite_options|default([]) %}<option value="{{ option.token }}">{{ option.title }} — {{ option.kind_label }}</option>{% endfor %}</select></label>
+  <label>Prerequisite (optional)<select name="prerequisite"><option value="">No prerequisite</option>{% for group in prerequisite_groups|default([]) %}<optgroup label="{{ group.label }}">{% for option in group.options %}<option value="{{ option.token }}"{% if active_form == 'add-action' and entered.get('prerequisite') == option.token %} selected{% endif %}>{{ option.title }} — {{ option.kind_label }}</option>{% endfor %}</optgroup>{% endfor %}</select></label>
   <div class="execution-form-actions wide"><button type="submit">Add action</button></div>
 </form></details>{% endif %}
 

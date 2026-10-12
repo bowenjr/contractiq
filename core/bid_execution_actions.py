@@ -45,7 +45,7 @@ class BidExecutionActionService(BidExecutionActionSupport):
         responsible: str | None,
         contributors: list[str] | None,
         due_date: date | None,
-        priority: WorkItemPriority | str,
+        priority: WorkItemPriority | str | None,
         source_requirement_id: str | None,
         prerequisite: tuple[ExecutionSubjectKind | str, str] | None,
         actor: str,
@@ -91,7 +91,9 @@ class BidExecutionActionService(BidExecutionActionSupport):
                 title=title,
                 details=details,
                 status=WorkItemStatus.OPEN,
-                priority=WorkItemPriority(priority),
+                priority=(
+                    WorkItemPriority(priority) if priority is not None else WorkItemPriority.NORMAL
+                ),
                 due_date=due_date,
                 category=WorkCategory.PROJECT_COORDINATION,
             ),
@@ -217,8 +219,6 @@ class BidExecutionActionService(BidExecutionActionSupport):
             overlay_version = record.version if record is not None else 0
             if request.overlay_expected_version != overlay_version:
                 raise ValueError("This item changed since you opened it. Reload and try again.")
-        if "priority" in fields and request.priority is None:
-            raise ValueError("priority cannot be blank; choose a priority")
         if "due_date" in fields:
             self._validate_due_date(bid_id, request.due_date)
         if "note" in fields and request.note is None:
@@ -243,6 +243,8 @@ class BidExecutionActionService(BidExecutionActionSupport):
 
         edit: dict[str, object] = {"expected_version": item.version}
         for name in ("priority", "due_date"):
+            if name == "priority" and request.priority is None:
+                continue
             if name in fields and getattr(request, name) != getattr(item, name):
                 edit[name] = getattr(request, name)
         relevant = {

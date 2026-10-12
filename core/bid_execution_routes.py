@@ -211,8 +211,10 @@ def _contributors(value: object) -> list[str]:
     return [part.strip() for part in str(value or "").split(",") if part.strip()]
 
 
-def _priority(value: object) -> WorkItemPriority:
+def _priority(value: object) -> WorkItemPriority | None:
     text = str(value or "").strip().upper().replace(" ", "_")
+    if not text:
+        return None
     try:
         return WorkItemPriority(text)
     except ValueError as exc:
@@ -337,6 +339,25 @@ def register_bid_execution_routes(
                 }
             )
         return options
+
+    def candidate_option_groups(
+        options: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        groups: list[dict[str, object]] = []
+        for kind, label in (
+            (ExecutionSubjectKind.RETURNABLE, "Returnables"),
+            (ExecutionSubjectKind.MANUFACTURER_INPUT, "Manufacturer inputs"),
+            (ExecutionSubjectKind.WORK_ITEM, "Actions"),
+        ):
+            groups.append(
+                {
+                    "label": label,
+                    "options": [option for option in options if option["kind"] is kind],
+                }
+            )
+        # Commercial positions are read-only and cannot be dependency subjects in Stage 3.
+        groups.append({"label": "Commercial", "options": []})
+        return groups
 
     def resolve_candidate(bid_id: str, token: str) -> tuple[ExecutionSubjectKind, str] | None:
         normalized = token.strip()
@@ -508,7 +529,7 @@ def register_bid_execution_routes(
             notes=list(reversed(notes)),
             source_trace=source_trace,
             evidence_label=evidence_label,
-            prerequisite_options=candidates,
+            prerequisite_groups=candidate_option_groups(candidates),
             active_prerequisites=dependencies,
             document_options=controlled_document_options(bid_id),
             priorities=list(WorkItemPriority),
@@ -636,7 +657,7 @@ def register_bid_execution_routes(
                 )
                 for row in rows
             },
-            prerequisite_options=candidate_options(bid_id),
+            prerequisite_groups=candidate_option_groups(candidate_options(bid_id)),
             priorities=list(WorkItemPriority),
             entered=entered or {},
             active_form=active_form,

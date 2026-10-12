@@ -123,6 +123,19 @@ class BidExecutionTrace:
         result: dict[SubjectKey, ExecutionSourceTrace] = {}
         for key in keys:
             unique = list(dict.fromkeys(sources[key]))
+            informative = [source for source in unique if source.locator or source.verified_quote]
+            if informative:
+                by_location: dict[tuple[str, str | None], ExecutionTraceSource] = {}
+                for source in informative:
+                    location = (source.document_name, source.locator)
+                    previous = by_location.get(location)
+                    if previous is None or (
+                        previous.verified_quote is None and source.verified_quote is not None
+                    ):
+                        by_location[location] = source
+                unique = list(by_location.values())
+            elif unique:
+                unique = unique[:1]
             first_finding = findings[key][0] if findings[key] else None
             result[key] = ExecutionSourceTrace(
                 origin="From RFP finding" if first_finding else "Added manually",
