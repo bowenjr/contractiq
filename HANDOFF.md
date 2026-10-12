@@ -1,3 +1,21 @@
+# Handoff — Stage 2.1: requirements integrity and classification hardening
+
+Branch `ciq/stage2.1-integrity-hardening` (from Stage 2 acceptance `c8be24a`). Spec: `docs/tasks/CIQ-STAGE2.1-requirements-integrity.md`.
+Port 8000, its database and `~/contractiq-manual/` untouched; nothing merged, pushed or deployed.
+
+| Unit | Change | Where |
+|---|---|---|
+| A | Same title + lifecycle no longer means "same obligation". Candidates are compared on description (Dice token overlap >= 0.75), timing, responsible party, condition and source reference; same located quote = identical. Different or uncertain -> both findings kept, an immutable collision row is written with the proposals and the review screen shows "Possible collision with ...". A flagged finding never reuses a record by title at accept time. Existing dedup keys are unchanged. | `core/deliverable_discovery_collisions.py`, `_service.py`, `_repository.py`, `_migrations.py`, `_destinations.py`, `templates/_discovery_review.html` |
+| B | Guard G9: a located quote that is a standing conduct rule (confidentiality, no collusion, comply with law, adhere to procedures, deemed-to-have ...) with no before-bid activity cue, from the model's PRE_BID_ACTION, goes to NEEDS_REVIEW with the suggested classification in `review_reason`; the model's view is kept. Prompt tells the model to list such rules as NEEDS_REVIEW, not to drop them. Signing/executing a document stays an activity. No new lifecycle category. | `core/requirement_lifecycle.py`, `core/deliverable_discovery_llm.py`, `docs/tasks/CIQ-STAGE2-prompt.txt` |
+| C | G7 refined: negated "may" ("No X may ..."), a "may" conditioned on the supplier ("unless/until ...") and another party's unconditional right (Owner may ...; distinct reason) are no longer reported as a bidder option. Bidder/supplier-subject and unclear "may" still go to review. | `core/requirement_lifecycle.py` |
+| D | (1) Cross-run citation appends are applied inside the run transaction. (2) New insert-only `deliverable_discovery_origins` (one active origin per finding, one per record except commercial positions; records `record_id` once; no delete) and a claim protocol: claim -> register write -> attach record -> accept, so concurrent or repeated accepts cannot create two records; a claim abandoned by a dead request is adopted after 120 s. (3) `reconcile_origins` / `scripts/reconcile_discovery_origins.py --db PATH [--bid ID] [--apply]` reports interrupted acceptances (CLAIM_WITHOUT_RECORD, RECORD_WITHOUT_DECISION, ORPHAN_AFTER_REJECT, MARKER_WITHOUT_ORIGIN, DUPLICATE_MARKERS), searches work items in every state and every commercial-position revision, and with `--apply` only backfills origins, attaches a found record or releases an expired claim. It never writes a review decision and never edits or deletes a register record. | `core/deliverable_discovery_origins.py`, `_reconcile.py`, `_destinations.py`, `_service.py`, `_repository.py` |
+
+**Schema (additive, `IF NOT EXISTS`):** `deliverable_discovery_collisions`, `deliverable_discovery_origins` (+ triggers and partial unique indexes). Existing databases migrate on open; a legacy database with accepted findings is backfilled by the reconciliation script.
+**Tests:** `tests/unit/test_stage2_1_*.py` (classification guards, obligation collisions, collision acceptance, atomic citation append, origin claims incl. 6-thread concurrency for every destination, reconciliation). Full suite 1,235 passed. Evidence and the two real-model runs: `~/contractiq-review/stage2.1/` (outside Git).
+**Known limitations:** description similarity is lexical, so restatements of one obligation with different wording are flagged as collisions instead of merged (33 pairs in a 659-finding package); G9 cannot see the "satisfy itself" context of a quoted list fragment (one residual ITB false positive: "Verify Proposal Price sufficiency"); the reconciliation is a service/script, with no screen; the 120 s claim lease is a constant.
+
+---
+
 # Handoff — Stage 2: RFP requirements intelligence
 
 Branch `ciq/stage2-requirements-intelligence` (from Stage 1 `e27fe88`). Spec: `docs/tasks/CIQ-STAGE2-requirements-intelligence.md`
