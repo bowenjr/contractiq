@@ -34,7 +34,7 @@
 
 <div class="execution-dashboard-groups">
   <section class="execution-tile-section"><h2>Obtain from manufacturers</h2><div class="execution-tiles compact">
-  {% for tile in dashboard.tiles if tile.key == 'manufacturer_inputs_outstanding' %}<a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>{% endfor %}
+  {% for tile in dashboard.tiles if tile.key in ['manufacturer_inputs_outstanding','manufacturer_inputs_unassigned'] %}<a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>{% endfor %}
   </div></section>
   <section class="execution-tile-section"><h2>Do before bidding</h2><div class="execution-tiles compact">
   {% for tile in dashboard.tiles if tile.key == 'pre_bid_actions_outstanding' %}<a class="execution-tile {{ tile.tone }}" data-tile="{{ tile.key }}" data-count="{{ tile.count }}" href="{{ tile.url }}"><strong>{{ tile.count }}</strong><span>{{ tile.label }}</span></a>{% endfor %}

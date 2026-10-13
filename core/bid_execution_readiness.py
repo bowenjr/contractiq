@@ -139,9 +139,9 @@ def _add_item_findings(
                     severity,
                     code,
                     headline,
-                    "Assign a responsible person; ContractIQ has not inferred one.",
+                    "Assign or confirm a responsible person; ContractIQ has not inferred one.",
                     selected,
-                    "Assign responsible people",
+                    "Assign or confirm owners",
                     _url(facts.bid_id, "overdue", ExecutionFilter.UNASSIGNED),
                 )
             )

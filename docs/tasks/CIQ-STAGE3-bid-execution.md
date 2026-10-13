@@ -76,12 +76,11 @@ Subject kinds (`ExecutionSubjectKind`): `WORK_ITEM`, `RETURNABLE`, `MANUFACTURER
    partial unique index on `(item_kind,item_id,prerequisite_kind,prerequisite_id) WHERE removed_at IS NULL`;
    hard-delete trigger aborts; a removed row may be set once (`removed_at IS NULL` -> value), never cleared.
 
-"Effective" values (rule used everywhere, tested): `responsible` = overlay.responsible, else the native
-owner of the subject shown with the label "(from the register)" — `deliverable_items.owner` for a
-returnable, `vendor_bid_requirements.internal_owner` for a manufacturer input; never written back.
-**Caution:** `deliverable_items.owner` and package `internal_owner` may have been filled by RFP discovery or
-package creation; the UI must label an effective owner that did not come from the overlay as "from the
-register" so the Bid Manager can confirm or replace it. Nothing is assigned automatically.
+Ownership values (rule used everywhere, tested): `responsible` is only an explicit execution-overlay owner.
+`vendor_bid_requirements.internal_owner` is preserved separately as the display-only `source_owner`; the Bid
+Manager may explicitly confirm it into the overlay, but it is never copied or written back automatically.
+Returnables and work items have no Stage 3 source owner. Assignment provenance distinguishes a direct
+assignment from confirmation of the then-current source owner.
 
 Status model — **one display model, no new competing status enum in storage**. `PrepStatus` (display):
 Not started / In progress / Blocked / Complete / Not required, plus the separate derived flag
@@ -141,6 +140,11 @@ disposition CLARIFICATION_REQUIRED and negotiation state not RESOLVED; **Decisio
 NOT_REVIEWED with a non-empty customer position, or REJECT / QUALIFY without a recorded approver where the
 position requires one (use the existing ops08 attention/blocker logic, do not reinvent it). Each links to the
 existing position screen.
+
+Stage 3 cannot store an execution overlay for a commercial position. Its register owner is therefore shown
+as "Owner in the commercial register" and remains the owner of record for this read-only list; it is not
+treated as an unassigned execution item. Mutable execution subjects require an explicit assignment or an
+explicit confirmation of a manufacturer input's source owner.
 
 ## Dashboard (S3-3 projection, S3-5 page)
 

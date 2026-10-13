@@ -523,7 +523,16 @@ def test_execution_route_table_has_only_advisory_workflow_mutations(
 ) -> None:
     module, _ids = forms_app
     forbidden = ("approve", "submit", "authorize")
-    allowed_posts = ("plan", "progress", "notes", "prerequisites", "actions", "assign")
+    allowed_posts = (
+        "plan",
+        "progress",
+        "notes",
+        "prerequisites",
+        "actions",
+        "assign",
+        "confirm-source-owner",
+        "confirm-source-owners",
+    )
     for route in module.app.routes:
         path = str(getattr(route, "path", "")).casefold()
         if "/execution" not in path:

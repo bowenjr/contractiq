@@ -1,4 +1,9 @@
-"""Unified, deterministic list projection for Bid execution."""
+"""Unified, deterministic list projection for Bid execution.
+
+Commercial positions are a read-only Stage 3 exception: their register owner remains the
+owner of record because the execution overlay cannot hold commercial subjects. All mutable
+execution subjects count only an explicit overlay assignment as their responsible person.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,12 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.bid_execution import BidExecutionRecord, ExecutionSubjectKind, PrepStatus
+from core.bid_execution import (
+    BidExecutionRecord,
+    ExecutionSubjectKind,
+    PrepStatus,
+    ResponsibleBasis,
+)
 from core.bid_execution_repository import BidExecutionRepository
 from core.bid_execution_service import BidExecutionService
 from core.bid_execution_status import (
@@ -92,7 +102,10 @@ class ExecutionItem(BaseModel):
     title: str
     description: str
     responsible: str | None = None
-    responsible_origin: Literal["assigned", "register"] | None = None
+    source_owner: str | None = None
+    responsible_origin: Literal["assigned", "confirmed"] | None = None
+    responsible_set_by: str | None = None
+    responsible_set_at: datetime | None = None
     contributors: list[str] = Field(default_factory=list)
     internal_due_date: date | None = None
     customer_deadline: date | None = None
@@ -126,7 +139,10 @@ class _Draft:
     title: str
     description: str
     responsible: str | None
-    responsible_origin: Literal["assigned", "register"] | None
+    source_owner: str | None
+    responsible_origin: Literal["assigned", "confirmed"] | None
+    responsible_set_by: str | None
+    responsible_set_at: datetime | None
     contributors: list[str]
     internal_due_date: date | None
     customer_deadline: date | None
@@ -170,13 +186,30 @@ def _latest(*values: datetime | None) -> datetime:
     return max(present)
 
 
-def _effective_owner(
-    overlay: BidExecutionRecord | None, native_owner: str | None
-) -> tuple[str | None, Literal["assigned", "register"] | None]:
-    if overlay is not None and overlay.responsible:
-        return overlay.responsible, "assigned"
-    normalized = _optional_text(native_owner)
-    return (normalized, "register") if normalized else (None, None)
+def _execution_owner(
+    overlay: BidExecutionRecord | None, source_owner: str | None
+) -> tuple[
+    str | None,
+    str | None,
+    Literal["assigned", "confirmed"] | None,
+    str | None,
+    datetime | None,
+]:
+    normalized_source = _optional_text(source_owner)
+    if overlay is None or overlay.responsible is None:
+        return None, normalized_source, None, None, None
+    origin: Literal["assigned", "confirmed"] = (
+        "confirmed"
+        if overlay.responsible_basis is ResponsibleBasis.CONFIRMED_SOURCE_OWNER
+        else "assigned"
+    )
+    return (
+        overlay.responsible,
+        normalized_source,
+        origin,
+        overlay.responsible_set_by or overlay.updated_by,
+        overlay.responsible_set_at or overlay.updated_at,
+    )
 
 
 def _source_label(trace: ExecutionSourceTrace) -> str | None:
@@ -376,7 +409,7 @@ class ExecutionProjectionService:
             str(item.bid_id),
             item.title,
             item.details or "",
-            *_effective_owner(overlay, None),
+            *_execution_owner(overlay, None),
             list(overlay.contributors) if overlay else [],
             item.due_date,
             None,
@@ -433,7 +466,7 @@ class ExecutionProjectionService:
             str(row["bid_id"]),
             str(row["title"]),
             str(row["description"]),
-            *_effective_owner(overlay, _optional_text(row["owner"])),
+            *_execution_owner(overlay, None),
             list(overlay.contributors) if overlay else [],
             overlay.internal_due_date if overlay else None,
             _as_date(row["fixed_due_date"]) if fixed else bid_due,
@@ -480,7 +513,7 @@ class ExecutionProjectionService:
             bid_id,
             item.deliverable_title,
             item.description,
-            *_effective_owner(overlay, item.internal_owner),
+            *_execution_owner(overlay, item.internal_owner),
             list(overlay.contributors) if overlay else [],
             overlay.internal_due_date if overlay else None,
             None,
@@ -552,7 +585,10 @@ class ExecutionProjectionService:
                 str(row["label"]),
                 str(row["description"]),
                 owner,
-                "register" if owner else None,
+                owner,
+                None,
+                None,
+                None,
                 [],
                 due,
                 None,
@@ -599,7 +635,10 @@ class ExecutionProjectionService:
             title=draft.title,
             description=draft.description,
             responsible=draft.responsible,
+            source_owner=draft.source_owner,
             responsible_origin=draft.responsible_origin,
+            responsible_set_by=draft.responsible_set_by,
+            responsible_set_at=draft.responsible_set_at,
             contributors=draft.contributors,
             internal_due_date=draft.internal_due_date,
             customer_deadline=draft.customer_deadline,

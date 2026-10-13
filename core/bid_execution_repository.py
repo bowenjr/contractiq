@@ -14,6 +14,7 @@ from core.bid_execution import (
     BidExecutionNote,
     BidExecutionRecord,
     ExecutionSubjectKind,
+    ResponsibleBasis,
 )
 from core.database import Database
 
@@ -50,6 +51,11 @@ class BidExecutionRepository:
                     ('WORK_ITEM','RETURNABLE','MANUFACTURER_INPUT')),
                 subject_id TEXT NOT NULL,
                 responsible TEXT,
+                responsible_basis TEXT CHECK (responsible_basis IS NULL OR responsible_basis IN
+                    ('ASSIGNED','CONFIRMED_SOURCE_OWNER')),
+                responsible_source_owner TEXT,
+                responsible_set_by TEXT,
+                responsible_set_at TEXT,
                 contributors_json TEXT NOT NULL,
                 internal_due_date TEXT,
                 prep_status TEXT CHECK (prep_status IS NULL OR prep_status IN
@@ -150,6 +156,20 @@ class BidExecutionRepository:
             try:
                 for statement in statements:
                     conn.execute(statement)
+                columns = {
+                    str(row[1]) for row in conn.execute("PRAGMA table_info(bid_execution_records)")
+                }
+                additions = {
+                    "responsible_basis": "TEXT",
+                    "responsible_source_owner": "TEXT",
+                    "responsible_set_by": "TEXT",
+                    "responsible_set_at": "TEXT",
+                }
+                for name, column_type in additions.items():
+                    if name not in columns:
+                        conn.execute(
+                            f"ALTER TABLE bid_execution_records ADD COLUMN {name} {column_type}"
+                        )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -172,12 +192,41 @@ class BidExecutionRepository:
     @staticmethod
     def _from_row(row: sqlite3.Row) -> BidExecutionRecord:
         contributors = cast(list[object], json.loads(str(row["contributors_json"])))
+        responsible = str(row["responsible"]) if row["responsible"] is not None else None
+        stored_basis = row["responsible_basis"]
+        responsible_basis = (
+            ResponsibleBasis(str(stored_basis))
+            if stored_basis is not None
+            else ResponsibleBasis.ASSIGNED
+            if responsible is not None
+            else None
+        )
         return BidExecutionRecord(
             execution_id=str(row["execution_id"]),
             bid_id=str(row["bid_id"]),
             subject_kind=ExecutionSubjectKind(str(row["subject_kind"])),
             subject_id=str(row["subject_id"]),
-            responsible=str(row["responsible"]) if row["responsible"] is not None else None,
+            responsible=responsible,
+            responsible_basis=responsible_basis,
+            responsible_source_owner=(
+                str(row["responsible_source_owner"])
+                if row["responsible_source_owner"] is not None
+                else None
+            ),
+            responsible_set_by=(
+                str(row["responsible_set_by"])
+                if row["responsible_set_by"] is not None
+                else str(row["updated_by"])
+                if responsible is not None
+                else None
+            ),
+            responsible_set_at=(
+                datetime.fromisoformat(str(row["responsible_set_at"]))
+                if row["responsible_set_at"] is not None
+                else datetime.fromisoformat(str(row["updated_at"]))
+                if responsible is not None
+                else None
+            ),
             contributors=[str(value) for value in contributors],
             internal_due_date=row["internal_due_date"],
             prep_status=row["prep_status"],
@@ -238,6 +287,10 @@ class BidExecutionRepository:
             record.subject_kind.value,
             record.subject_id,
             record.responsible,
+            record.responsible_basis.value if record.responsible_basis else None,
+            record.responsible_source_owner,
+            record.responsible_set_by,
+            record.responsible_set_at.isoformat() if record.responsible_set_at else None,
             json.dumps(record.contributors),
             record.internal_due_date.isoformat() if record.internal_due_date else None,
             record.prep_status.value if record.prep_status else None,
@@ -309,6 +362,10 @@ class BidExecutionRepository:
     def _mutable_values(record: BidExecutionRecord) -> tuple[object, ...]:
         return (
             record.responsible,
+            record.responsible_basis,
+            record.responsible_source_owner,
+            record.responsible_set_by,
+            record.responsible_set_at,
             tuple(record.contributors),
             record.internal_due_date,
             record.prep_status,
@@ -394,8 +451,13 @@ class BidExecutionRepository:
                 if existing is None:
                     saved = desired.model_copy(update={"version": 1})
                     conn.execute(
-                        "INSERT INTO bid_execution_records VALUES "
-                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        """INSERT INTO bid_execution_records(
+                            execution_id,bid_id,subject_kind,subject_id,responsible,
+                            responsible_basis,responsible_source_owner,responsible_set_by,
+                            responsible_set_at,contributors_json,internal_due_date,prep_status,
+                            priority,blocked_reason,completion_evidence,
+                            evidence_document_version_id,version,created_at,updated_at,updated_by
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         self._record_values(saved),
                     )
                 elif changed:
@@ -409,11 +471,13 @@ class BidExecutionRepository:
                     values = self._record_values(saved)
                     cursor = conn.execute(
                         """UPDATE bid_execution_records SET
-                            responsible=?,contributors_json=?,internal_due_date=?,prep_status=?,
+                            responsible=?,responsible_basis=?,responsible_source_owner=?,
+                            responsible_set_by=?,responsible_set_at=?,contributors_json=?,
+                            internal_due_date=?,prep_status=?,
                             priority=?,blocked_reason=?,completion_evidence=?,
                             evidence_document_version_id=?,version=?,updated_at=?,updated_by=?
                             WHERE execution_id=? AND version=?""",
-                        values[4:13] + values[14:16] + (existing.execution_id, existing.version),
+                        values[4:17] + values[18:20] + (existing.execution_id, existing.version),
                     )
                     if cursor.rowcount != 1:
                         raise ValueError(

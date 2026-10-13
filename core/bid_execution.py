@@ -43,6 +43,13 @@ class PrepStatus(StrEnum):
         return PREP_STATUS_LABELS[self]
 
 
+class ResponsibleBasis(StrEnum):
+    """How an explicit Bid execution owner was set."""
+
+    ASSIGNED = "ASSIGNED"
+    CONFIRMED_SOURCE_OWNER = "CONFIRMED_SOURCE_OWNER"
+
+
 EXECUTION_SUBJECT_KIND_LABELS: dict[ExecutionSubjectKind, str] = {
     ExecutionSubjectKind.WORK_ITEM: "Pre-bid action",
     ExecutionSubjectKind.RETURNABLE: "Returnable",
@@ -81,6 +88,10 @@ class BidExecutionRecord(BaseModel):
     subject_kind: ExecutionSubjectKind
     subject_id: str
     responsible: str | None = None
+    responsible_basis: ResponsibleBasis | None = None
+    responsible_source_owner: str | None = None
+    responsible_set_by: str | None = None
+    responsible_set_at: datetime | None = None
     contributors: list[str] = Field(default_factory=list)
     internal_due_date: date | None = None
     prep_status: PrepStatus | None = None
@@ -95,6 +106,8 @@ class BidExecutionRecord(BaseModel):
 
     @field_validator(
         "responsible",
+        "responsible_source_owner",
+        "responsible_set_by",
         "blocked_reason",
         "completion_evidence",
         "evidence_document_version_id",

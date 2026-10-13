@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 
-from core.bid_execution import BidExecutionUpdate, ExecutionSubjectKind, PrepStatus
+from core.bid_execution import (
+    BidExecutionUpdate,
+    ExecutionSubjectKind,
+    PrepStatus,
+    ResponsibleBasis,
+)
 from core.bid_execution_action_models import (
     ActionResult,
     ManufacturerInputChanges,
@@ -13,6 +18,7 @@ from core.bid_execution_action_models import (
 )
 from core.bid_execution_projection import (
     ExecutionFilter,
+    ExecutionItem,
     ExecutionListKind,
     ExecutionProjectionService,
 )
@@ -354,6 +360,127 @@ class BidExecutionActionSupport:
             subject_kind,
             ids[-1],
             self._next(bid_id, subject_kind, ids[-1]),
+            changed=changed_count > 0,
+            reused=changed_count == 0,
+        )
+
+    def _source_owner_item(self, bid_id: str, subject_id: str) -> ExecutionItem:
+        rows = self.projection.items(
+            bid_id,
+            ExecutionListKind.MANUFACTURER_INPUT,
+            ExecutionFilter.ALL,
+            self._as_of(),
+        ) + self.projection.items(
+            bid_id,
+            ExecutionListKind.MANUFACTURER_INPUT,
+            ExecutionFilter.NOT_REQUIRED,
+            self._as_of(),
+        )
+        item = next((row for row in rows if row.subject_id == subject_id), None)
+        if item is None:
+            raise ValueError(
+                "manufacturer input was not found; reload the list and choose an existing item"
+            )
+        return item
+
+    def _validate_source_owner_confirmation(self, bid_id: str, subject_id: str) -> tuple[str, bool]:
+        item = self._source_owner_item(bid_id, subject_id)
+        source_owner = item.source_owner
+        if source_owner is None:
+            raise ValueError(
+                "this item has no source owner to confirm; assign an execution owner instead"
+            )
+        if item.responsible is not None and item.responsible != source_owner:
+            raise ValueError(
+                "this item already has an explicit execution owner; keep that owner or change it "
+                "through the plan form"
+            )
+        return source_owner, item.responsible == source_owner
+
+    def confirm_source_owner(
+        self,
+        bid_id: str,
+        subject_id: str,
+        actor: str,
+    ) -> ActionResult:
+        """Confirm one current manufacturer-register owner as the execution owner."""
+        source_owner, already_confirmed = self._validate_source_owner_confirmation(
+            bid_id, subject_id
+        )
+        if already_confirmed:
+            return self._result(
+                "No changes - this owner is already explicit.",
+                ExecutionSubjectKind.MANUFACTURER_INPUT,
+                subject_id,
+                self._next(bid_id, ExecutionSubjectKind.MANUFACTURER_INPUT, subject_id),
+                changed=False,
+                reused=True,
+            )
+        current = self.execution.get_record(
+            bid_id, ExecutionSubjectKind.MANUFACTURER_INPUT, subject_id
+        )
+        values: dict[str, object] = {
+            "expected_version": current.version if current else 0,
+            "responsible": source_owner,
+            "contributors": list(current.contributors) if current else [],
+            "internal_due_date": current.internal_due_date if current else None,
+            "prep_status": current.prep_status if current else None,
+            "priority": current.priority if current else None,
+            "blocked_reason": current.blocked_reason if current else None,
+            "completion_evidence": current.completion_evidence if current else None,
+            "evidence_document_version_id": (
+                current.evidence_document_version_id if current else None
+            ),
+        }
+        self.execution.set_record(
+            bid_id,
+            ExecutionSubjectKind.MANUFACTURER_INPUT,
+            subject_id,
+            values,
+            actor,
+            responsible_basis=ResponsibleBasis.CONFIRMED_SOURCE_OWNER,
+            responsible_source_owner=source_owner,
+        )
+        return self._result(
+            f"Confirmed {source_owner} as the execution owner.",
+            ExecutionSubjectKind.MANUFACTURER_INPUT,
+            subject_id,
+            self._next(bid_id, ExecutionSubjectKind.MANUFACTURER_INPUT, subject_id),
+            changed=True,
+        )
+
+    def bulk_confirm_source_owners(
+        self,
+        bid_id: str,
+        subject_ids: Sequence[str],
+        actor: str,
+    ) -> ActionResult:
+        """Validate the full selection, then confirm each current source owner."""
+        ids = list(subject_ids)
+        if not ids:
+            raise ValueError(
+                "no items were selected; select at least one manufacturer input with a source owner"
+            )
+        if len(set(ids)) != len(ids):
+            raise ValueError("the selection contains duplicates; select each item only once")
+        validations = [
+            self._validate_source_owner_confirmation(bid_id, subject_id) for subject_id in ids
+        ]
+        changed_count = 0
+        for subject_id, (_source_owner, already_confirmed) in zip(ids, validations, strict=True):
+            if not already_confirmed:
+                self.confirm_source_owner(bid_id, subject_id, actor)
+                changed_count += 1
+        return self._result(
+            (
+                f"Confirmed source owners for {changed_count} manufacturer input"
+                f"{'s' if changed_count != 1 else ''}."
+                if changed_count
+                else "No changes - all selected owners are already explicit."
+            ),
+            ExecutionSubjectKind.MANUFACTURER_INPUT,
+            ids[-1],
+            self._next(bid_id, ExecutionSubjectKind.MANUFACTURER_INPUT, ids[-1]),
             changed=changed_count > 0,
             reused=changed_count == 0,
         )

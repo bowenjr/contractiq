@@ -363,6 +363,7 @@ def test_labels_order_empty_state_and_clock_purity(context: DashboardContext) ->
         "returnables_blocked",
         "returnables_unassigned",
         "manufacturer_inputs_outstanding",
+        "manufacturer_inputs_unassigned",
         "pre_bid_actions_outstanding",
         "unresolved_clarifications",
         "commercial_decisions_needed",

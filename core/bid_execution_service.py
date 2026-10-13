@@ -13,6 +13,7 @@ from core.bid_execution import (
     BidExecutionUpdate,
     ExecutionSubjectKind,
     PrepStatus,
+    ResponsibleBasis,
 )
 from core.bid_execution_repository import BidExecutionRepository, DependencyCycleError
 from core.bid_execution_subjects import ExecutionSubjectFacts, ExecutionSubjectResolver
@@ -185,6 +186,9 @@ class BidExecutionService:
         subject_id: str,
         data: BidExecutionUpdateData,
         actor: str,
+        *,
+        responsible_basis: ResponsibleBasis = ResponsibleBasis.ASSIGNED,
+        responsible_source_owner: str | None = None,
     ) -> BidExecutionRecord:
         """Set the complete overlay state with validation and optimistic locking."""
         request = BidExecutionUpdate.model_validate(data)
@@ -218,12 +222,46 @@ class BidExecutionService:
             self._validate_returnable_transition(previous, request)
 
         now = self._now()
+        responsible_changed = (existing is None and request.responsible is not None) or (
+            existing is not None and existing.responsible != request.responsible
+        )
+        if request.responsible is None:
+            saved_basis = None
+            saved_source_owner = None
+            saved_set_by = None
+            saved_set_at = None
+        elif responsible_changed:
+            if responsible_basis is ResponsibleBasis.CONFIRMED_SOURCE_OWNER and (
+                responsible_source_owner is None
+                or request.responsible != responsible_source_owner.strip()
+            ):
+                raise ValueError(
+                    "the source owner changed; reload the item and confirm the current source owner"
+                )
+            saved_basis = responsible_basis
+            saved_source_owner = (
+                responsible_source_owner.strip()
+                if responsible_basis is ResponsibleBasis.CONFIRMED_SOURCE_OWNER
+                and responsible_source_owner is not None
+                else None
+            )
+            saved_set_by = normalized_actor
+            saved_set_at = now
+        else:
+            saved_basis = existing.responsible_basis if existing else None
+            saved_source_owner = existing.responsible_source_owner if existing else None
+            saved_set_by = existing.responsible_set_by if existing else None
+            saved_set_at = existing.responsible_set_at if existing else None
         desired = BidExecutionRecord(
             execution_id=(existing.execution_id if existing is not None else self._new_id("BER")),
             bid_id=bid_id,
             subject_kind=kind,
             subject_id=normalized_subject_id,
             responsible=request.responsible,
+            responsible_basis=saved_basis,
+            responsible_source_owner=saved_source_owner,
+            responsible_set_by=saved_set_by,
+            responsible_set_at=saved_set_at,
             contributors=request.contributors,
             internal_due_date=request.internal_due_date,
             prep_status=request.prep_status,

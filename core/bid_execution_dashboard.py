@@ -128,6 +128,13 @@ _TILE_SPECS: tuple[tuple[str, str, ExecutionListSlug, ExecutionFilter, str], ...
         "attention",
     ),
     (
+        "manufacturer_inputs_unassigned",
+        "Unassigned manufacturer inputs",
+        ExecutionListSlug.MANUFACTURER_INPUTS,
+        ExecutionFilter.UNASSIGNED,
+        "attention",
+    ),
+    (
         "pre_bid_actions_outstanding",
         "Outstanding pre-bid actions",
         ExecutionListSlug.ACTIONS,

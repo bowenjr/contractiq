@@ -388,8 +388,9 @@ def test_returnable_scope_inactive_status_owner_and_deadline_labels(
     rows = context.projection.items(context.bid.bid_id, "RETURNABLE", "all", AS_OF)
     by_id = {item.subject_id: item for item in rows}
     assert "DEL-POST" not in by_id
-    assert by_id[fixed].responsible == "Register owner"
-    assert by_id[fixed].responsible_origin == "register"
+    assert by_id[fixed].responsible is None
+    assert by_id[fixed].source_owner is None
+    assert by_id[fixed].responsible_origin is None
     assert by_id[fixed].customer_deadline == date(2026, 7, 25)
     assert by_id[fixed].customer_deadline_label == "stated in the RFP"
     assert by_id["DEL-CLOSING"].customer_deadline == context.bid.customer_due_date
@@ -420,8 +421,9 @@ def test_nonrequired_manufacturer_rows_only_appear_in_not_required_filter(
     required_item = context.projection.items(
         context.bid.bid_id, "MANUFACTURER_INPUT", "all", AS_OF
     )[0]
-    assert required_item.responsible == "Vendor lead"
-    assert required_item.responsible_origin == "register"
+    assert required_item.responsible is None
+    assert required_item.source_owner == "Vendor lead"
+    assert required_item.responsible_origin is None
 
 
 def _insert_discovery_source(context: ProjectionContext, proposal_id: str, work_id: str) -> None:
@@ -517,6 +519,8 @@ def test_commercial_clarification_and_decision_states_link_existing_screen(
     assert by_id[clarification_id].status is PrepStatus.BLOCKED
     assert by_id[clarification_id].status_label == "Clarification"
     assert by_id[clarification_id].overdue
+    assert by_id[clarification_id].source_owner == "Commercial lead"
+    assert not by_id[clarification_id].unassigned
     assert by_id[decision_id].status is PrepStatus.NOT_STARTED
     assert by_id[decision_id].status_label == "Decision needed"
     assert all(item.item_url == f"/commercial/{item.subject_id}" for item in rows)

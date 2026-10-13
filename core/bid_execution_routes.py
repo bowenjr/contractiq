@@ -648,6 +648,7 @@ def register_bid_execution_routes(
                 ExecutionListSlug.MANUFACTURER_INPUTS,
             },
             show_add_action=slug is ExecutionListSlug.ACTIONS,
+            show_source_confirmation=slug is ExecutionListSlug.MANUFACTURER_INPUTS,
             record_versions=record_versions,
             row_tokens=all_subjects,
             quick_urls={
@@ -656,6 +657,14 @@ def register_bid_execution_routes(
                     f"{_encoded_path_id(row.subject_id)}/quick-assign"
                 )
                 for row in rows
+            },
+            confirm_urls={
+                row.subject_id: (
+                    f"/bids/{quote(bid_id)}/execution/manufacturer-inputs/items/"
+                    f"{_encoded_path_id(row.subject_id)}/confirm-source-owner"
+                )
+                for row in rows
+                if slug is ExecutionListSlug.MANUFACTURER_INPUTS
             },
             prerequisite_groups=candidate_option_groups(candidate_options(bid_id)),
             priorities=list(WorkItemPriority),
@@ -1150,6 +1159,74 @@ def register_bid_execution_routes(
                 status_code=422,
                 entered=entered,
                 active_form="bulk-assign",
+                form_error=_exception_message(exc),
+            )
+        return redirect_result(bid_id, str(form.get("return_to") or "") or None, fallback, result)
+
+    @app.post(
+        "/bids/{bid_id}/execution/manufacturer-inputs/items/{subject_id}/confirm-source-owner"
+    )
+    async def confirm_list_source_owner(request: Request, bid_id: str, subject_id: str) -> Response:
+        form = await request.form()
+        fallback = f"/bids/{quote(bid_id)}/execution/manufacturer-inputs"
+        try:
+            result = action_service.confirm_source_owner(bid_id, subject_id, actor)
+        except (ValidationError, ValueError) as exc:
+            return list_response(
+                request,
+                bid_id,
+                "manufacturer-inputs",
+                request.query_params.get("state"),
+                status_code=422,
+                active_form=f"confirm-{subject_id}",
+                form_error=_exception_message(exc),
+            )
+        return redirect_result(bid_id, str(form.get("return_to") or "") or None, fallback, result)
+
+    @app.post("/bids/{bid_id}/execution/manufacturer-inputs/confirm-source-owners")
+    async def bulk_confirm_list_source_owners(request: Request, bid_id: str) -> Response:
+        form = await request.form()
+        fallback = f"/bids/{quote(bid_id)}/execution/manufacturer-inputs"
+        raw_tokens = [str(value) for value in form.getlist("source_subject_ids")]
+        try:
+            resolved = [
+                assignment_subject(bid_id, "manufacturer-inputs", token) for token in raw_tokens
+            ]
+            result = action_service.bulk_confirm_source_owners(
+                bid_id,
+                [subject_id for _kind, subject_id in resolved],
+                actor,
+            )
+        except (ValidationError, ValueError) as exc:
+            return list_response(
+                request,
+                bid_id,
+                "manufacturer-inputs",
+                request.query_params.get("state"),
+                status_code=422,
+                entered={"source_subject_ids": raw_tokens},
+                active_form="bulk-confirm",
+                form_error=_exception_message(exc),
+            )
+        return redirect_result(bid_id, str(form.get("return_to") or "") or None, fallback, result)
+
+    @app.post("/bids/{bid_id}/execution/items/manufacturer-input/{subject_id}/confirm-source-owner")
+    async def confirm_item_source_owner(request: Request, bid_id: str, subject_id: str) -> Response:
+        form = await request.form()
+        fallback = (
+            f"/bids/{quote(bid_id)}/execution/items/manufacturer-input/"
+            f"{_encoded_path_id(subject_id)}"
+        )
+        try:
+            result = action_service.confirm_source_owner(bid_id, subject_id, actor)
+        except (ValidationError, ValueError) as exc:
+            return item_response(
+                request,
+                bid_id,
+                "manufacturer-input",
+                subject_id,
+                status_code=422,
+                active_form="confirm-source-owner",
                 form_error=_exception_message(exc),
             )
         return redirect_result(bid_id, str(form.get("return_to") or "") or None, fallback, result)

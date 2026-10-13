@@ -31,14 +31,20 @@
   <button type="submit">Assign selected</button>
 </form>{% endif %}
 
+{% if show_source_confirmation %}<form id="execution-bulk-confirm" method="post" action="/bids/{{ bid.bid_id }}/execution/manufacturer-inputs/confirm-source-owners" class="execution-bulk-bar">
+  <input type="hidden" name="return_to" value="{{ return_to }}">
+  <strong>Confirm source owners for selected</strong>
+  <button type="submit">Confirm source owners for selected</button>
+</form>{% endif %}
+
 <div class="execution-table-wrap">
 <table class="execution-table{% if show_assign %} execution-table-assign{% endif %}"><thead><tr>
   {% if show_assign %}<th class="execution-select-column">Select</th>{% endif %}<th>Title</th><th>Responsible</th><th>Internal due date</th><th>Customer deadline</th><th>Status</th><th>Priority</th>{% if show_requirement %}<th>Requirement</th>{% endif %}<th>Source</th><th>Last updated</th>{% if show_assign %}<th>Quick assign</th>{% endif %}
 </tr></thead><tbody>
 {% for item in rows %}<tr class="execution-row">
-  {% if show_assign %}<td class="execution-select-column"><label><span class="visually-hidden">Select {{ item.title }}</span><input form="execution-bulk-assign" type="checkbox" name="subject_ids" value="{{ row_tokens[item.subject_id] }}"{% if active_form == 'bulk-assign' and row_tokens[item.subject_id] in entered.get('subject_ids',[]) %} checked{% endif %}></label></td>{% endif %}
+  {% if show_assign %}<td class="execution-select-column"><label><span class="visually-hidden">Select {{ item.title }} for assignment</span><input form="execution-bulk-assign" type="checkbox" name="subject_ids" value="{{ row_tokens[item.subject_id] }}"{% if active_form == 'bulk-assign' and row_tokens[item.subject_id] in entered.get('subject_ids',[]) %} checked{% endif %}></label>{% if show_source_confirmation and item.source_owner and not item.responsible %}<label><span class="visually-hidden">Select {{ item.title }} to confirm its source owner</span><input form="execution-bulk-confirm" type="checkbox" name="source_subject_ids" value="{{ row_tokens[item.subject_id] }}"{% if active_form == 'bulk-confirm' and row_tokens[item.subject_id] in entered.get('source_subject_ids',[]) %} checked{% endif %}></label>{% endif %}</td>{% endif %}
   <td><a href="{{ item.item_url }}"><strong>{{ item.title }}</strong></a><small>{{ item.description }}</small></td>
-  <td>{% if item.responsible %}{{ item.responsible }}{% if item.responsible_origin == 'register' %}<small>(from the register)</small>{% endif %}{% else %}<span class="execution-badge unassigned">Unassigned</span>{% endif %}</td>
+  <td>{% if item.kind.value == 'COMMERCIAL' and item.source_owner %}{{ item.source_owner }}<small>Owner in the commercial register</small>{% elif item.responsible %}{{ item.responsible }}{% if item.responsible_origin == 'confirmed' %}<small>Confirmed from the source owner by {{ item.responsible_set_by }} on {{ item.responsible_set_at.strftime('%Y-%m-%d') }}</small>{% else %}<small>Assigned by {{ item.responsible_set_by }} on {{ item.responsible_set_at.strftime('%Y-%m-%d') }}</small>{% endif %}{% else %}<span class="execution-badge unassigned">Unassigned</span>{% if item.source_owner %}<small>Source owner: {{ item.source_owner }} — not confirmed as execution owner</small><form method="post" action="{{ confirm_urls[item.subject_id] }}"><input type="hidden" name="return_to" value="{{ return_to }}"><button type="submit">Confirm {{ item.source_owner }} as owner</button></form>{% endif %}{% endif %}</td>
   <td>{% if item.internal_due_date %}<span{% if item.overdue %} class="execution-overdue"{% endif %}>{{ item.internal_due_date }}{% if item.overdue %}<small>Overdue</small>{% endif %}</span>{% else %}<span class="muted">Not set</span>{% endif %}</td>
   <td>{% if item.customer_deadline %}{{ item.customer_deadline }}<small>{{ item.customer_deadline_label }}</small>{% else %}<span class="muted">Not recorded</span>{% endif %}</td>
   <td><span class="execution-badge {% if item.status_label.startswith('Complete') %}complete{% elif item.status_label.startswith('Blocked') %}blocked{% elif item.status_label.startswith('In progress') or item.status_label.startswith('Waiting') %}in-progress{% elif item.status_label.startswith('Not required') %}not-required{% endif %}">{{ item.status_label }}</span>{% if item.waiting_on_prerequisite %}<span class="execution-badge waiting">Waiting on a prerequisite</span>{% endif %}</td>
