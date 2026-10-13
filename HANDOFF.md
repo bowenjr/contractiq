@@ -1,3 +1,23 @@
+# Handoff — Stage 3: bid execution and readiness
+
+Branch `ciq/stage3-bid-execution` (from Stage 2.1 acceptance `89dd350`). Spec: `docs/tasks/CIQ-STAGE3-bid-execution.md`.
+Port 8000, its database and `~/contractiq-manual/` untouched; nothing merged, pushed or deployed.
+
+| Unit | Change | Where |
+|---|---|---|
+| Overlay records | Responsible, contributors, internal due date, returnable prep status, priority and completion evidence are stored per Bid item in `bid_execution_records` (optimistic version, audit in the same transaction, unchanged save = no new version). Notes are insert-only. Native registers are never rewritten; a register owner is shown as "(from the register)". | `core/bid_execution.py`, `_repository.py`, `_service.py`, `_subjects.py` |
+| Dependencies | `bid_execution_dependencies` (soft-removed). Cycles are refused inside the same `BEGIN IMMEDIATE` as the insert. Completing a prerequisite never changes the dependent; a dependent shows "Waiting on". | `core/bid_execution_service.py` |
+| Projection and dashboard | One list of items (returnables, manufacturer inputs, actions, commercial) with filters All/Outstanding/In progress/Blocked/Complete/Unassigned/Overdue. Each dashboard tile counts the same filtered list its link opens, so totals reconcile with the registers. | `core/bid_execution_projection.py`, `_status.py`, `_trace.py`, `_dashboard.py` |
+| Actions | Manual actions (idempotent), merge-style updates, per-row and bulk assignment (all-or-nothing). A deadline or owner is never inferred. | `core/bid_execution_actions.py` |
+| Readiness | BLOCKING / WARNING / INFO from evidence. Post-award and optional items are INFO only; blockers come from bid-stage items, prerequisites and the existing approval conditions. Advisory verdicts only; there is no approve, submit or authorize control. | `core/bid_execution_readiness.py` |
+| Screens | `/bids/{id}/execution` dashboard; lists `returnables`, `manufacturer-inputs`, `actions`, `commercial`, `overdue` (`?state=`); item page; source page; readiness page; link from the Bid page. | `core/bid_execution_routes.py`, `templates/bid_execution_*.html`, `static/style.css`, `app.py` |
+
+**Schema (additive, `IF NOT EXISTS`):** `bid_execution_records`, `bid_execution_notes`, `bid_execution_dependencies`.
+**Tests:** `tests/unit/test_stage3_*.py` (96). Full suite is recorded in the completion report. Walkthrough logs, the Goldboro fixture and benchmark coverage: `~/contractiq-review/stage3/` (outside Git).
+**Known limitations:** manufacturer-input owners copied from the package creator by discovery count as assigned (shown "from the register"); approval blockers (margin, senior approval) come from the existing gate engine and will change with the planned OPS-14 approval design; commercial list is empty until commercial positions are initialised; `bid_execution_repository.py`, `_projection.py` and `_readiness.py` exceed the 300-line guideline; one duplicate-title action ("RFP Acknowledgement Form") predates Stage 3; existing `ruff` findings remain in `contracts/proposal-studio/.../test_exchange_contract_v1.py`.
+
+---
+
 # Handoff — Stage 2.1: requirements integrity and classification hardening
 
 Branch `ciq/stage2.1-integrity-hardening` (from Stage 2 acceptance `c8be24a`). Spec: `docs/tasks/CIQ-STAGE2.1-requirements-integrity.md`.

@@ -214,10 +214,19 @@ Goldboro PE031 / IPG060 is the principal case. Benchmark and acceptance database
 - **S3-2** Dependencies with cycle prevention (`bid_execution_dependencies`), status mapping functions for the
   three kinds, and `source_trace(kind, subject_id)` (finding → document / locator / quote → review URL, through the
   existing destination and citation tables). Tests `tests/unit/test_stage3_dependencies.py`.
-- **S3-3** Unified projection, `ExecutionFilter`, dashboard projection (`core/bid_execution_projection.py`,
-  `core/bid_execution_dashboard.py`). Reconciliation tests `tests/unit/test_stage3_projection.py`.
-- **S3-4** Readiness evaluator and facts builder. Tests `tests/unit/test_stage3_readiness.py` (incl. post-award
-  never blocks, completion changes the verdict, owner/date never inferred).
-- **S3-5** Routes, templates, navigation. Route tests `tests/unit/test_stage3_ui.py` (use
-  `scripts.asgi_acceptance_ops08.request` or the repository's existing UI-test pattern).
-- **S3-6** Fixes from the browser walkthrough.
+- **S3-3a** Status mapping (`core/bid_execution_status.py`), source trace (`core/bid_execution_trace.py`) and the
+  unified item projection (`core/bid_execution_projection.py`). Tests `tests/unit/test_stage3_projection.py`.
+- **S3-3b** Dashboard projection with reconciling tile counts (`core/bid_execution_dashboard.py`); the filtered
+  list a tile opens is produced by the same function that counts it. Tests `tests/unit/test_stage3_dashboard.py`.
+- **S3-3c** Action commands (`core/bid_execution_actions.py`, `_action_models.py`, `_action_support.py`):
+  idempotent manual actions, merge-style updates, bulk assignment, next-item URL. Tests `test_stage3_actions.py`.
+- **S3-4** Readiness evaluator and facts builder (`core/bid_execution_readiness.py`, `_readiness_models.py`).
+  Tests `tests/unit/test_stage3_readiness.py` (post-award never blocks, completion changes the verdict,
+  owner/date never inferred).
+- **S3-5a** Routes, templates, navigation: dashboard, work lists, item, source and readiness pages
+  (`core/bid_execution_routes.py`, `templates/bid_execution_*.html`). Tests `tests/unit/test_stage3_ui.py`.
+- **S3-5b** Forms: plan, progress, notes, prerequisites, manual action, per-row and bulk assignment.
+- **S3-6** Fixes from the browser walkthrough and missing form tests: unset priority stays unset, one source
+  entry per location, grouped prerequisite choices, 1366 px returnables table layout, bulk-assign
+  all-or-nothing, restart persistence, no approve/submit route, prerequisite completion leaves the dependent
+  unchanged. Tests `tests/unit/test_stage3_ui_forms.py`.
