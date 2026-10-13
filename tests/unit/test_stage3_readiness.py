@@ -533,7 +533,7 @@ def test_existing_approval_blocker_uses_control_center_destination(
         service_context.bid.model_copy(update={"classification": BidLevel.LEVEL_2})
     )
     report = service_context.readiness.evaluate(service_context.bid.bid_id, AS_OF)
-    margin = next(item for item in report.findings if item.code == "approval:g4.margin_approved")
+    margin = next(item for item in report.findings if item.code == "approval:bid-level:margin")
     assert margin.severity is ReadinessSeverity.BLOCKING
     assert margin.headline == "Margin approval required"
     assert margin.resolve_url.endswith("&approval_type=MARGIN#gate-approval")

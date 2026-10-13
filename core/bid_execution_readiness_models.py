@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.bid_execution_approvals import ApprovalRequirementFact
 from core.bid_execution_projection import ExecutionItem
 
 
@@ -50,15 +51,6 @@ class ReadinessFinding(BaseModel):
     resolve_url: str
 
 
-class ApprovalBlockerFact(BaseModel):
-    """One active approval condition supplied by the existing gate engine."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    condition_id: str
-    heading: str
-
-
 class ReadinessFacts(BaseModel):
     """All projected and governance facts consumed by the pure evaluator."""
 
@@ -71,7 +63,7 @@ class ReadinessFacts(BaseModel):
     commercial: list[ExecutionItem] = Field(default_factory=list)
     post_award_deliverable_count: int = Field(default=0, ge=0)
     non_blocking_returnable_count: int = Field(default=0, ge=0)
-    approval_blockers: list[ApprovalBlockerFact] = Field(default_factory=list)
+    approvals: list[ApprovalRequirementFact] = Field(default_factory=list)
 
 
 class ExecutionReadiness(BaseModel):
@@ -85,6 +77,7 @@ class ExecutionReadiness(BaseModel):
     blocking_count: int = Field(ge=0)
     warning_count: int = Field(ge=0)
     info_count: int = Field(ge=0)
+    approvals: list[ApprovalRequirementFact] = Field(default_factory=list)
     advisory: str
     as_of: date
 
@@ -95,7 +88,7 @@ class ExecutionReadiness(BaseModel):
 
 
 __all__ = [
-    "ApprovalBlockerFact",
+    "ApprovalRequirementFact",
     "ExecutionReadiness",
     "ExecutionReadinessVerdict",
     "ReadinessFacts",

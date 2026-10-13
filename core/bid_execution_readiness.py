@@ -5,12 +5,16 @@ from __future__ import annotations
 from datetime import date
 from urllib.parse import quote
 
-from core.bid_control_center import blocker_destination
 from core.bid_execution import PrepStatus
+from core.bid_execution_approvals import (
+    ApprovalApplicability,
+    ApprovalRequirementFact,
+    ApprovalRequirementStatus,
+    read_approval_requirement_facts,
+)
 from core.bid_execution_dashboard import ExecutionDashboardService, ExecutionListSlug
 from core.bid_execution_projection import ExecutionFilter, ExecutionItem, ExecutionListKind
 from core.bid_execution_readiness_models import (
-    ApprovalBlockerFact,
     ExecutionReadiness,
     ExecutionReadinessVerdict,
     ReadinessFacts,
@@ -18,22 +22,13 @@ from core.bid_execution_readiness_models import (
     ReadinessSeverity,
 )
 from core.bid_repository import BidRepository
-from core.bid_workflow import blocker_heading
 from core.database import Database
 from core.deliverables import DeliverableCriticality, LifecyclePhase
-from core.enums import Gate
-from core.readiness_service import evaluate_readiness
 from core.work_items import WorkItemPriority
 
 ADVISORY = (
     "Advisory - the Bid Manager decides. ContractIQ does not approve, submit or authorize a Bid."
 )
-_APPROVAL_GATES = {
-    "g4.margin_approved": Gate.G4,
-    "g4.required_approvals": Gate.G4,
-    "g4.high_findings_have_authority": Gate.G4,
-    "g6.senior_approvals_current": Gate.G6,
-}
 _SEVERITY_ORDER = {
     ReadinessSeverity.BLOCKING: 0,
     ReadinessSeverity.WARNING: 1,
@@ -370,19 +365,28 @@ def _add_blocker_findings(facts: ReadinessFacts, findings: list[ReadinessFinding
 
 
 def _add_approval_and_information(facts: ReadinessFacts, findings: list[ReadinessFinding]) -> None:
-    for blocker in facts.approval_blockers:
-        gate = _APPROVAL_GATES[blocker.condition_id]
+    for approval in facts.approvals:
+        severity = (
+            ReadinessSeverity.BLOCKING
+            if approval.status is ApprovalRequirementStatus.MISSING
+            and approval.classification
+            in {
+                ApprovalApplicability.DEVIATION_APPROVAL_REQUIRED,
+                ApprovalApplicability.ROUTINE_AUTHORIZATION_REQUIRED,
+            }
+            else ReadinessSeverity.WARNING
+            if approval.classification is ApprovalApplicability.NEEDS_ASSESSMENT
+            else ReadinessSeverity.INFO
+        )
         findings.append(
             ReadinessFinding(
-                severity=ReadinessSeverity.BLOCKING,
-                code=f"approval:{blocker.condition_id}",
-                headline=blocker.heading,
+                severity=severity,
+                code=f"approval:{approval.requirement_key}",
+                headline=approval.heading,
                 count=1,
-                detail=(
-                    "Obtain and record the explicitly required approval before submission review."
-                ),
-                resolve_label="Record the required approval",
-                resolve_url=blocker_destination(facts.bid_id, blocker.condition_id, gate),
+                detail=approval.detail,
+                resolve_label=approval.resolve_label,
+                resolve_url=approval.resolve_url,
             )
         )
     for code, headline, detail, count, url in (
@@ -445,6 +449,7 @@ def evaluate_submission_readiness(facts: ReadinessFacts, as_of: date) -> Executi
         blocking_count=counts[ReadinessSeverity.BLOCKING],
         warning_count=counts[ReadinessSeverity.WARNING],
         info_count=counts[ReadinessSeverity.INFO],
+        approvals=facts.approvals,
         advisory=ADVISORY,
         as_of=as_of,
     )
@@ -505,17 +510,11 @@ class BidExecutionReadinessService:
             )
             for row in deliverables
         )
-        report = evaluate_readiness(self.bids, self.db, bid_id)
-        blockers = sorted(
-            (
-                ApprovalBlockerFact(
-                    condition_id=item.condition_id,
-                    heading=blocker_heading(item.condition_id, item.description),
-                )
-                for item in (*report.blockers, *report.issue_blockers)
-                if item.condition_id in _APPROVAL_GATES and not item.overridden
-            ),
-            key=lambda item: (item.heading.casefold(), item.condition_id),
+        approvals = read_approval_requirement_facts(
+            self.bids,
+            self.db,
+            bid_id,
+            as_of=as_of,
         )
         return ReadinessFacts(
             bid_id=bid_id,
@@ -525,13 +524,13 @@ class BidExecutionReadinessService:
             commercial=commercial,
             post_award_deliverable_count=post_award_count,
             non_blocking_returnable_count=optional_count,
-            approval_blockers=blockers,
+            approvals=approvals,
         )
 
 
 __all__ = [
     "ADVISORY",
-    "ApprovalBlockerFact",
+    "ApprovalRequirementFact",
     "BidExecutionReadinessService",
     "ExecutionReadiness",
     "ExecutionReadinessVerdict",

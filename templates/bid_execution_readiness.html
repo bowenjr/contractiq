@@ -9,6 +9,13 @@
 {% if form_error %}<div class="notice warning execution-notice" role="alert">{{ form_error }}</div>{% endif %}
 <section class="execution-verdict {% if readiness.blocking_count %}blocked{% elif readiness.warning_count %}warning{% else %}ready{% endif %}"><strong>{{ readiness.verdict_label }}</strong><span>{{ readiness.advisory }}</span><small>As of {{ readiness.as_of }}</small></section>
 
+<section class="execution-readiness-group"><h2>Approvals <span>{{ readiness.approvals|length }}</span></h2>
+{% for approval in readiness.approvals %}<article class="card execution-finding"><div><h3>{{ approval.heading }}</h3><span class="execution-count">{{ approval.classification.value }}</span></div>
+<p><strong>Established by:</strong> {{ approval.establishing_basis }}</p><p><strong>Status:</strong> {{ approval.status.value }}</p><p>{{ approval.detail }}</p>
+<p><a href="{{ approval.resolve_url }}">{{ approval.resolve_label }}</a></p></article>
+{% else %}<p class="card muted">No approval assessment is available.</p>{% endfor %}
+</section>
+
 {% for group_label, findings in groups %}<section class="execution-readiness-group"><h2>{{ group_label }} <span>{{ findings|sum(attribute='count') }}</span></h2>
 {% for finding in findings %}<article class="card execution-finding"><div><h3>{{ finding.headline }}</h3><span class="execution-count">{{ finding.count }}</span></div><p>{{ finding.detail }}</p>
 {% if finding.items %}<details><summary>View affected items ({{ finding.items|length }})</summary><ul>{% for title, url in finding.items %}<li><a href="{{ url }}">{{ title }}</a></li>{% endfor %}</ul></details>{% endif %}
