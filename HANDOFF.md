@@ -1,3 +1,18 @@
+# Handoff — Stage 3.1: execution ownership and readiness closeout
+
+Branch `ciq/stage3.1-ownership-readiness` (from Stage 3 acceptance `80dab92`). Port 8000, its database and `~/contractiq-manual/` untouched; nothing merged, pushed or deployed.
+
+| Unit | Change | Where |
+|---|---|---|
+| A. Ownership | A register owner is now only a *source owner*: shown as "Source owner: NAME — not confirmed as execution owner" and never counted as assigned. Only an explicit overlay owner counts. A Bid Manager assigns an owner (basis ASSIGNED) or confirms the source owner (per row, on the item page, or in bulk on the manufacturer list; basis CONFIRMED_SOURCE_OWNER). Provenance (basis, confirmed source value, who, when) is stored on the overlay and shown ("Assigned by … on …" / "Confirmed from the source owner by … on …"). The register owner is never written. Existing overlay owners are read as assigned. New dashboard tile "Unassigned manufacturer inputs" (same filtered list as the count); readiness "responsible person missing" counts source-owner-only items. Commercial positions keep their commercial-register owner as owner of record (read-only in Stage 3). | `core/bid_execution.py`, `_repository.py`, `_service.py`, `_action_support.py`, `_projection.py`, `_dashboard.py`, `_routes.py`, `templates/bid_execution_{item,list,dashboard}.html` |
+| B. Approvals | Stage 3 readiness classifies each approval requirement: Deviation approval required, Routine authorization required, Needs assessment, Not applicable, Completed. A missing approval is BLOCKING only when an existing rule or recorded decision establishes it (Level 2+ margin rule, required approval rows, open approval routes, a commercial position's recorded approver, a high-severity finding without authority). When applicability cannot be determined (no authority policy or accepted pricing basis) it shows "Needs assessment" as a WARNING. No escalation role is ever inferred; recorded roles are shown as recorded. Read-only layer over existing readers; gate engine unchanged; no new approvals register. | `core/bid_execution_approvals.py`, `_readiness.py`, `_readiness_models.py`, `templates/bid_execution_readiness.html` |
+
+**Schema (additive, guarded `ALTER TABLE`):** `bid_execution_records` gains `responsible_basis`, `responsible_source_owner`, `responsible_set_by`, `responsible_set_at`. No other table changes.
+**Tests:** `tests/unit/test_stage31_ownership.py` (7), `tests/unit/test_stage31_approvals.py` (11), small adaptations in `test_stage3_*`. Full suite 1,356 passed.
+**Limitations:** commercial owners are not confirmable in Stage 3; the manufacturer list rows carry two checkboxes (assign / confirm); `bid_execution_approvals.py` is ~480 lines; the approval gate semantics remain the temporary governance-level rule until OPS-14.
+
+---
+
 # Handoff — Stage 3: bid execution and readiness
 
 Branch `ciq/stage3-bid-execution` (from Stage 2.1 acceptance `89dd350`). Spec: `docs/tasks/CIQ-STAGE3-bid-execution.md`.
